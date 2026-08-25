@@ -1,0 +1,33 @@
+name: Phase 1 foundation checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -r requirements/dev.txt
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: python manage.py check --settings=config.settings.test
+      - name: Check fail-closed production settings
+        env:
+          DJANGO_SECRET_KEY: ci-only-secret-key-with-more-than-fifty-characters-1234567890
+          DJANGO_ALLOWED_HOSTS: kajaboard.example.com
+          DJANGO_CSRF_TRUSTED_ORIGINS: https://kajaboard.example.com
+          DJANGO_DB_ENGINE: postgresql
+          DJANGO_DB_NAME: kajaboard_ci
+          DJANGO_DB_USER: kajaboard_ci
+          DJANGO_DB_PASSWORD: ci-only
+          DJANGO_DB_HOST: localhost
+        run: python manage.py check --deploy --settings=config.settings.production
+      - run: python manage.py makemigrations --check --dry-run --settings=config.settings.test
+      - run: python manage.py migrate --noinput --settings=config.settings.test
+      - run: pytest

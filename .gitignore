@@ -1,0 +1,86 @@
+# Python bytecode and generated caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.hypothesis/
+.cache/
+.tox/
+.nox/
+
+# Coverage and test output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit.xml
+
+# Packaging and build output
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+!.env.template
+secrets.*
+credentials.*
+*.pem
+*.key
+*.p12
+*.pfx
+client_secret*.json
+service-account*.json
+
+# Django local/runtime files
+local_settings.py
+settings/local.py
+staticfiles/
+media/
+logs/
+*.log
+
+# Local databases and database dumps
+db.sqlite3
+*.sqlite3
+*.sqlite
+*.db
+*.db-journal
+*.dump
+*.backup
+
+# IDE and editor files
+.idea/
+.vscode/
+.vs/
+.fleet/
+*.code-workspace
+*.swp
+*.swo
+*~
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
