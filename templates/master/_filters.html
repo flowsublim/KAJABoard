@@ -1,0 +1,5 @@
+<form method="get" class="filterbar">
+  <label class="search-field"><span class="sr-only">Search</span><input type="search" name="q" value="{{ search }}" placeholder="Search code or name"></label>
+  <label class="checkbox"><input type="checkbox" name="inactive" value="1" {% if include_inactive %}checked{% endif %}> Include inactive</label>
+  <button class="button" type="submit">Filter</button>
+</form>

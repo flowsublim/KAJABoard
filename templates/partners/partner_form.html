@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Business Partner</p><h1>{{ title }}</h1><p class="muted">Names, addresses, terms, and tax identity are future snapshot sources; changing this master will not rewrite future transaction history.</p></div></div>
+<form method="post" class="panel master-form">{% csrf_token %}{{ form.as_div }}<div class="form-actions"><a class="button" href="{% url 'partners:list' %}">Cancel</a><button class="button button-primary" type="submit">Save partner</button></div></form>
+{% if partner %}<section class="panel"><div class="panel-heading"><div><h2>Role history</h2><p>Active and ended assignments remain traceable.</p></div>{% if perms.partners.add_partnerrole %}<a class="button" href="{% url 'partners:role-add' partner.pk %}">Assign role</a>{% endif %}</div><div class="role-list">{% for role in partner.roles.all %}<div><span class="status {% if role.is_active %}status-active{% else %}status-muted{% endif %}">{{ role.get_role_type_display }}</span><span>{{ role.effective_from }}{% if role.effective_to %} – {{ role.effective_to }}{% endif %}</span>{% if role.is_active and perms.partners.change_partnerrole %}<a href="{% url 'partners:role-remove' partner.pk role.pk %}">Remove</a>{% endif %}</div>{% empty %}<p class="muted">No role assignments.</p>{% endfor %}</div></section>{% endif %}
+{% endblock %}

@@ -1,4 +1,4 @@
-name: Phase 1 foundation checks
+name: KAJABoard checks
 
 on:
   push:

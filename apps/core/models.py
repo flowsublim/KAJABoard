@@ -1,8 +1,10 @@
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 from .exceptions import AuditEventImmutableError
 
@@ -24,6 +26,33 @@ class TimeStampedModel(models.Model):
 
     class Meta:
         abstract = True
+
+
+class EffectivePeriodModel(models.Model):
+    """Opt-in validity interval for master data selected as of a business date."""
+
+    effective_from = models.DateField(default=timezone.localdate)
+    effective_to = models.DateField(null=True, blank=True)
+
+    class Meta:
+        abstract = True
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(effective_to__isnull=True)
+                | Q(effective_to__gte=models.F("effective_from")),
+                name="%(app_label)s_%(class)s_effective_period_valid",
+            )
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.effective_to and self.effective_to < self.effective_from:
+            raise ValidationError({"effective_to": "Effective to cannot be before effective from."})
+
+    def is_effective_on(self, business_date) -> bool:
+        return self.effective_from <= business_date and (
+            self.effective_to is None or self.effective_to >= business_date
+        )
 
 
 class AuditEventQuerySet(models.QuerySet):

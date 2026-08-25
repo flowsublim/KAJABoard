@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Organization</p><h1>{{ title }}</h1></div>{% if can_add %}<a class="button button-primary" href="{% url 'organizations:master-create' master_type %}">New record</a>{% endif %}</div>
+{% include "master/_filters.html" %}
+<section class="panel table-panel">
+  <div class="table-wrap"><table><thead><tr><th>Code</th><th>Name</th><th>Status</th><th>Effective</th><th class="actions">Actions</th></tr></thead>
+  <tbody>{% for object in page %}<tr><td><strong>{{ object.code }}</strong></td><td>{{ object.name }}</td><td>{% if object.is_active %}<span class="status status-active">Active</span>{% else %}<span class="status status-muted">Inactive</span>{% endif %}</td><td>{{ object.effective_from|date:"d M Y" }}{% if object.effective_to %} – {{ object.effective_to|date:"d M Y" }}{% endif %}</td><td class="actions">{% if can_change %}<a href="{% url 'organizations:master-edit' master_type object.pk %}">Edit</a><a href="{% url 'organizations:master-lifecycle' master_type object.pk %}">{% if object.is_active %}Deactivate{% else %}Activate{% endif %}</a>{% else %}<span class="muted">View only</span>{% endif %}</td></tr>{% empty %}<tr><td colspan="5" class="empty">No records found.</td></tr>{% endfor %}</tbody></table></div>
+  {% include "master/_pagination.html" %}
+</section>
+{% endblock %}

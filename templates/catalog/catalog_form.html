@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}<div class="page-header"><div><p class="eyebrow">Catalog master</p><h1>{{ title }}</h1><p class="muted">This action changes configuration only and never creates stock, valuation, HPP, COGS, or accounting entries.</p></div></div><form method="post" class="panel master-form">{% csrf_token %}{{ form.as_div }}<div class="form-actions"><a class="button" href="{% url 'catalog:list' master_type %}">Cancel</a><button class="button button-primary" type="submit">Save</button></div></form>{% endblock %}

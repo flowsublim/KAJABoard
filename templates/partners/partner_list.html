@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Business Partners · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Master / Partners</p><h1>Business Partners</h1><p class="muted">One canonical identity can carry multiple effective roles.</p></div>{% if can_add %}<a class="button button-primary" href="{% url 'partners:create' %}">New partner</a>{% endif %}</div>
+{% include "master/_filters.html" %}
+<section class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>Code</th><th>Partner</th><th>Roles</th><th>Terms</th><th>Status</th><th class="actions">Actions</th></tr></thead><tbody>
+{% for partner in page %}<tr><td><strong>{{ partner.code }}</strong></td><td>{{ partner.display_name }}{% if partner.legal_name %}<small>{{ partner.legal_name }}</small>{% endif %}</td><td>{% for role in partner.roles.all %}{% if role.is_active %}<span class="status status-info">{{ role.get_role_type_display }}</span>{% endif %}{% empty %}<span class="muted">No role</span>{% endfor %}</td><td>{{ partner.payment_terms_days }} days{% if partner.credit_limit %}<small>Limit {{ partner.credit_limit }}</small>{% endif %}</td><td>{% if partner.is_active %}<span class="status status-active">Active</span>{% else %}<span class="status status-muted">Inactive</span>{% endif %}</td><td class="actions">{% if can_change %}<a href="{% url 'partners:edit' partner.pk %}">Edit</a><a href="{% url 'partners:lifecycle' partner.pk %}">{% if partner.is_active %}Deactivate{% else %}Activate{% endif %}</a>{% else %}<span class="muted">View only</span>{% endif %}</td></tr>{% empty %}<tr><td colspan="6" class="empty">No partners found.</td></tr>{% endfor %}
+</tbody></table></div>{% include "master/_pagination.html" %}</section>
+{% endblock %}

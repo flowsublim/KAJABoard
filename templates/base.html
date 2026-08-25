@@ -1,0 +1,50 @@
+{% load static %}
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}KAJABoard{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/kajaboard.css' %}">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="{% url 'organizations:workspace' %}">
+        <span class="brand-mark">K</span>
+        <span><strong>KAJABoard</strong><small>Master workspace</small></span>
+      </a>
+      <nav aria-label="Navigasi utama">
+        <a href="{% url 'organizations:workspace' %}">Overview</a>
+        <p class="nav-label">Organization</p>
+        {% if perms.organizations.view_legalentity %}<a href="{% url 'organizations:master-list' 'legal-entities' %}">Legal Entities</a>{% endif %}
+        {% if perms.organizations.view_businessunit %}<a href="{% url 'organizations:master-list' 'business-units' %}">Business Units</a>{% endif %}
+        {% if perms.organizations.view_department %}<a href="{% url 'organizations:master-list' 'departments' %}">Departments</a>{% endif %}
+        {% if perms.organizations.view_costcenter %}<a href="{% url 'organizations:master-list' 'cost-centers' %}">Cost Centers</a>{% endif %}
+        {% if perms.organizations.view_warehouse %}<a href="{% url 'organizations:master-list' 'warehouses' %}">Warehouses</a>{% endif %}
+        <p class="nav-label">Master Data</p>
+        {% if perms.partners.view_businesspartner %}<a href="{% url 'partners:list' %}">Business Partners</a>{% endif %}
+        {% if perms.catalog.view_item %}<a href="{% url 'catalog:list' 'items' %}">Items &amp; SKU</a>{% endif %}
+        {% if perms.catalog.view_itemcategory %}<a href="{% url 'catalog:list' 'categories' %}">Categories</a>{% endif %}
+        {% if perms.catalog.view_uom %}<a href="{% url 'catalog:list' 'uoms' %}">Units of Measure</a>{% endif %}
+      </nav>
+    </aside>
+    <div class="app-main">
+      <header class="topbar">
+        <a class="mobile-brand" href="{% url 'organizations:workspace' %}">KAJABoard</a>
+        <span class="phase-badge">Phase 2A · Master Data</span>
+        <div class="user-menu">
+          <span>{{ request.user.email }}</span>
+          <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="link-button" type="submit">Keluar</button></form>
+        </div>
+      </header>
+      <main class="content" id="main-content">
+        {% if messages %}
+          {% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+        {% endif %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</body>
+</html>

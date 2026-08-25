@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Change status · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Controlled lifecycle</p><h1>{% if object.is_active %}Deactivate{% else %}Activate{% endif %} {{ object }}</h1><p class="muted">Historical references remain intact. This action never deletes the master record.</p></div></div>
+<form method="post" class="panel master-form narrow">{% csrf_token %}{{ form.as_div }}<div class="form-actions"><button class="button button-primary" type="submit">Confirm</button></div></form>
+{% endblock %}

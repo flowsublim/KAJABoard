@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Organization master</p><h1>{{ title }}</h1><p class="muted">Changes are validated by the application service and recorded in the audit trail.</p></div></div>
+<form method="post" class="panel master-form">{% csrf_token %}{{ form.as_div }}<div class="form-actions"><a class="button" href="{% url cancel_url master_type %}">Cancel</a><button class="button button-primary" type="submit">Save</button></div></form>
+{% endblock %}
