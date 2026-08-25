@@ -1,0 +1,359 @@
+<script>
+  // =================================================================================
+  // MESIN PENCETAK PDF UNIVERSAL (SPK, MAKLUN, HUTANG) - MODUL PEMBELIAN
+  // =================================================================================
+  
+  var currentCetakTipe = "";
+  var currentCetakRef = "";
+  var currentCetakVendor = "";
+
+  function formatRp(angka) { 
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Math.round(angka));
+  }
+
+  function bukaPreviewHutangUsaha(vendor, nota) {
+    currentCetakTipe = "HUTANG"; currentCetakRef = nota; currentCetakVendor = vendor;
+    jalankanRenderPDF();
+    new bootstrap.Modal(document.getElementById('modalPreviewCetak')).show();
+  }
+
+  function bukaPreviewPO(vendor, nota) {
+    currentCetakTipe = "PO_MAKLUN"; currentCetakRef = nota; currentCetakVendor = vendor;
+    jalankanRenderPDF();
+    new bootstrap.Modal(document.getElementById('modalPreviewCetak')).show();
+  }
+
+  function cetakSPK(spkNo) {
+    var btn = document.getElementById("btn-print-" + spkNo);
+    var oldText = btn ? btn.innerHTML : "⬇️ PDF"; 
+    if(btn) { btn.innerHTML = "⏳.."; btn.disabled = true; }
+
+    runGasPurch('getDetailPrintSPK', [spkNo], function(data) {
+        if(btn) { btn.innerHTML = oldText; btn.disabled = false; }
+        
+        if(!data) return alert("Data SPK tidak ditemukan!");
+        if(data.error) return alert("Error Server: " + data.error); // Tangkap error dari backend
+        
+        window.currentDataSPK = data; 
+        currentCetakTipe = "SPK"; currentCetakRef = spkNo; currentCetakVendor = "";
+        jalankanRenderPDF();
+        purchModalShow('modalPreviewCetak');
+      }, function(err) {
+        if(btn) { btn.innerHTML = oldText; btn.disabled = false; }
+        alert("Gagal koneksi ke server: " + ((err && err.message) ? err.message : err));
+      });
+  }
+
+  function renderUlangCetak() {
+    if(currentCetakTipe && currentCetakRef) jalankanRenderPDF();
+  }
+
+  function jalankanRenderPDF() {
+    var tipe = currentCetakTipe;
+    // Validasi data per tipe dokumen. SPK tidak bergantung ke globalRiwayat.
+    if (tipe === "SPK") {
+      if (!window.currentDataSPK || !window.currentDataSPK.items) {
+        alert("⚠️ Data SPK belum termuat. Coba klik cetak ulang.");
+        return;
+      }
+    } else if (!globalRiwayat || (globalRiwayat.beli.length === 0 && globalRiwayat.maklun.length === 0)) {
+      alert("⚠️ Data belum termuat! Silakan buka tab terkait dulu atau tunggu loading selesai.");
+      return;
+    }
+    var noRef = currentCetakRef;
+
+    // =========================================================================
+    // LOGIKA KOP SURAT TERINTEGRASI PORTAL (SSOT)
+    // =========================================================================
+    var pilihanKop = document.getElementById("pilihan-kop") ? document.getElementById("pilihan-kop").value : "KAMPUNG_JAHIT";
+    var setup = window.setupPerusahaan || {};
+    var alamatPerusahaan = setup['alamat'] || "Alamat belum disetting di Portal Utama";
+    var namaPerusahaan = "", logoPerusahaan = "";
+
+    // PERBAIKAN: Memisahkan variabel nama dengan sangat jelas
+    if (pilihanKop === "CV_KIRAL") {
+        namaPerusahaan = setup['nama cv kiral'] || "CV KIRAL";
+        logoPerusahaan = setup['logo cv kiral'] || "https://dummyimage.com/300x120/000/fff&text=LOGO+CV+KIRAL"; 
+    } else {
+        namaPerusahaan = setup['nama kampung jahit'] || "KAMPUNG JAHIT"; // <-- Ini kuncinya! Gak narik 'nama' umum lagi
+        logoPerusahaan = setup['logo kampung jahit'] || setup['logo'] || "https://dummyimage.com/300x120/000/fff&text=LOGO+KAMPUNG+JAHIT"; 
+    }
+
+    var kopSuratHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px;">
+          <div style="width: 35%;">
+              <img src="${logoPerusahaan}" alt="Logo" style="max-width: 100%; height: auto; max-height: 100px;">
+          </div>
+          <div style="width: 60%; text-align: right;">
+              <h2 style="margin: 0; font-size: 26px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase;">${namaPerusahaan}</h2>
+              <p style="margin: 5px 0 0 0; font-size: 13px; line-height: 1.4;">${alamatPerusahaan}</p>
+              <h3 id="print-judul-dokumen" style="margin: 15px 0 0 0; font-size: 20px; text-transform: uppercase; text-decoration: underline;">DOKUMEN</h3>
+          </div>
+      </div>
+    `;
+
+    var html = "";
+    var judulDokumen = "";
+    var namaFile = "";
+
+    // ================== TEMPLATE 1: SURAT PERINTAH KERJA (SPK) ==================
+    if (tipe === "SPK") {
+        judulDokumen = "SURAT PERINTAH KERJA (SPK)";
+        namaFile = "SPK - " + noRef;
+        var data = window.currentDataSPK;
+        var textVendor = data.vendor ? data.vendor : "Produksi Internal / In-House";
+        var textDeadline = data.deadline ? data.deadline : "-";
+        var textCatatan = data.catatan ? data.catatan : "-";
+        var namaPembuat = data.pembuat ? data.pembuat : "Admin / Purchasing";
+        
+        var trsHtml = '';
+        var totalTargetQty = 0;
+
+        data.items.forEach((it, k) => {
+          totalTargetQty += (parseFloat(it.qty) || 0);
+          
+          var imgTags = [];
+          
+          // MENGGUNAKAN TRIK THUMBNAIL GOOGLE DRIVE
+          if(it.fotoItem) {
+            var urls = it.fotoItem.split(',');
+            urls.forEach(u => {
+              var uClean = u.trim(); if(!uClean) return;
+              var fileIdMatch = uClean.match(/[-\w]{25,}/);
+              if(fileIdMatch) {
+                imgTags.push(`<img src="https://drive.google.com/thumbnail?id=${fileIdMatch[0]}&sz=w800" style="width: 100%; max-height: 250px; object-fit: contain; margin-bottom: 5px; border: 1px solid #ccc; border-radius: 4px; display: block;" onerror="this.style.display='none'">`);
+              }
+            });
+          }
+          var imgHtml = imgTags.length > 0 ? imgTags.join('') : '<span style="color:#aaa; font-size:11px; font-style:italic;">- Tidak ada referensi foto -</span>';
+
+          var formatCatatanHtml = "";
+          if (it.catatanItem && it.catatanItem.startsWith("{")) {
+             try {
+               var p = JSON.parse(it.catatanItem);
+               if(p.depan) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Depan:</b> ${p.depan}</div>`;
+               if(p.kiri) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Kiri:</b> ${p.kiri}</div>`;
+               if(p.kanan) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Kanan:</b> ${p.kanan}</div>`;
+               if(p.belakang) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Belakang:</b> ${p.belakang}</div>`;
+               if(p.sintong) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Sintong:</b> ${p.sintong}</div>`;
+               if(p.umum) formatCatatanHtml += `<div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #ccc;"><b>Catatan Umum:</b> ${p.umum}</div>`;
+             } catch(e) { formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Catatan:</b> ${it.catatanItem}</div>`; }
+          } else {
+             if(it.catatanItem) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Catatan:</b> ${it.catatanItem}</div>`;
+          }
+          if(!formatCatatanHtml) formatCatatanHtml = "-";
+
+          trsHtml += `<tr>
+            <td style="text-align:center; border: 1px solid #333; padding: 8px;">${k+1}</td>
+            <td style="vertical-align: top; border: 1px solid #333; padding: 8px;">
+              <b style="font-size:14px; display:block; margin-bottom:5px;">${it.nama}</b>
+              <span style="font-size:12px; color:#198754; line-height:1.5; display:block; margin-bottom:4px;"><b>Bahan:</b> ${it.bahan || data.bahan || "-"}</span>
+              <span style="font-size:12px; color:#444; line-height: 1.5; display: block;">Catatan Detail: <br>${formatCatatanHtml}</span>
+            </td>
+            <td style="text-align:center; font-weight:bold; font-size:16px; vertical-align: middle; border: 1px solid #333; padding: 8px;">${it.qty}</td>
+            <td style="text-align:center; vertical-align: top; padding: 5px; border: 1px solid #333;">${imgHtml}</td>
+          </tr>`;
+        });
+
+        html = `
+        <div style="font-family: Arial, sans-serif; color: #000; font-size: 13px;">
+            ${kopSuratHTML.replace('DOKUMEN', judulDokumen)}
+            
+            <table style="width: 100%; margin-bottom: 20px;">
+              <tr>
+                <td style="width: 65%; vertical-align: top;">
+                  <table style="font-size: 13px;">
+                    <tr><td style="width: 120px; font-weight: bold; padding: 4px 8px;">No. SPK</td><td>: <b>${data.spk}</b></td></tr>
+                    <tr><td style="font-weight: bold; padding: 4px 8px;">Tanggal Terbit</td><td>: ${data.tgl}</td></tr>
+                    <tr><td style="font-weight: bold; padding: 4px 8px;">Deadline Target</td><td style="color:#d9534f; font-weight:bold;">: ${textDeadline}</td></tr>
+                    <tr><td style="font-weight: bold; padding: 4px 8px;">Jalur / Rute</td><td>: ${data.jalur}</td></tr>
+                    <tr><td style="font-weight: bold; padding: 4px 8px;">Vendor Tujuan</td><td>: ${textVendor}</td></tr>
+                    <tr><td style="font-weight: bold; padding: 4px 8px;">Bahan Utama</td><td>: ${data.bahan}</td></tr>
+                  </table>
+                </td>
+                <td style="width: 35%; vertical-align: top;">
+                  <div style="padding: 10px; border: 1px solid #999; background-color: #fdfdfd; border-radius: 4px;">
+                    <b>📌 Catatan Global SPK:</b><br>
+                    <span style="white-space: pre-wrap; display: block; margin-top: 5px; color:#555;">${textCatatan}</span>
+                  </div>
+                </td>
+              </tr>
+            </table>
+            
+            <h4 style="margin-bottom: 5px; margin-top: 20px;">Rincian Target Produksi:</h4>
+            <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+              <thead style="background-color: #e9ecef; text-align: center; text-transform: uppercase; font-size: 13px;">
+                <tr>
+                  <th style="border: 1px solid #333; padding: 10px; width: 5%;">No</th>
+                  <th style="border: 1px solid #333; padding: 10px; width: 45%;">Item & Detail Instruksi</th>
+                  <th style="border: 1px solid #333; padding: 10px; width: 15%;">Target QTY</th>
+                  <th style="border: 1px solid #333; padding: 10px; width: 35%;">Gambar Referensi</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${trsHtml}
+                <tr>
+                  <td colspan="2" style="text-align: right; font-weight: bold; font-size: 14px; padding: 15px; text-transform: uppercase;">Total Target Produksi :</td>
+                  <td style="text-align: center; font-weight: bold; font-size: 18px; background-color: #e2e3e5; border: 1px solid #333;">${totalTargetQty}</td>
+                  <td style="background-color: #e2e3e5; border: 1px solid #333;"></td>
+                </tr>
+              </tbody>
+            </table>
+            
+            <table style="width: 100%; margin-top: 40px; text-align: center;">
+              <tr>
+                <td style="width: 50%;"><b>Dibuat Oleh,</b><div style="height: 70px;"></div><hr style="width:50%; margin:auto; border: 1px solid #000;">${namaPembuat}</td>
+                <td style="width: 50%;"><b>Diterima Oleh,</b><div style="height: 70px;"></div><hr style="width:50%; margin:auto; border: 1px solid #000;">Vendor / Penanggung Jawab</td>
+              </tr>
+            </table>
+        </div>`;
+    }
+
+    // ================== TEMPLATE 2: INVOICE PO MAKLUN ==================
+    else if (tipe === "PO_MAKLUN") {
+        judulDokumen = "INVOICE JASA MAKLUN";
+        namaFile = "Invoice Maklun - " + noRef;
+        var vData = globalDataPO.find(x => x.vendor === currentCetakVendor);
+        if(!vData) return;
+        var po = vData.pos.find(x => x.nota === noRef);
+        
+        var trs = "";
+        po.items.forEach(i => { trs += `<tr><td style="border: 1px solid #ccc; padding: 6px;">${i.tglItem}</td><td style="border: 1px solid #ccc; padding: 6px;">${i.item}</td><td class="text-center" style="border: 1px solid #ccc; padding: 6px;">${i.qty}</td><td class="text-end" style="border: 1px solid #ccc; padding: 6px;">${formatRp(i.harga)}</td><td class="text-end" style="border: 1px solid #ccc; padding: 6px;">${formatRp(i.total)}</td></tr>`; });
+        var historyTrs = "";
+        if(po.listPotongan.length === 0) { historyTrs += `<tr><td colspan="3" class="text-center text-muted" style="font-style:italic; border: 1px solid #ccc; padding: 6px;">Belum ada DP Bahan maupun Pembayaran</td></tr>`; } 
+        else { po.listPotongan.forEach(p => { historyTrs += `<tr><td style="border: 1px solid #ccc; padding: 6px;">${p.tgl}</td><td style="border: 1px solid #ccc; padding: 6px;"><b>${p.jenis}</b><br><small>${p.ket}</small></td><td class="text-end" style="border: 1px solid #ccc; padding: 6px;">${formatRp(p.total)}</td></tr>`; }); }
+
+        html = `
+        <div style="font-family: Arial, sans-serif; color: #000; font-size: 13px;">
+          ${kopSuratHTML.replace('DOKUMEN', judulDokumen)}
+          <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 13px;">
+            <div><table style="width: 100%; border: none; font-size: 13px;"><tr><td style="width: 100px; padding-bottom: 5px;"><b>VENDOR</b></td><td style="padding-bottom: 5px;"><b>: ${currentCetakVendor}</b></td></tr></table></div>
+            <div style="text-align: right;">
+              <table style="width: 100%; border-collapse: collapse; text-align: center; font-size: 13px;">
+                <tr><td style="border: 1px solid #000; padding: 6px; width: 50%;"><b>TANGGAL TERBIT</b></td><td style="border: 1px solid #000; padding: 6px; width: 50%;"><b>REF / PO MAKLUN</b></td></tr>
+                <tr><td style="border: 1px solid #000; padding: 6px;">${po.tglStr}</td><td style="border: 1px solid #000; padding: 6px; font-weight: bold;">${po.nota}</td></tr>
+              </table>
+            </div>
+          </div>
+          <div style="background-color: #e9ecef; font-weight: bold; padding: 4px 10px; border: 1px solid #dee2e6;">Rincian Jasa / Pekerjaan</div>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+            <thead style="background-color: #f8f9fa;"><tr><th style="border: 1px solid #ccc; padding: 6px; width:15%">Tanggal</th><th style="border: 1px solid #ccc; padding: 6px; width:40%">Item / Pekerjaan</th><th style="border: 1px solid #ccc; padding: 6px; width:10%" class="text-center">QTY</th><th style="border: 1px solid #ccc; padding: 6px; width:15%" class="text-end">Harga Satuan</th><th style="border: 1px solid #ccc; padding: 6px; width:20%" class="text-end">Total Biaya</th></tr></thead>
+            <tbody>${trs}<tr><td colspan="4" class="text-end fw-bold" style="border: 1px solid #ccc; padding: 6px;">TOTAL TAGIHAN JASA :</td><td class="text-end fw-bold" style="font-size: 1.1em; border: 1px solid #ccc; padding: 6px;">${formatRp(po.totalPO)}</td></tr></tbody>
+          </table>
+          <div style="background-color: #e9ecef; font-weight: bold; padding: 4px 10px; border: 1px solid #dee2e6;">Riwayat Potongan & Pembayaran</div>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+            <thead style="background-color: #f8f9fa;"><tr><th style="border: 1px solid #ccc; padding: 6px; width:15%">Tanggal</th><th style="border: 1px solid #ccc; padding: 6px; width:65%">Jenis Transaksi & Keterangan</th><th style="border: 1px solid #ccc; padding: 6px; width:20%" class="text-end">Nilai (Rp)</th></tr></thead>
+            <tbody>${historyTrs}</tbody>
+          </table>
+          <div style="display: flex; justify-content: flex-end; margin-bottom: 40px;">
+            <table style="width: 50%; border-collapse: collapse;">
+              <tr><td style="padding: 6px 0; text-align: right;">Total Tagihan Jasa:</td><td style="padding: 6px 0; text-align: right; font-weight: bold;">${formatRp(po.totalPO)}</td></tr>
+              <tr><td style="padding: 6px 0; text-align: right; color: #0dcaf0; border-bottom: 1px dashed #ccc;">Total Potong Bahan (DP):</td><td style="padding: 6px 0; text-align: right; color: #0dcaf0; border-bottom: 1px dashed #ccc;">- ${formatRp(po.dp)}</td></tr>
+              <tr><td style="padding: 6px 0; text-align: right; color: #198754; border-bottom: 1px solid #000;">Total Pembayaran Masuk:</td><td style="padding: 6px 0; text-align: right; color: #198754; border-bottom: 1px solid #000;">- ${formatRp(po.bayar)}</td></tr>
+              <tr><td style="padding: 10px 0; text-align: right; font-weight: bold; font-size: 1.2em; color: #dc3545;">SISA HUTANG:</td><td style="padding: 10px 0; text-align: right; font-weight: bold; font-size: 1.2em; color: #dc3545;">${formatRp(po.sisa)}</td></tr>
+            </table>
+          </div>
+          <div style="display: flex; width: 100%; text-align: center;">
+            <div style="width: 50%;"><p>Dibuat Oleh,</p><br><br><br><p style="font-weight: bold;">( ......................................... )</p></div>
+            <div style="width: 50%;"><p>Disetujui / Vendor,</p><br><br><br><p style="font-weight: bold;">( ......................................... )</p></div>
+          </div>
+        </div>`;
+    }
+
+    // ================== TEMPLATE 3: DETAIL HUTANG BELANJA ==================
+    else if (tipe === "HUTANG") {
+        judulDokumen = "DETAIL NOTA BELANJA";
+        namaFile = "Nota Belanja - " + noRef;
+        var vData = globalDataHutang.find(x => x.vendor === currentCetakVendor);
+        if(!vData) return;
+        var po = vData.pos.find(x => x.nota === noRef);
+
+        var trs = "";
+        po.items.forEach(i => { trs += `<tr><td style="border: 1px solid #ccc; padding: 6px;">${i.tglItem}</td><td style="border: 1px solid #ccc; padding: 6px;">${i.item}</td><td class="text-center" style="border: 1px solid #ccc; padding: 6px;">${i.qty}</td><td class="text-end" style="border: 1px solid #ccc; padding: 6px;">${formatRp(i.harga)}</td><td class="text-end" style="border: 1px solid #ccc; padding: 6px;">${formatRp(i.total)}</td></tr>`; });
+        var historyTrs = "";
+        if(po.listPembayaran.length === 0) { historyTrs += `<tr><td colspan="3" class="text-center text-muted" style="font-style:italic; border: 1px solid #ccc; padding: 6px;">Belum ada riwayat pembayaran untuk nota ini</td></tr>`; } 
+        else { po.listPembayaran.forEach(p => { historyTrs += `<tr><td style="border: 1px solid #ccc; padding: 6px;">${p.tgl}</td><td style="border: 1px solid #ccc; padding: 6px;"><b>${p.jenis}</b><br><small>${p.ket}</small></td><td class="text-end" style="border: 1px solid #ccc; padding: 6px;">${formatRp(p.total)}</td></tr>`; }); }
+
+        html = `
+        <div style="font-family: Arial, sans-serif; color: #000; font-size: 13px;">
+          ${kopSuratHTML.replace('DOKUMEN', judulDokumen)}
+          <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 13px;">
+            <div><table style="width: 100%; border: none; font-size: 13px;"><tr><td style="width: 100px; padding-bottom: 5px;"><b>VENDOR</b></td><td style="padding-bottom: 5px;"><b>: ${currentCetakVendor}</b></td></tr></table></div>
+            <div style="text-align: right;">
+              <table style="width: 100%; border-collapse: collapse; text-align: center; font-size: 13px;">
+                <tr><td style="border: 1px solid #000; padding: 6px; width: 50%;"><b>TANGGAL TERBIT</b></td><td style="border: 1px solid #000; padding: 6px; width: 50%;"><b>NO NOTA / PO</b></td></tr>
+                <tr><td style="border: 1px solid #000; padding: 6px;">${po.tglStr}</td><td style="border: 1px solid #000; padding: 6px; font-weight: bold;">${po.nota}</td></tr>
+              </table>
+            </div>
+          </div>
+          <div style="background-color: #e9ecef; font-weight: bold; padding: 4px 10px; border: 1px solid #dee2e6;">Rincian Item Belanja</div>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+            <thead style="background-color: #f8f9fa;"><tr><th style="border: 1px solid #ccc; padding: 6px; width:15%">Tanggal</th><th style="border: 1px solid #ccc; padding: 6px; width:40%">Nama Bahan / Barang</th><th style="border: 1px solid #ccc; padding: 6px; width:10%" class="text-center">QTY</th><th style="border: 1px solid #ccc; padding: 6px; width:15%" class="text-end">Harga Satuan</th><th style="border: 1px solid #ccc; padding: 6px; width:20%" class="text-end">Total Harga</th></tr></thead>
+            <tbody>${trs}<tr><td colspan="4" class="text-end fw-bold" style="border: 1px solid #ccc; padding: 6px;">TOTAL NOTA BELANJA :</td><td class="text-end fw-bold" style="font-size: 1.1em; border: 1px solid #ccc; padding: 6px;">${formatRp(po.totalNota)}</td></tr></tbody>
+          </table>
+          <div style="background-color: #e9ecef; font-weight: bold; padding: 4px 10px; border: 1px solid #dee2e6;">Riwayat Pembayaran</div>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+            <thead style="background-color: #f8f9fa;"><tr><th style="border: 1px solid #ccc; padding: 6px; width:15%">Tanggal</th><th style="border: 1px solid #ccc; padding: 6px; width:65%">Jenis Transaksi & Keterangan</th><th style="border: 1px solid #ccc; padding: 6px; width:20%" class="text-end">Nilai (Rp)</th></tr></thead>
+            <tbody>${historyTrs}</tbody>
+          </table>
+          <div style="display: flex; justify-content: flex-end; margin-bottom: 40px;">
+            <table style="width: 50%; border-collapse: collapse;">
+              <tr><td style="padding: 6px 0; text-align: right;">Total Nilai Belanja:</td><td style="padding: 6px 0; text-align: right; font-weight: bold;">${formatRp(po.totalNota)}</td></tr>
+              <tr><td style="padding: 6px 0; text-align: right; color: #198754; border-bottom: 1px solid #000;">Total Pembayaran:</td><td style="padding: 6px 0; text-align: right; color: #198754; border-bottom: 1px solid #000;">- ${formatRp(po.bayar)}</td></tr>
+              <tr><td style="padding: 10px 0; text-align: right; font-weight: bold; font-size: 1.2em; color: #dc3545;">SISA HUTANG:</td><td style="padding: 10px 0; text-align: right; font-weight: bold; font-size: 1.2em; color: #dc3545;">${formatRp(po.sisa)}</td></tr>
+            </table>
+          </div>
+          <div style="display: flex; width: 100%; text-align: center;">
+            <div style="width: 50%;"><p>Dibuat Oleh,</p><br><br><br><p style="font-weight: bold;">( ......................................... )</p></div>
+            <div style="width: 50%;"><p>Disetujui / Supplier,</p><br><br><br><p style="font-weight: bold;">( ......................................... )</p></div>
+          </div>
+        </div>`;
+    }
+
+    document.title = namaFile;
+    if(document.getElementById('title-preview-cetak')) document.getElementById('title-preview-cetak').innerText = "📄 Preview : " + namaFile + ".pdf";
+    document.getElementById('area-print-dokumen').innerHTML = html;
+  }
+
+  var modalCetakEl = document.getElementById('modalPreviewCetak');
+  if(modalCetakEl) { modalCetakEl.addEventListener('hidden.bs.modal', function () { document.title = 'ERP - Modul Pembelian'; }); }
+
+  function eksekusiCetakLanjutan() {
+    var kontenHtml = document.getElementById('area-print-dokumen').innerHTML;
+    var judulFile = document.title;
+    
+    // 💡 PERBAIKAN: Gunakan iframe agar menembus Pop-up Blocker Browser
+    var iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+    
+    var doc = iframe.contentWindow.document;
+    doc.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>${judulFile}</title>
+        <style>
+          body { font-family: Arial, Helvetica, sans-serif; color: #000; line-height: 1.4; padding: 20px; background: #fff; margin: 0; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+          th, td { padding: 6px 10px; }
+          tr, td, th { page-break-inside: avoid; }
+          @media print { @page { size: A4 portrait; margin: 10mm; } }
+        </style>
+      </head>
+      <body>
+        ${kontenHtml}
+      </body>
+      </html>
+    `);
+    doc.close();
+
+    // 💡 JEDA 1000ms: Memastikan Logo Portal & Foto SPK selesai di-download sebelum diprint
+    setTimeout(function() {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+      // Bersihkan memori setelah diprint
+      setTimeout(function() { document.body.removeChild(iframe); }, 3000);
+    }, 1000);
+  }
+</script>

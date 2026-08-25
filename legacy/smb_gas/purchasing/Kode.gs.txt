@@ -1,0 +1,2308 @@
+
+// =================================================================================
+// ERP CV KIRAL - MODUL PURCHASING / MAKLUN
+// Legacy UI + New DB Adapter v0.8 Maklun Full Order COGM Snapshot
+// =================================================================================
+
+var MASTER_SPREADSHEET_ID = "1bbtCMQfK5p_2c5GzIkTIrcIPcPsm3Wjh_R8PfAagu6I";
+
+var PURCH_CFG = {
+  VERSION: "PURCH_v0.9.7_PROD_EXTERNAL_READ_FIX",
+  MODULE_CODE: "PURCH",
+  SESSION_TTL_MS: 6 * 60 * 60 * 1000,
+  SHARED_SECRET: "CV_KIRAL_FLOW_SUBLIM_STYLE_FIXED_SECRET_2026_KIRAL",
+  HEARTBEAT_CELL: "J1",
+  HEARTBEAT_UPDATED_CELL: "J2",
+  HEARTBEAT_NOTES_CELL: "J3",
+  MODULE_ALIASES: ["PURCH", "PURCHASING", "PEMBELIAN", "PURCHASE", "MODUL PEMBELIAN"],
+  GUDANG_MODULE_ALIASES: ["WH", "GUDANG", "WAREHOUSE", "MODUL GUDANG"],
+  SALES_MODULE_ALIASES: ["SALES", "PENJUALAN", "TRANSAKSI", "MODUL PENJUALAN", "ORDER"],
+  FINANCE_MODULE_ALIASES: ["FIN", "FINANCE", "KEUANGAN", "MODUL FINANCE"],
+  PRODUKSI_MODULE_ALIASES: ["PROD", "PRODUKSI", "PRODUCTION", "MODUL PRODUKSI", "MANUFAKTUR"],
+  PURCH_SPREADSHEET_ID_OVERRIDE: "",       // isi hanya kalau Master_Module belum siap
+  GUDANG_SPREADSHEET_ID_OVERRIDE: "",      // isi hanya kalau routing WH belum siap
+  FINANCE_SPREADSHEET_ID_OVERRIDE: "",    // isi hanya kalau routing FIN belum siap
+  PRODUKSI_SPREADSHEET_ID_OVERRIDE: "",   // isi hanya kalau routing PROD belum siap
+  WAREHOUSE_CODE: "MAIN"
+};
+
+var PURCH_LOCAL_SHEETS = {
+  Data_Pembelian: ["Tanggal","Nota","Kategori","Vendor","Item","Qty","Harga","Total","SPK","Jenis_Hutang","Trx_ID","Created_At","Created_By","Updated_At","Updated_By","Is_Deleted"],
+  Data_Maklun: ["Tanggal","Nota","Kategori","Vendor","Item","Qty","Harga","Total","SPK","Jenis_Hutang","Trx_ID","Maklun_Type","Unit_Cost","Total_Cost","Cost_Status","Cost_Source","Created_At","Created_By","Updated_At","Updated_By","Is_Deleted"],
+  Distribusi_Maklun: ["Tanggal","SPK","Maklun","Status_Akuntansi","Kategori","Item","Qty","Total","Trx_ID","Cost_Treatment","Created_At","Created_By","Updated_At","Updated_By","Is_Deleted"],
+  Data_SPK: ["Tanggal","SPK","Status","Bahan","Jalur","Item","Reserved","Deadline","Vendor","Qty","Catatan","Pembuat","Catatan_Item","Foto","Ref_PO","Created_At","Created_By","Is_Deleted"],
+  Data_Pembayaran: ["Tanggal","Nota","Vendor","Nominal","Jenis_Hutang","Keterangan","Created_At","Created_By","Is_Deleted"],
+  Master_Kategori_Belanja: ["Kategori"],
+  Sync_PO_Sales: ["Tanggal","No PO","Customer","Item","Qty","Status"]
+};
+
+var PURCH_STOCK_MOVEMENT_HEADERS = [
+  "Movement_ID", "Tanggal", "Item_ID", "Item_Name", "Warehouse_Code", "Direction",
+  "Movement_Type", "Qty", "Unit_Cost", "Total_Cost", "SPK_ID", "Cost_Status", "Cost_Source", "Cost_Locked_At",
+  "Source_Module", "Source_ID", "Source_Line_ID", "Ref_No", "Notes", "Created_At", "Created_By", "Is_Deleted"
+];
+
+function doGet(e) {
+  var NAMA_MODUL_INI = "Modul Pembelian";
+  var params = (e && e.parameter) || {};
+  var passport = PURCH_clean_(params.paspor || params.passport || params.token || '');
+  var email = PURCH_normEmail_(params.vouch || params.email || params.user || '');
+  var auth = PURCH_securityCheck_(email, passport);
+
+  if (!auth.allowed) {
+    var portalUrl = PURCH_withLoginParam_(PURCH_getPortalUrl_());
+    var htmlTolak = `
+      <base target="_top">
+      <div style="font-family: Arial, sans-serif; text-align: center; margin-top: 12vh; background-color: #f8fafc; padding: 42px; border-radius: 20px; max-width: 720px; margin-left: auto; margin-right: auto; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
+        <div style="font-size: 74px; margin-bottom: 20px;">⛔</div>
+        <h1 style="color: #ef4444; margin-bottom: 10px;">AKSES DITOLAK / SESI HABIS</h1>
+        <p style="color: #334155; font-size: 18px;">User: <b>${PURCH_escape_(email || '-')}</b></p>
+        <p style="color: #64748b; font-size: 14px; margin-top: 16px;">${PURCH_escape_(auth.reason || 'Silakan login ulang dari Portal.')}</p>
+        <a href="${PURCH_escapeAttr_(portalUrl)}" target="_top" style="display:inline-block;margin-top:22px;padding:12px 18px;border-radius:12px;background:#2563eb;color:#fff;text-decoration:none;font-weight:bold;">Kembali ke Portal</a>
+      </div>`;
+    return HtmlService.createHtmlOutput(htmlTolak).setTitle('Akses Ditolak - CV Kiral');
+  }
+
+  var t = HtmlService.createTemplateFromFile('Index');
+  t.PURCH_BOOTSTRAP_JSON = JSON.stringify({
+    app: { code: PURCH_CFG.MODULE_CODE, version: PURCH_CFG.VERSION, title: NAMA_MODUL_INI },
+    email: auth.email,
+    displayName: auth.displayName || auth.email,
+    role: auth.role || '',
+    department: auth.department || '',
+    paspor: passport,
+    passport: passport,
+    portalUrl: PURCH_getPortalUrl_(),
+    heartbeat: PURCH_readGlobalHeartbeat_(),
+    session: PURCH_sessionInfoFromToken_(auth.email, passport)
+  }).replace(/</g, '\\u003c');
+
+  return t.evaluate()
+    .setTitle('ERP - ' + NAMA_MODUL_INI)
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function include(filename) { return HtmlService.createHtmlOutputFromFile(filename).getContent(); }
+
+function PURCH_clean_(v) { return String(v === null || v === undefined ? "" : v).trim(); }
+function PURCH_cleanKey_(v) { return PURCH_clean_(v).toUpperCase().replace(/[^A-Z0-9]/g, ""); }
+function PURCH_normHeader_(v) { return PURCH_clean_(v).toLowerCase().replace(/[\s\-_\.]+/g, "_"); }
+var PURCH_CONTEXT_USER_EMAIL = "";
+function PURCH_setContextUser_(email) { PURCH_CONTEXT_USER_EMAIL = PURCH_normEmail_(email); return PURCH_CONTEXT_USER_EMAIL; }
+function PURCH_userEmail_() { return PURCH_CONTEXT_USER_EMAIL || ""; }
+function PURCH_nowText_() { return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss"); }
+
+function PURCH_toNumber_(v) {
+  if (typeof v === 'number') return isNaN(v) ? 0 : v;
+  var s = PURCH_clean_(v);
+  if (!s) return 0;
+  s = s.replace(/[^0-9,\.\-]/g, "");
+  if (!s || s === '-' || s === ',' || s === '.') return 0;
+  var lastComma = s.lastIndexOf(',');
+  var lastDot = s.lastIndexOf('.');
+  if (lastComma > -1 && lastDot > -1) {
+    if (lastComma > lastDot) s = s.replace(/\./g, '').replace(',', '.');
+    else s = s.replace(/,/g, '');
+  } else if (lastComma > -1) {
+    var parts = s.split(',');
+    if (parts.length === 2 && parts[1].length <= 3) s = parts[0].replace(/\./g, '') + '.' + parts[1];
+    else s = s.replace(/,/g, '');
+  } else if (lastDot > -1) {
+    var p = s.split('.');
+    if (p.length > 2) s = p.join('');
+  }
+  var n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+
+function formatTglLokal(dStr) {
+  if(!dStr) return "-";
+  var d = dStr instanceof Date ? dStr : new Date(dStr);
+  if(isNaN(d.getTime())) return "-";
+  return ("0" + d.getDate()).slice(-2) + "/" + ("0" + (d.getMonth()+1)).slice(-2) + "/" + d.getFullYear();
+}
+function formatTglInput(dStr) {
+  if(!dStr) return "";
+  var d = dStr instanceof Date ? dStr : new Date(dStr);
+  if(isNaN(d.getTime())) {
+    var s = PURCH_clean_(dStr);
+    var m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (m) return m[3] + "-" + ("0"+m[2]).slice(-2) + "-" + ("0"+m[1]).slice(-2);
+    return "";
+  }
+  return d.getFullYear() + "-" + ("0" + (d.getMonth()+1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+}
+function PURCH_dateOnlyText_(v) { return formatTglInput(v || new Date()) || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd"); }
+function formatRupiah(angka) { return "Rp " + Math.round(PURCH_toNumber_(angka)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+
+function PURCH_headerMap_(headers) {
+  var map = {};
+  (headers || []).forEach(function(h, i) {
+    var k = PURCH_normHeader_(h);
+    if (k && map[k] === undefined) map[k] = i;
+  });
+  return map;
+}
+function PURCH_col_(map, names, fallbackIndex) {
+  names = Array.isArray(names) ? names : [names];
+  for (var i = 0; i < names.length; i++) {
+    var k = PURCH_normHeader_(names[i]);
+    if (map[k] !== undefined) return map[k];
+  }
+  return fallbackIndex === undefined ? -1 : fallbackIndex;
+}
+function PURCH_isDeletedValue_(v) {
+  var k = PURCH_cleanKey_(v);
+  return k === "TRUE" || k === "YA" || k === "YES" || k === "Y" || k === "1" || k === "DELETED";
+}
+function PURCH_isActiveStatus_(status) {
+  var s = PURCH_cleanKey_(status);
+  if (!s) return true;
+  var inactive = ["INACTIVE", "NONAKTIF", "DISABLED", "OFF", "FALSE", "STOP", "STOPPED", "ARCHIVE", "ARSIP"];
+  return inactive.indexOf(s) === -1;
+}
+function PURCH_extractSpreadsheetId_(value) {
+  var s = PURCH_clean_(value);
+  if (!s) return "";
+  if (/^[a-zA-Z0-9-_]{25,}$/.test(s) && s.indexOf('/') === -1) return s;
+  var m = s.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  return m ? m[1] : "";
+}
+function PURCH_masterSs_() { return SpreadsheetApp.openById(MASTER_SPREADSHEET_ID); }
+
+function PURCH_openModuleSpreadsheet_(aliases) {
+  aliases = (aliases || []).map(PURCH_cleanKey_).filter(String);
+  var masterSs = PURCH_masterSs_();
+  var sh = masterSs.getSheetByName("Master_Module");
+  if (!sh) throw new Error("Sheet Master_Module tidak ditemukan di Master Database.");
+  var values = sh.getDataRange().getValues();
+  if (values.length < 2) throw new Error("Master_Module masih kosong.");
+  var headers = values[0];
+  var map = PURCH_headerMap_(headers);
+  var cCode = PURCH_col_(map, ["Module_Code", "Module Code", "Kode Modul"], -1);
+  var cName = PURCH_col_(map, ["Module_Name", "Module Name", "Nama Modul"], -1);
+  var cId = PURCH_col_(map, ["Spreadsheet_ID", "Spreadsheet ID", "ID Spreadsheet"], -1);
+  var cUrl = PURCH_col_(map, ["Spreadsheet_URL", "Spreadsheet URL", "URL Spreadsheet"], -1);
+  var cStatus = PURCH_col_(map, ["Status"], -1);
+  if (cCode === -1 && cName === -1) throw new Error("Header Module_Code / Module_Name tidak ditemukan.");
+  if (cId === -1 && cUrl === -1) throw new Error("Header Spreadsheet_ID / Spreadsheet_URL tidak ditemukan.");
+  var fallbackRow = null;
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    var code = cCode !== -1 ? PURCH_cleanKey_(row[cCode]) : "";
+    var name = cName !== -1 ? PURCH_cleanKey_(row[cName]) : "";
+    var active = PURCH_isActiveStatus_(cStatus === -1 ? "" : row[cStatus]);
+    if (!active) continue;
+    var matchedCode = aliases.indexOf(code) !== -1;
+    var matchedName = aliases.some(function(a) { return name === a || name.indexOf(a) !== -1 || a.indexOf(name) !== -1; });
+    if (matchedName && !fallbackRow) fallbackRow = row;
+    if (matchedCode || matchedName) {
+      var id = cId !== -1 ? PURCH_extractSpreadsheetId_(row[cId]) : "";
+      if (!id && cUrl !== -1) id = PURCH_extractSpreadsheetId_(row[cUrl]);
+      if (!id) throw new Error("Spreadsheet_ID kosong untuk modul " + (row[cCode] || row[cName]));
+      return SpreadsheetApp.openById(id);
+    }
+  }
+  throw new Error("Modul tidak ditemukan di Master_Module. Dicari: " + aliases.join(", "));
+}
+function PURCH_selfSs_() {
+  if (PURCH_CFG.PURCH_SPREADSHEET_ID_OVERRIDE) return SpreadsheetApp.openById(PURCH_CFG.PURCH_SPREADSHEET_ID_OVERRIDE);
+  return PURCH_openModuleSpreadsheet_(PURCH_CFG.MODULE_ALIASES);
+}
+function PURCH_gudangSs_() {
+  if (PURCH_CFG.GUDANG_SPREADSHEET_ID_OVERRIDE) return SpreadsheetApp.openById(PURCH_CFG.GUDANG_SPREADSHEET_ID_OVERRIDE);
+  return PURCH_openModuleSpreadsheet_(PURCH_CFG.GUDANG_MODULE_ALIASES);
+}
+function PURCH_salesSs_() {
+  return PURCH_openModuleSpreadsheet_(PURCH_CFG.SALES_MODULE_ALIASES);
+}
+function PURCH_financeSs_() {
+  if (PURCH_CFG.FINANCE_SPREADSHEET_ID_OVERRIDE) return SpreadsheetApp.openById(PURCH_CFG.FINANCE_SPREADSHEET_ID_OVERRIDE);
+  return PURCH_openModuleSpreadsheet_(PURCH_CFG.FINANCE_MODULE_ALIASES || ["FIN", "FINANCE", "KEUANGAN"]);
+}
+function PURCH_produksiSs_() {
+  if (PURCH_CFG.PRODUKSI_SPREADSHEET_ID_OVERRIDE) return SpreadsheetApp.openById(PURCH_CFG.PRODUKSI_SPREADSHEET_ID_OVERRIDE);
+  return PURCH_openModuleSpreadsheet_(PURCH_CFG.PRODUKSI_MODULE_ALIASES || ["PROD", "PRODUKSI", "PRODUCTION"]);
+}
+
+function PURCH_ensureSheetHeaders_(ss, sheetName, headers) {
+  var sh = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  if (sh.getLastRow() === 0) {
+    sh.appendRow(headers);
+  } else {
+    var existing = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0];
+    var map = PURCH_headerMap_(existing);
+    var add = (headers || []).filter(function(h) { return PURCH_col_(map, [h], -1) === -1; });
+    if (add.length) sh.getRange(1, existing.length + 1, 1, add.length).setValues([add]);
+  }
+  try { sh.getRange(1,1,1,sh.getLastColumn()).setFontWeight("bold").setBackground("#fff7ed"); sh.setFrozenRows(1); } catch(e) {}
+  return sh;
+}
+function PURCH_ensureLocalSheet_(sheetName) {
+  var ss = PURCH_selfSs_();
+  var headers = PURCH_LOCAL_SHEETS[sheetName] || [];
+  var sh = ss.getSheetByName(sheetName);
+  if (!sh && headers.length) sh = PURCH_ensureSheetHeaders_(ss, sheetName, headers);
+  if (sh && headers.length) PURCH_ensureSheetHeaders_(ss, sheetName, headers);
+  return sh;
+}
+
+function getSheetWithMap(sheetName, ssOpt, opt) {
+  // v0.9.7: helper ini sekarang bisa baca sheet lokal Purchasing ATAU sheet eksternal.
+  // - getSheetWithMap("Data_SPK")                  => tetap baca file Purchasing dan auto-create header lokal.
+  // - getSheetWithMap("Data_Produksi", ssProduksi) => baca file Produksi read-only, tidak membuat sheet di Purchasing.
+  opt = opt || {};
+  var ss = ssOpt || null;
+  var s = null;
+  var headersDefault = opt.headers || PURCH_LOCAL_SHEETS[sheetName] || [];
+
+  if (ss) {
+    s = ss.getSheetByName(sheetName);
+    if (!s) {
+      if (opt.create === true && headersDefault.length) s = PURCH_ensureSheetHeaders_(ss, sheetName, headersDefault);
+      else return null;
+    }
+  } else {
+    s = PURCH_ensureLocalSheet_(sheetName);
+  }
+
+  if(!s) return null;
+  var data = s.getDataRange().getValues();
+  if (data.length === 0) data = [headersDefault];
+  var headers = data.length > 0 ? data[0] : [];
+  var map = PURCH_headerMap_(headers);
+  var c = function(headerNames, fallbackIndex) { return PURCH_col_(map, headerNames, fallbackIndex); };
+  var cDel = c(["Is_Deleted", "Is Deleted", "Deleted"], -1);
+  var visibleRows = [];
+  for (var i = 1; i < data.length; i++) {
+    if (cDel !== -1 && PURCH_isDeletedValue_(data[i][cDel])) continue;
+    visibleRows.push(data[i]);
+  }
+  return { rows: visibleRows, c: c, sheet: s, headers: headers, fullData: data, map: map, spreadsheet: ss || (s.getParent ? s.getParent() : null) };
+}
+
+
+
+// =================================================================================
+// FLOW-STYLE SECURITY: HMAC passport dari Portal. Tidak pakai Security_Passport sheet.
+// =================================================================================
+function PURCH_normEmail_(email) { return PURCH_clean_(email).toLowerCase(); }
+function PURCH_key_(v) { return PURCH_clean_(v).toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+function PURCH_escape_(v) { return PURCH_clean_(v).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
+function PURCH_escapeAttr_(v) { return PURCH_escape_(v).replace(/`/g, '&#96;'); }
+
+function PURCH_parsePassport_(passport) {
+  var raw = PURCH_clean_(passport);
+  var m = raw.match(/^(\d{10,}):([a-f0-9]{64})$/i);
+  return m ? { stamp:Number(m[1]) || 0, hash:String(m[2] || '').toLowerCase() } : { stamp:0, hash:raw.toLowerCase() };
+}
+function PURCH_hashPassport_(email, stamp) {
+  var raw = PURCH_normEmail_(email) + '|' + Number(stamp || 0) + '|' + PURCH_CFG.SHARED_SECRET;
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw)
+    .map(function(b){ return (b < 0 ? b + 256 : b).toString(16).padStart(2, '0'); })
+    .join('');
+}
+function PURCH_validatePassport_(email, passport) {
+  var p = PURCH_parsePassport_(passport);
+  if (!p.stamp || !p.hash) return { ok:false, reason:'FORMAT_PASPOR_TIDAK_VALID' };
+  if (p.hash !== PURCH_hashPassport_(email, p.stamp)) return { ok:false, reason:'HASH_PASPOR_TIDAK_VALID' };
+  if (Date.now() - p.stamp > PURCH_CFG.SESSION_TTL_MS) return { ok:false, reason:'PASPOR_EXPIRED' };
+  var lastLogout = PURCH_getLastLogoutStamp_(email);
+  if (lastLogout && p.stamp < lastLogout) return { ok:false, reason:'GLOBAL_LOGOUT' };
+  return { ok:true, stamp:p.stamp };
+}
+function PURCH_sessionInfoFromToken_(email, passport) {
+  var p = PURCH_parsePassport_(passport);
+  return {
+    loginAt: p.stamp ? PURCH_formatDateTime_(new Date(p.stamp)) : '',
+    expiresAt: p.stamp ? PURCH_formatDateTime_(new Date(p.stamp + PURCH_CFG.SESSION_TTL_MS)) : '',
+    lastLogoutAt: PURCH_getLastLogoutStamp_(email) ? PURCH_formatDateTime_(new Date(PURCH_getLastLogoutStamp_(email))) : '',
+    ttlHours: Math.round(PURCH_CFG.SESSION_TTL_MS / 3600000)
+  };
+}
+function PURCH_formatDateTime_(d) { return Utilities.formatDate(d, Session.getScriptTimeZone() || 'Asia/Jakarta', 'yyyy-MM-dd HH:mm:ss'); }
+
+function PURCH_readRows_(sh) {
+  if (!sh || sh.getLastRow() < 2) return [];
+  var vals = sh.getDataRange().getValues();
+  var headers = vals[0].map(PURCH_clean_);
+  var rows = [];
+  for (var r=1; r<vals.length; r++) {
+    var obj = {};
+    headers.forEach(function(h,i){ if (h) obj[h] = vals[r][i]; });
+    rows.push(obj);
+  }
+  return rows;
+}
+function PURCH_pickValue_(obj, aliases) {
+  var map = {};
+  Object.keys(obj || {}).forEach(function(k){ map[PURCH_key_(k)] = obj[k]; });
+  for (var i=0; i<(aliases || []).length; i++) {
+    var key = PURCH_key_(aliases[i]);
+    if (map[key] !== undefined) return map[key];
+  }
+  return '';
+}
+function PURCH_findUser_(email) {
+  var sh = PURCH_masterSs_().getSheetByName('Master_User');
+  if (!sh) throw new Error('Sheet Master_User tidak ditemukan.');
+  var rows = PURCH_readRows_(sh);
+  email = PURCH_normEmail_(email);
+  for (var i=0; i<rows.length; i++) {
+    var e = PURCH_pickValue_(rows[i], ['Email','Email_Google','Gmail','Email_User','User_Email','Username']);
+    if (PURCH_normEmail_(e) === email) return rows[i];
+  }
+  return null;
+}
+function PURCH_userDisplayName_(user, email) {
+  return PURCH_clean_(PURCH_pickValue_(user || {}, ['Display_Name','Display Name','Nama','Nama User','Nama_User','Nama_Lengkap','Nama Lengkap','Name','User_Name','Username','User'])) || PURCH_clean_(email);
+}
+function PURCH_isStatusActive_(v) { return PURCH_isActiveStatus_(v); }
+function PURCH_userCanOpenModule_(auth, code, name) {
+  var targets = [PURCH_key_(code), PURCH_key_(name)];
+  var fields = [auth.allowedModules, auth.role, auth.department].map(PURCH_key_).join('|');
+  if (fields.indexOf('ALL') !== -1 || fields.indexOf('SUPERADMIN') !== -1) return true;
+  return targets.some(function(t){ return t && fields.indexOf(t) !== -1; });
+}
+function PURCH_securityCheck_(email, passport) {
+  email = PURCH_normEmail_(email);
+  if (!email) return { allowed:false, reason:'EMAIL/VOUCH_KOSONG', email:'' };
+  var user;
+  try { user = PURCH_findUser_(email); } catch(e) { return { allowed:false, reason:e.message || String(e), email:email }; }
+  if (!user) return { allowed:false, reason:'USER_TIDAK_ADA_DI_MASTER_USER', email:email };
+  if (!PURCH_isStatusActive_(PURCH_pickValue_(user, ['Status','Status_Akun','Aktif']))) return { allowed:false, reason:'USER_NONAKTIF', email:email };
+  if (passport) {
+    var pv = PURCH_validatePassport_(email, passport);
+    if (!pv.ok) return { allowed:false, reason:pv.reason, email:email };
+  } else {
+    return { allowed:false, reason:'PASPOR_KOSONG', email:email };
+  }
+  var role = PURCH_pickValue_(user, ['Role','Jabatan','Hak_Akses','Akses']) || '';
+  var department = PURCH_pickValue_(user, ['Department','Departemen','Divisi']) || '';
+  var allowedModules = PURCH_pickValue_(user, ['Allowed_Modules','Allowed Modules','Module_Access','Hak_Modul','Akses_Modul','Modul']) || '';
+  var isAdmin = PURCH_key_(role).indexOf('ADMIN') !== -1 || PURCH_key_(department).indexOf('ADMIN') !== -1 || PURCH_key_(allowedModules).indexOf('SUPERADMIN') !== -1 || PURCH_key_(allowedModules).indexOf('ALL') !== -1;
+  var moduleOk = isAdmin || PURCH_userCanOpenModule_({role:role, department:department, allowedModules:allowedModules}, PURCH_CFG.MODULE_CODE, 'Purchasing Pembelian Maklun');
+  if (!moduleOk) return { allowed:false, reason:'USER_TIDAK_PUNYA_AKSES_PURCHASING', email:email, role:role, department:department, allowedModules:allowedModules };
+  return {
+    allowed:true,
+    reason:isAdmin ? 'ADMIN' : 'MODULE_ALLOWED',
+    email:email,
+    displayName:PURCH_userDisplayName_(user, email),
+    role:role,
+    department:department,
+    allowedModules:allowedModules,
+    isAdmin:isAdmin,
+    passport:passport,
+    loginAt:PURCH_parsePassport_(passport).stamp
+  };
+}
+function PURCH_requirePassport_(emailOp, pasporOp) {
+  var auth = PURCH_securityCheck_(emailOp, pasporOp);
+  if (!auth.allowed) throw new Error('Akses ditolak: ' + (auth.reason || 'Sesi tidak valid. Silakan login ulang dari Portal.'));
+  PURCH_setContextUser_(auth.email);
+  return auth;
+}
+function PURCH_authFromArgs_(argsLike) {
+  var args = Array.prototype.slice.call(argsLike || []);
+  var email = args.length >= 2 ? args[args.length - 2] : '';
+  var paspor = args.length >= 1 ? args[args.length - 1] : '';
+  return PURCH_requirePassport_(email, paspor);
+}
+function PURCH_getPortalUrl_() {
+  var links = PURCH_readModuleLinksRaw_();
+  for (var i=0; i<links.length; i++) {
+    var k = PURCH_key_(links[i].code + ' ' + links[i].nama);
+    if (k.indexOf('PORTAL') !== -1 || k.indexOf('UTAMA') !== -1) return links[i].url;
+  }
+  return '';
+}
+function PURCH_withLoginParam_(url) { if (!url) return ''; return url + (url.indexOf('?') === -1 ? '?' : '&') + 'login=1'; }
+function PURCH_readModuleLinksRaw_() {
+  var out = [];
+  try {
+    var sh = PURCH_masterSs_().getSheetByName('Master_Module');
+    if (!sh || sh.getLastRow() < 2) return out;
+    var values = sh.getDataRange().getValues();
+    var map = PURCH_headerMap_(values[0]);
+    var cCode = PURCH_col_(map, ['Module_Code'], -1);
+    var cName = PURCH_col_(map, ['Module_Name','Nama Modul'], -1);
+    var cWeb = PURCH_col_(map, ['Web_App_URL','Web App URL','WebApp URL','URL'], -1);
+    var cStatus = PURCH_col_(map, ['Status'], -1);
+    for (var r=1; r<values.length; r++) {
+      var row = values[r];
+      if (!PURCH_isActiveStatus_(cStatus === -1 ? '' : row[cStatus])) continue;
+      var code = cCode !== -1 ? PURCH_clean_(row[cCode]) : '';
+      var nm = cName !== -1 ? PURCH_clean_(row[cName]) : code;
+      var url = cWeb !== -1 ? PURCH_clean_(row[cWeb]) : '';
+      if (nm && url) out.push({ code:code, nama:nm, url:url });
+    }
+  } catch(e) {}
+  return out;
+}
+function PURCH_appendPassportToUrl_(url, auth, passport) {
+  if (!url) return '';
+  var sep = url.indexOf('?') === -1 ? '?' : '&';
+  return url + sep + 'vouch=' + encodeURIComponent(auth.email || '') + '&paspor=' + encodeURIComponent(passport || auth.passport || '') + '&passport=' + encodeURIComponent(passport || auth.passport || '') + '&from=PURCH';
+}
+function PURCH_readGlobalHeartbeat_() {
+  try {
+    var sh = PURCH_masterSs_().getSheetByName('Master_Module');
+    if (!sh) return { version:'', updatedAt:'', notes:'' };
+    return { version:String(sh.getRange(PURCH_CFG.HEARTBEAT_CELL).getValue() || ''), updatedAt:String(sh.getRange(PURCH_CFG.HEARTBEAT_UPDATED_CELL).getValue() || ''), notes:String(sh.getRange(PURCH_CFG.HEARTBEAT_NOTES_CELL).getValue() || '') };
+  } catch(e) { return { version:'', updatedAt:'', notes:'' }; }
+}
+function PURCH_bumpHeartbeat_(notes) {
+  try {
+    var sh = PURCH_masterSs_().getSheetByName('Master_Module');
+    if (!sh) return PURCH_readGlobalHeartbeat_();
+    var version = String(Date.now());
+    sh.getRange(PURCH_CFG.HEARTBEAT_CELL).setValue(version);
+    sh.getRange(PURCH_CFG.HEARTBEAT_UPDATED_CELL).setValue(PURCH_formatDateTime_(new Date()));
+    sh.getRange(PURCH_CFG.HEARTBEAT_NOTES_CELL).setValue(PURCH_clean_(notes || 'PURCH mutation'));
+    return PURCH_readGlobalHeartbeat_();
+  } catch(e) { return PURCH_readGlobalHeartbeat_(); }
+}
+function PURCH_ensureLogoutColumn_() {
+  var sh = PURCH_masterSs_().getSheetByName('Master_User');
+  if (!sh) throw new Error('Master_User tidak ditemukan.');
+  var headers = sh.getRange(1,1,1,Math.max(1, sh.getLastColumn())).getValues()[0];
+  var map = PURCH_headerMap_(headers);
+  if (PURCH_col_(map, ['Last_Logout_At','Global_Logout_At','Logout_At','Sesi_Terakhir_Logout'], -1) === -1) sh.getRange(1, sh.getLastColumn()+1).setValue('Last_Logout_At');
+}
+function PURCH_getLastLogoutStamp_(email) {
+  try {
+    var sh = PURCH_masterSs_().getSheetByName('Master_User');
+    if (!sh || sh.getLastRow() < 2) return 0;
+    var vals = sh.getDataRange().getValues();
+    var map = PURCH_headerMap_(vals[0]);
+    var cEmail = PURCH_col_(map, ['Email','Email_Google','Gmail','Email_User','User_Email','Username'], -1);
+    var cLogout = PURCH_col_(map, ['Last_Logout_At','Global_Logout_At','Logout_At','Sesi_Terakhir_Logout'], -1);
+    if (cEmail < 0 || cLogout < 0) return 0;
+    for (var r=1; r<vals.length; r++) {
+      if (PURCH_normEmail_(vals[r][cEmail]) !== PURCH_normEmail_(email)) continue;
+      var v = vals[r][cLogout];
+      if (!v) return 0;
+      if (typeof v === 'number') return v;
+      if (v instanceof Date) return v.getTime();
+      var n = Number(v); if (n) return n;
+      var d = new Date(v); return isNaN(d.getTime()) ? 0 : d.getTime();
+    }
+  } catch(e) {}
+  return 0;
+}
+function PURCH_markLogout_(email, stamp) {
+  PURCH_ensureLogoutColumn_();
+  var sh = PURCH_masterSs_().getSheetByName('Master_User');
+  var vals = sh.getDataRange().getValues();
+  var map = PURCH_headerMap_(vals[0]);
+  var cEmail = PURCH_col_(map, ['Email','Email_Google','Gmail','Email_User','User_Email','Username'], -1);
+  var cLogout = PURCH_col_(map, ['Last_Logout_At','Global_Logout_At','Logout_At','Sesi_Terakhir_Logout'], -1);
+  if (cEmail < 0 || cLogout < 0) return;
+  for (var r=1; r<vals.length; r++) {
+    if (PURCH_normEmail_(vals[r][cEmail]) === PURCH_normEmail_(email)) {
+      sh.getRange(r+1, cLogout+1).setValue(Number(stamp) || Date.now());
+      return;
+    }
+  }
+}
+function PURCH_globalHeartbeat(clientVersion, emailOp, pasporOp) {
+  var auth = PURCH_requirePassport_(emailOp, pasporOp);
+  var hb = PURCH_readGlobalHeartbeat_();
+  return { ok:true, user:{ email:auth.email, name:auth.displayName, role:auth.role }, serverVersion:hb.version, updatedAt:hb.updatedAt, shouldRefresh:!!clientVersion && String(clientVersion) !== String(hb.version), portalUrl:PURCH_getPortalUrl_(), now:PURCH_formatDateTime_(new Date()) };
+}
+function PURCH_logout(emailOp, pasporOp) {
+  var auth = PURCH_requirePassport_(emailOp, pasporOp);
+  PURCH_markLogout_(auth.email, Date.now());
+  PURCH_bumpHeartbeat_('Logout ' + auth.email);
+  return { success:true, message:'Logout berhasil.', portalUrl:PURCH_withLoginParam_(PURCH_getPortalUrl_()) };
+}
+function TEST_purchasingSecurityDebug(email, paspor) {
+  return PURCH_securityCheck_(email || PURCH_userEmail_(), paspor || '');
+}
+
+function PURCH_readMasterItems_() {
+  var sh = PURCH_masterSs_().getSheetByName("Master_Item");
+  if (!sh || sh.getLastRow() < 2) return [];
+  var values = sh.getDataRange().getValues();
+  var map = PURCH_headerMap_(values[0]);
+  var cId = PURCH_col_(map, ["Item_ID", "ID Item", "ID"], -1);
+  var cName = PURCH_col_(map, ["Item_Name", "Nama_Item", "Nama Item", "Nama_Barang", "Nama Barang", "Nama_Produk", "Nama Produk", "Internal_Item_Name", "Item", "Produk", "Nama"], -1);
+  var cCat = PURCH_col_(map, ["Category", "Kategori", "Item_Category", "Kategori Item", "Jenis", "Jenis_Item", "Jenis Item"], -1);
+  var cSub = PURCH_col_(map, ["Subcategory", "Sub_Category", "Sub Kategori", "Sub-Kategori", "SubKategori", "Sub_Kategori"], -1);
+  var cType = PURCH_col_(map, ["Item_Type", "Item Type", "Tipe_Item", "Tipe Item", "Stock_Type", "Stock Type", "Inventory_Type", "Inventory Type"], -1);
+  var cRole = PURCH_col_(map, ["Stock_Role", "Stock Role", "Inventory_Role", "Inventory Role", "Role_Stok", "Role Stok"], -1);
+  var cCost = PURCH_col_(map, ["Default_Cost", "Unit_Cost", "HPP", "Harga_Beli", "Harga Beli", "Cost"], -1);
+  var cStatus = PURCH_col_(map, ["Status"], -1);
+  if (cName === -1) return [];
+  var out = [];
+  for (var r=1; r<values.length; r++) {
+    var row = values[r];
+    if (!PURCH_isActiveStatus_(cStatus === -1 ? "" : row[cStatus])) continue;
+    var name = PURCH_clean_(row[cName]);
+    if (!name) continue;
+    out.push({
+      id: cId !== -1 ? PURCH_clean_(row[cId]) : "",
+      nama: name,
+      kat: cCat !== -1 ? PURCH_clean_(row[cCat]) : "",
+      sub: cSub !== -1 ? PURCH_clean_(row[cSub]) : "Umum",
+      tipe: cType !== -1 ? PURCH_clean_(row[cType]) : "",
+      role: cRole !== -1 ? PURCH_clean_(row[cRole]) : "",
+      cost: cCost !== -1 ? PURCH_toNumber_(row[cCost]) : 0
+    });
+  }
+  return out;
+}
+function PURCH_itemTypeKey_(it) {
+  it = it || {};
+  return PURCH_cleanKey_(it.tipe || it.itemType || it.Item_Type || "");
+}
+function PURCH_isRawMaterialItem_(it) {
+  // v0.3: filter wajib dari kolom Master_Item.Item_Type, bukan Category/Subcategory.
+  // Yang boleh tampil di form bahan/aksesoris: BAHAN dan PACKAGING.
+  var t = PURCH_itemTypeKey_(it);
+  return t === "BAHAN" || t === "PACKAGING";
+}
+function PURCH_isAccessoryItem_(it) {
+  // PACKAGING dipakai untuk aksesoris/packing/label/polybag/kemasan.
+  return PURCH_itemTypeKey_(it) === "PACKAGING";
+}
+function PURCH_isFinishedGoodItem_(it) {
+  // Produk/output SPK/hasil maklun hanya BARANG_JADI.
+  return PURCH_itemTypeKey_(it) === "BARANGJADI";
+}
+function PURCH_itemTypeFromPayload_(d, defaultType) {
+  d = d || {};
+  var raw = PURCH_cleanKey_([d.itemType, d.Item_Type, d.tipeItem, d.tipe, d.kategori, d.category].join(" "));
+  if (raw.indexOf("PACKAGING") !== -1 || raw.indexOf("PACKING") !== -1 || raw.indexOf("AKSESORIS") !== -1 || raw.indexOf("ACCESSORY") !== -1 || raw.indexOf("KEMAS") !== -1) return "PACKAGING";
+  if (raw.indexOf("BARANGJADI") !== -1 || raw.indexOf("PRODUKJADI") !== -1 || raw.indexOf("FINISHEDGOOD") !== -1) return "BARANG_JADI";
+  if (raw.indexOf("BAHAN") !== -1 || raw.indexOf("MATERIAL") !== -1 || raw.indexOf("RAW") !== -1) return "BAHAN";
+  return defaultType || "BAHAN";
+}
+function PURCH_categoryFromItemType_(itemType, fallback) {
+  var t = PURCH_cleanKey_(itemType);
+  if (t === "PACKAGING") return "Packaging / Aksesoris";
+  if (t === "BARANGJADI") return fallback || "Barang Jadi";
+  if (t === "BAHAN") return fallback || "Bahan Baku";
+  return fallback || "Umum";
+}
+function PURCH_readSuppliers_() {
+  var names = [];
+  var ss = PURCH_masterSs_();
+  ["Master_Supplier", "Master_Vendor"].forEach(function(sheetName) {
+    var sh = ss.getSheetByName(sheetName);
+    if (!sh || sh.getLastRow() < 2) return;
+    var values = sh.getDataRange().getValues();
+    var map = PURCH_headerMap_(values[0]);
+    var cName = PURCH_col_(map, ["Supplier_Name", "Vendor_Name", "Nama_Supplier", "Nama Supplier", "Nama_Vendor", "Nama Vendor", "Nama", "Name"], -1);
+    var cStatus = PURCH_col_(map, ["Status"], -1);
+    if (cName === -1) return;
+    for (var r=1; r<values.length; r++) {
+      if (!PURCH_isActiveStatus_(cStatus === -1 ? "" : values[r][cStatus])) continue;
+      var n = PURCH_clean_(values[r][cName]);
+      if (n) names.push(n);
+    }
+  });
+  return Array.from(new Set(names)).sort();
+}
+function PURCH_readModuleLinks_(auth, passport) {
+  var out = [];
+  var raw = PURCH_readModuleLinksRaw_();
+  auth = auth || { email:'', passport:'' };
+  for (var i=0; i<raw.length; i++) {
+    var m = raw[i];
+    var key = PURCH_cleanKey_((m.code || '') + ' ' + (m.nama || ''));
+    if (PURCH_CFG.MODULE_ALIASES.some(function(a){ return key.indexOf(PURCH_cleanKey_(a)) !== -1; })) continue;
+    out.push({ nama:m.nama, url:PURCH_appendPassportToUrl_(m.url, auth, passport || auth.passport || '') });
+  }
+  return out;
+}
+
+function PURCH_readPoSalesData_() {
+  var out = [];
+  var seen = {};
+  function addRow(obj) {
+    obj = obj || {};
+    var noPo = PURCH_clean_(obj.noPo);
+    var item = PURCH_clean_(obj.item);
+    var qty = PURCH_toNumber_(obj.qty);
+    if (!noPo || !item || qty <= 0) return;
+    var keyItem = PURCH_cleanKey_(item);
+    var pseudo = ["BIAYAONGKOSKIRIM", "ONGKOSKIRIM", "POTONGANDISKON", "DISKON", "PAJAKPPN", "PPN", "DOWNPAYMENT", "DP"];
+    for (var i=0; i<pseudo.length; i++) if (keyItem.indexOf(pseudo[i]) !== -1) return;
+    var statusKey = PURCH_cleanKey_(obj.status || "");
+    var skipStatus = ["SELESAI", "CLOSE", "CLOSED", "CANCEL", "CANCELLED", "BATAL", "VOID", "HAPUS"];
+    for (var j=0; j<skipStatus.length; j++) if (statusKey === skipStatus[j] || statusKey.indexOf(skipStatus[j]) !== -1) return;
+    var key = [noPo, item, qty].join("|");
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push({ noPo: noPo, item: item, qty: qty, customer: PURCH_clean_(obj.customer), tgl: PURCH_clean_(obj.tgl), status: PURCH_clean_(obj.status) });
+  }
+
+  // Sumber utama: Modul Penjualan / Sales via Master_Module.
+  try {
+    var salesSs = PURCH_salesSs_();
+    var sh = salesSs.getSheetByName("Data_PO");
+    if (sh && sh.getLastRow() >= 2) {
+      var values = sh.getDataRange().getValues();
+      var map = PURCH_headerMap_(values[0]);
+      var cTgl = PURCH_col_(map, ["Tanggal", "Tgl"], 0);
+      var cPo = PURCH_col_(map, ["No PO", "No_PO", "Nomor PO", "PO"], 1);
+      var cCust = PURCH_col_(map, ["Customer", "Konsumen", "Nama Customer", "Nama Konsumen"], 2);
+      var cItem = PURCH_col_(map, ["Nama Item", "Item", "Produk", "Nama Produk"], 3);
+      var cQty = PURCH_col_(map, ["Qty", "Quantity", "Jumlah"], 4);
+      var cStatus = PURCH_col_(map, ["Status"], 9);
+      var cDel = PURCH_col_(map, ["Is_Deleted", "Deleted"], -1);
+      for (var r=1; r<values.length; r++) {
+        if (cDel !== -1 && PURCH_isDeletedValue_(values[r][cDel])) continue;
+        addRow({ tgl: formatTglInput(values[r][cTgl]), noPo: values[r][cPo], customer: values[r][cCust], item: values[r][cItem], qty: values[r][cQty], status: cStatus !== -1 ? values[r][cStatus] : "" });
+      }
+    }
+  } catch(e) {
+    // Fallback ke Sync_PO_Sales lokal kalau routing SALES belum siap.
+  }
+
+  // Fallback/backup: sheet lokal Sync_PO_Sales jika pernah dipakai manual/import.
+  var p = getSheetWithMap("Sync_PO_Sales");
+  if (p) {
+    var cPoNo = p.c(["no po", "po", "nomor po"], 1), cPoCust = p.c(["customer", "konsumen"], 2), cPoItem = p.c(["item", "produk", "nama item"], 3), cPoQty = p.c(["qty", "jumlah"], 4), cPoStat = p.c(["status"], 5), cTgl = p.c(["tanggal", "tgl"], 0);
+    p.rows.forEach(function(r) { addRow({ tgl: cTgl !== -1 ? formatTglInput(r[cTgl]) : "", noPo: r[cPoNo], customer: cPoCust !== -1 ? r[cPoCust] : "", item: r[cPoItem], qty: r[cPoQty], status: cPoStat !== -1 ? r[cPoStat] : "" }); });
+  }
+
+  out.sort(function(a,b){ return (b.tgl + b.noPo).localeCompare(a.tgl + a.noPo); });
+  return out;
+}
+function getMasterData(emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  var vendors = PURCH_readSuppliers_();
+  var items = PURCH_readMasterItems_();
+  var bahanUtama = [], aksesoris = [], produk = [], listBahanRaw = [], aksesorisJadi = [];
+  items.forEach(function(it) {
+    var isBahan = PURCH_isRawMaterialItem_(it);
+    var isAks = PURCH_isAccessoryItem_(it);
+    var isBarangJadi = PURCH_isFinishedGoodItem_(it);
+
+    // Untuk form belanja/distribusi bahan, hanya bahan baku/aksesoris/packing yang tampil.
+    // Barang jadi tidak ikut supaya tidak tertarik semua item.
+    if (isBahan) {
+      var kat = isAks ? "Packaging / Aksesoris" : "Bahan Baku";
+      listBahanRaw.push({ kat: kat, sub: it.sub || "Umum", nama: it.nama, itemType: it.tipe });
+      if (isAks) aksesoris.push(it.nama); else bahanUtama.push(it.nama);
+    }
+
+    // v0.3: output SPK / hasil maklun hanya Master_Item.Item_Type = BARANG_JADI.
+    if (isBarangJadi) {
+      produk.push({ sub: it.sub || "Umum", nama: it.nama, itemType: it.tipe });
+    }
+
+    if (PURCH_cleanKey_(it.kat + " " + it.sub).indexOf("AKSESORISJADI") !== -1) aksesorisJadi.push(it.nama);
+  });
+
+  var spkList = [], spkItemsMap = {};
+  var pSPK = getSheetWithMap("Data_SPK");
+  if(pSPK) {
+    var cSpk = pSPK.c(["spk", "no spk"], 1), cStat = pSPK.c(["status"], 2), cItemSpk = pSPK.c(["item", "output"], 5);
+    pSPK.rows.forEach(function(r) {
+      var noSpk = PURCH_clean_(r[cSpk]);
+      var statusSpk = PURCH_cleanKey_(r[cStat]);
+      if(noSpk && statusSpk !== "SELESAI" && statusSpk !== "CLOSE" && statusSpk !== "CLOSED") {
+        spkList.push(noSpk);
+        if(!spkItemsMap[noSpk]) spkItemsMap[noSpk] = [];
+        var namaItemF = PURCH_clean_(r[cItemSpk]);
+        if(namaItemF) spkItemsMap[noSpk].push(namaItemF);
+      }
+    });
+  }
+
+  // Persediaan tidak dipakai lagi sebagai tipe belanja utama.
+  // Stok masuk cukup lewat Bahan Baku/Aksesoris; barang jadi dari hasil maklun.
+  var kategoriBelanja = ["Bahan Baku", "Packaging / Aksesoris", "Mesin / Peralatan", "Operasional", "Konsumsi", "Perbaikan"];
+  var pKat = getSheetWithMap("Master_Kategori_Belanja");
+  if(pKat && pKat.rows.length) {
+    var dataKat = pKat.rows.map(function(r){ return PURCH_clean_(r[0]); }).filter(String)
+      .filter(function(k){ return PURCH_cleanKey_(k) !== "PERSEDIAAN" && PURCH_cleanKey_(k) !== "BARANGJADI"; });
+    if(dataKat.length > 0) kategoriBelanja = dataKat;
+  }
+
+  return {
+    setup: {},
+    vendors: vendors,
+    bahanUtama: Array.from(new Set(bahanUtama)).sort(),
+    aksesoris: Array.from(new Set(aksesoris)).sort(),
+    listBahan: listBahanRaw.sort(function(a,b){ return a.nama.localeCompare(b.nama); }),
+    aksesorisJadi: Array.from(new Set(aksesorisJadi)).sort(),
+    produk: produk.sort(function(a,b){ return a.nama.localeCompare(b.nama); }),
+    spk: Array.from(new Set(spkList)).sort().reverse(),
+    spkItems: spkItemsMap,
+    modulLinks: PURCH_readModuleLinks_(__auth, pasporOp),
+    poSalesData: PURCH_readPoSalesData_(),
+    kategoriBeli: Array.from(new Set(kategoriBelanja))
+  };
+}
+function PURCH_makeId_(prefix) {
+  return prefix + "-" + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMddHHmmss") + "-" + Math.floor(Math.random()*9000+1000);
+}
+function PURCH_safeIdPart_(s) { return (PURCH_cleanKey_(s) || "X").slice(0, 45); }
+function PURCH_groupKeyPembelian_(sheetName, d) {
+  if (sheetName === "Data_Maklun") return [PURCH_clean_(d.nota), PURCH_dateOnlyText_(d.tgl), PURCH_clean_(d.spk)].join("|");
+  return [PURCH_clean_(d.nota), PURCH_dateOnlyText_(d.tgl)].join("|");
+}
+function PURCH_makeDistKey_(d, item, lineNo) {
+  return ["DIST", PURCH_dateOnlyText_(d.tgl), PURCH_clean_(d.spk), PURCH_clean_(d.maklun), PURCH_clean_(item.item), PURCH_toNumber_(item.qty), lineNo || 1].join("|");
+}
+function PURCH_isStockPurchaseCategory_(tipe) {
+  var k = PURCH_cleanKey_(tipe);
+  if (!k) return false;
+  // Persediaan masih dihitung stok untuk data lama, tapi tidak ditampilkan lagi di dropdown tipe belanja.
+  var stockKeys = ["BAHANBAKU", "BAHAN", "AKSESORIS", "PACKING", "PACKAGING", "KAIN", "TINTA", "PAPER", "KERTAS", "PERSEDIAAN"];
+  for (var i=0; i<stockKeys.length; i++) if (k.indexOf(stockKeys[i]) !== -1) return true;
+  return false;
+}
+function PURCH_isMaklunInType_(tipe) {
+  var k = PURCH_cleanKey_(tipe);
+  return k.indexOf("BARANGJADI") !== -1;
+}
+function PURCH_getMasterItemLookup_() {
+  var items = PURCH_readMasterItems_();
+  var byName = {};
+  items.forEach(function(it) {
+    var id = it.id || PURCH_safeIdPart_(it.nama);
+    var obj = { Item_ID: id, Item_Name: it.nama, Unit_Cost: it.cost || 0, Category: it.kat, Subcategory: it.sub };
+    byName[PURCH_cleanKey_(it.nama)] = obj;
+    byName[it.nama.toLowerCase()] = obj;
+  });
+  return { items: items, byName: byName };
+}
+function PURCH_lookupStockItem_(lookup, name) {
+  var n = PURCH_clean_(name);
+  return lookup.byName[PURCH_cleanKey_(n)] || lookup.byName[n.toLowerCase()] || null;
+}
+function PURCH_prepareMovementRows_(opt) {
+  var lookup = PURCH_getMasterItemLookup_();
+  var rows = [];
+  var items = opt.items || [];
+  for (var i=0; i<items.length; i++) {
+    var it = items[i];
+    var name = PURCH_clean_(it.nama || it.item);
+    var qty = PURCH_toNumber_(it.qty);
+    if (!name || qty <= 0) continue;
+    var masterItem = PURCH_lookupStockItem_(lookup, name);
+    if (!masterItem) throw new Error("Item belum ada / beda nama di Master_Item: " + name);
+    var unitCost = PURCH_toNumber_(it.unitCost);
+    if (!unitCost) unitCost = opt.unitCostFromTotal ? (PURCH_toNumber_(it.harga) / qty) : PURCH_toNumber_(it.harga);
+    if (!unitCost) unitCost = masterItem.Unit_Cost || 0;
+    var totalCost = PURCH_toNumber_(it.totalCost);
+    if (!totalCost) totalCost = unitCost * qty;
+    rows.push({
+      Movement_ID: "SM-PURCH-" + PURCH_safeIdPart_(opt.sourceId) + "-" + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMddHHmmss") + "-" + Utilities.formatString("%03d", i+1),
+      Tanggal: PURCH_dateOnlyText_(opt.tgl),
+      Item_ID: masterItem.Item_ID,
+      Item_Name: masterItem.Item_Name,
+      Warehouse_Code: PURCH_CFG.WAREHOUSE_CODE,
+      Direction: opt.direction,
+      Movement_Type: opt.movementType,
+      Qty: qty,
+      Unit_Cost: unitCost,
+      Total_Cost: totalCost,
+      SPK_ID: opt.spk || it.spk || "",
+      Cost_Status: opt.costStatus || it.costStatus || "ESTIMATED",
+      Cost_Source: opt.costSource || it.costSource || "PURCH",
+      Cost_Locked_At: opt.costLockedAt || it.costLockedAt || "",
+      Source_Module: "PURCH",
+      Source_ID: opt.sourceId,
+      Source_Line_ID: opt.sourceId + "|" + (i+1),
+      Ref_No: opt.refNo || "",
+      Notes: opt.notes || "",
+      Created_At: PURCH_nowText_(),
+      Created_By: PURCH_userEmail_(),
+      Is_Deleted: false
+    });
+  }
+  return rows;
+}
+function PURCH_appendObjectsByHeader_(ss, sheetName, headers, objects) {
+  if (!objects || !objects.length) return [];
+  var sh = PURCH_ensureSheetHeaders_(ss, sheetName, headers);
+  var currentHeaders = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  var map = PURCH_headerMap_(currentHeaders);
+  var rows = objects.map(function(obj) {
+    var row = new Array(currentHeaders.length).fill("");
+    Object.keys(obj).forEach(function(k) {
+      var idx = PURCH_col_(map, [k], -1);
+      if (idx !== -1) row[idx] = obj[k];
+    });
+    return row;
+  });
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, currentHeaders.length).setValues(rows);
+  return objects;
+}
+function PURCH_postStockMovements_(rows) {
+  if (!rows || !rows.length) return { success: true, inserted: 0 };
+  PURCH_appendObjectsByHeader_(PURCH_gudangSs_(), "Stock_Movement", PURCH_STOCK_MOVEMENT_HEADERS, rows);
+  return { success: true, inserted: rows.length };
+}
+function PURCH_voidStockMovements_(sourceId, reason) {
+  if (!sourceId) return { success: true, voided: 0 };
+  var ss = PURCH_gudangSs_();
+  var sh = PURCH_ensureSheetHeaders_(ss, "Stock_Movement", PURCH_STOCK_MOVEMENT_HEADERS);
+  if (sh.getLastRow() < 2) return { success: true, voided: 0 };
+  var values = sh.getDataRange().getValues();
+  var map = PURCH_headerMap_(values[0]);
+  var cSourceModule = PURCH_col_(map, ["Source_Module"], -1);
+  var cSourceId = PURCH_col_(map, ["Source_ID"], -1);
+  var cDel = PURCH_col_(map, ["Is_Deleted"], -1);
+  var cNotes = PURCH_col_(map, ["Notes"], -1);
+  var key = PURCH_cleanKey_(sourceId), count = 0, now = PURCH_nowText_();
+  for (var r=1; r<values.length; r++) {
+    if (PURCH_isDeletedValue_(values[r][cDel])) continue;
+    if (PURCH_cleanKey_(values[r][cSourceModule]) === "PURCH" && PURCH_cleanKey_(values[r][cSourceId]) === key) {
+      sh.getRange(r+1, cDel+1).setValue(true);
+      if (cNotes !== -1) sh.getRange(r+1, cNotes+1).setValue(PURCH_clean_(values[r][cNotes]) + " | VOID " + now + " " + PURCH_clean_(reason || "VOID_FROM_PURCH"));
+      count++;
+    }
+  }
+  return { success: true, voided: count };
+}
+
+function getRiwayatTransaksi(emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  var pBeli = getSheetWithMap("Data_Pembelian");
+  var pMaklun = getSheetWithMap("Data_Maklun");
+  var pDist = getSheetWithMap("Distribusi_Maklun");
+  var riwBeli = [], riwMaklun = [], riwDist = [];
+
+  function buildGroup(p, tipeSheet) {
+    var result = [];
+    if (!p) return result;
+    var cTgl = p.c(["tanggal", "tgl"], 0), cNota = p.c(["nota", "po"], 1), cTipe = p.c(["kategori", "tipe"], 2), cVendor = p.c(["vendor", "supplier"], 3), cItem = p.c(["item"], 4), cQty = p.c(["qty"], 5), cHrg = p.c(["harga"], 6), cTotal = p.c(["total"], 7), cSpk = p.c(["spk"], 8), cTrx = p.c(["trx_id", "trx id", "id"], -1);
+    var map = {};
+    p.rows.forEach(function(r) {
+      var tglInp = formatTglInput(r[cTgl]);
+      var nota = PURCH_clean_(r[cNota]);
+      var spk = cSpk !== -1 ? PURCH_clean_(r[cSpk]) : "";
+      var trxId = cTrx !== -1 && r[cTrx] ? PURCH_clean_(r[cTrx]) : (tipeSheet === "maklun" ? [nota, tglInp, spk].join("|") : [nota, tglInp].join("|"));
+      var total = PURCH_toNumber_(r[cTotal]);
+      if(!map[trxId]) map[trxId] = { trxId: trxId, tglInput: tglInp, tglStr: formatTglLokal(r[cTgl]), nota: nota, tipe: r[cTipe], vendor: r[cVendor], spk: spk, grandTotal: 0, items: [] };
+      map[trxId].items.push({ nama: r[cItem], qty: PURCH_toNumber_(r[cQty]), harga: PURCH_toNumber_(r[cHrg]), total: total });
+      map[trxId].grandTotal += total;
+    });
+    result = Object.values(map);
+    result.sort(function(a,b){ return (b.tglInput + b.nota).localeCompare(a.tglInput + a.nota); });
+    return result;
+  }
+
+  riwBeli = buildGroup(pBeli, "beli");
+  riwMaklun = buildGroup(pMaklun, "maklun");
+
+  if(pDist) {
+    var cTgl = pDist.c(["tanggal", "tgl"], 0), cSpk = pDist.c(["spk"], 1), cMaklun = pDist.c(["maklun", "vendor"], 2), cTipeDist = pDist.c(["status akuntansi", "status_akuntansi", "tipe"], 3), cKat = pDist.c(["kategori"], 4), cItem = pDist.c(["item", "bahan"], 5), cQty = pDist.c(["qty"], 6), cTotal = pDist.c(["total", "nilai"], 7), cTrx = pDist.c(["trx_id", "trx id", "id"], -1);
+    pDist.rows.forEach(function(r, idx) {
+      var tglInp = formatTglInput(r[cTgl]);
+      var trxId = cTrx !== -1 && r[cTrx] ? PURCH_clean_(r[cTrx]) : [tglInp, r[cSpk], r[cMaklun], r[cItem], r[cQty]].join("|");
+      riwDist.push({ trxId: trxId, tglInput: tglInp, tglStr: formatTglLokal(r[cTgl]), spk: r[cSpk], maklun: r[cMaklun], tipeDist: r[cTipeDist], kategori: r[cKat], item: r[cItem], qty: PURCH_toNumber_(r[cQty]), harga: PURCH_toNumber_(r[cTotal]) });
+    });
+    riwDist.sort(function(a,b){ return (b.tglInput + b.spk).localeCompare(a.tglInput + a.spk); });
+  }
+  return { beli: riwBeli, maklun: riwMaklun, dist: riwDist };
+}
+
+
+
+
+function PURCH_getSpkInfoMap_() {
+  var map = {};
+  try {
+    var p = getSheetWithMap("Data_SPK");
+    if (!p) return map;
+    var cSpk = p.c(["SPK", "No SPK", "No_SPK"], 1);
+    var cJalur = p.c(["Jalur", "Rute", "Maklun Type", "Maklun_Type"], 4);
+    var cStatus = p.c(["Status"], 2);
+    var cQty = p.c(["Qty", "Target", "Qty Order"], 9);
+    var cVendor = p.c(["Vendor", "Maklun"], 8);
+    p.rows.forEach(function(r) {
+      var spk = PURCH_clean_(r[cSpk]);
+      if (!spk) return;
+      var k = PURCH_cleanKey_(spk);
+      if (!map[k]) map[k] = { spk: spk, jalur: "", status: "", qty: 0, vendor: "" };
+      map[k].jalur = map[k].jalur || PURCH_clean_(r[cJalur]);
+      map[k].status = map[k].status || PURCH_clean_(r[cStatus]);
+      map[k].vendor = map[k].vendor || PURCH_clean_(r[cVendor]);
+      map[k].qty += PURCH_toNumber_(r[cQty]);
+    });
+  } catch(e) {}
+  return map;
+}
+function PURCH_getSpkInfo_(spk) { return PURCH_getSpkInfoMap_()[PURCH_cleanKey_(spk)] || {}; }
+function PURCH_maklunTypeFromSpk_(spk) {
+  var info = PURCH_getSpkInfo_(spk);
+  var j = PURCH_cleanKey_(info.jalur || "");
+  if (j.indexOf("CMT") !== -1) return "CMT";
+  if (j.indexOf("FULL") !== -1 || j.indexOf("FO") !== -1 || j.indexOf("ORDER") !== -1) return "FULL_ORDER";
+  return "FULL_ORDER"; // default lapangan: harga maklun fix/all-in
+}
+function PURCH_isSpkDone_(spk) {
+  var info = PURCH_getSpkInfo_(spk);
+  var s = PURCH_cleanKey_(info.status || "");
+  return s.indexOf("SELESAI") !== -1 || s.indexOf("CLOSE") !== -1 || s.indexOf("DONE") !== -1;
+}
+function PURCH_getDistribusiTotalForSpk_(spk) {
+  var p = getSheetWithMap("Distribusi_Maklun");
+  if (!p) return 0;
+  var cSpk = p.c(["SPK", "No SPK"], 1), cTotal = p.c(["Total", "Nilai", "Nominal"], 7), cDel = p.c(["Is_Deleted"], -1);
+  var key = PURCH_cleanKey_(spk), total = 0;
+  p.rows.forEach(function(r){
+    if (cDel !== -1 && PURCH_isDeletedValue_(r[cDel])) return;
+    if (PURCH_cleanKey_(r[cSpk]) === key) total += PURCH_toNumber_(r[cTotal]);
+  });
+  return total;
+}
+function PURCH_getExistingMaklunTotalQtyForSpk_(spk) {
+  var p = getSheetWithMap("Data_Maklun");
+  var out = { total: 0, qty: 0 };
+  if (!p) return out;
+  var cSpk = p.c(["SPK", "No SPK"], 8), cTotal = p.c(["Total", "Nilai"], 7), cQty = p.c(["Qty", "Jumlah"], 5), cDel = p.c(["Is_Deleted"], -1);
+  var key = PURCH_cleanKey_(spk);
+  p.rows.forEach(function(r){
+    if (cDel !== -1 && PURCH_isDeletedValue_(r[cDel])) return;
+    if (PURCH_cleanKey_(r[cSpk]) !== key) return;
+    out.total += PURCH_toNumber_(r[cTotal]);
+    out.qty += PURCH_toNumber_(r[cQty]);
+  });
+  return out;
+}
+function PURCH_enrichMaklunInItemsForCost_(d) {
+  d = d || {};
+  var items = d.items || [];
+  var type = PURCH_maklunTypeFromSpk_(d.spk);
+  var currentTotal = 0, currentQty = 0;
+  items.forEach(function(it){ currentQty += PURCH_toNumber_(it.qty); currentTotal += PURCH_toNumber_(it.qty) * PURCH_toNumber_(it.harga); });
+  var existing = PURCH_getExistingMaklunTotalQtyForSpk_(d.spk);
+  var distTotal = PURCH_getDistribusiTotalForSpk_(d.spk);
+  var cmtUnit = 0;
+  if (type === "CMT") {
+    var totalCost = distTotal + existing.total + currentTotal;
+    var totalQty = existing.qty + currentQty;
+    cmtUnit = totalQty > 0 ? totalCost / totalQty : 0;
+  }
+  return items.map(function(it) {
+    var qty = PURCH_toNumber_(it.qty);
+    var harga = PURCH_toNumber_(it.harga);
+    var unit = type === "FULL_ORDER" ? harga : (cmtUnit || harga);
+    return {
+      nama: it.nama || it.item,
+      item: it.item || it.nama,
+      qty: qty,
+      harga: unit,
+      unitCost: unit,
+      totalCost: unit * qty,
+      spk: PURCH_clean_(d.spk),
+      costStatus: PURCH_isSpkDone_(d.spk) ? "FINAL" : "ESTIMATED",
+      costSource: type === "FULL_ORDER" ? "PURCH_MAKLUN_FULL_ORDER_FIX_PRICE" : "PURCH_MAKLUN_CMT_WIP_PLUS_JASA"
+    };
+  });
+}
+function PURCH_maklunDistMovementType_(spk, tipeDist) {
+  var t = PURCH_cleanKey_(tipeDist);
+  var type = PURCH_maklunTypeFromSpk_(spk);
+  if (type === "FULL_ORDER" || t.indexOf("DP") !== -1 || t.indexOf("UANGMUKA") !== -1) return "MAKLUN_DP_OUT";
+  if (type === "CMT" || t.indexOf("WIP") !== -1 || t.indexOf("HPP") !== -1) return "MAKLUN_WIP_OUT";
+  return "MAKLUN_OUT";
+}
+function PURCH_maklunCostStatus_(spk) { return PURCH_isSpkDone_(spk) ? "FINAL" : "ESTIMATED"; }
+
+// ================= SIMPAN & UPDATE TRANSAKSI (DENGAN PENGAMAN LOCK) =================
+
+function updateAtauSimpanPembelian(d, emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(15000); } catch(e) { return "❌ Server Sibuk: Coba lagi dalam beberapa detik."; }
+
+  try {
+    d = d || {};
+    var targetSheetName = (d.jenisHutang === "Hutang Maklun") ? "Data_Maklun" : "Data_Pembelian";
+    var sheet = PURCH_ensureLocalSheet_(targetSheetName);
+    var pSheet = getSheetWithMap(targetSheetName);
+    if(!pSheet) return "❌ Gagal: Sheet '" + targetSheetName + "' belum dibuat!";
+
+    var groupKey = PURCH_groupKeyPembelian_(targetSheetName, d);
+    var sourceId = targetSheetName + "|" + groupKey;
+    var movementRows = [];
+    if (targetSheetName === "Data_Pembelian" && PURCH_isStockPurchaseCategory_(d.tipe)) {
+      movementRows = PURCH_prepareMovementRows_({
+        sourceId: sourceId, refNo: d.nota, tgl: d.tgl, items: d.items,
+        direction: "IN", movementType: "PURCHASE_IN", unitCostFromTotal: false,
+        notes: "Pembelian persediaan/bahan | Nota: " + PURCH_clean_(d.nota) + " | Vendor: " + PURCH_clean_(d.vendor)
+      });
+    }
+    if (targetSheetName === "Data_Maklun" && PURCH_isMaklunInType_(d.tipe)) {
+      var maklunType = PURCH_maklunTypeFromSpk_(d.spk);
+      movementRows = PURCH_prepareMovementRows_({
+        sourceId: sourceId, refNo: d.nota, tgl: d.tgl, spk: PURCH_clean_(d.spk), items: PURCH_enrichMaklunInItemsForCost_(d),
+        direction: "IN", movementType: "MAKLUN_IN", unitCostFromTotal: false,
+        costStatus: PURCH_maklunCostStatus_(d.spk),
+        costSource: maklunType === "FULL_ORDER" ? "PURCH_MAKLUN_FULL_ORDER_FIX_PRICE" : "PURCH_MAKLUN_CMT_WIP_PLUS_JASA",
+        notes: "Penerimaan hasil maklun | Type: " + maklunType + " | SPK: " + PURCH_clean_(d.spk) + " | Vendor: " + PURCH_clean_(d.vendor)
+      });
+    }
+
+    if(d.mode === 'edit' && d.trxIdLama) {
+      var oldSourceId = targetSheetName + "|" + PURCH_clean_(d.trxIdLama);
+      hapusDataTransaksi(targetSheetName, d.trxIdLama, true);
+      PURCH_voidStockMovements_(oldSourceId, "EDIT_PURCH_TRANSACTION");
+    }
+
+    pSheet = getSheetWithMap(targetSheetName);
+    var currentHeaders = pSheet.sheet.getRange(1, 1, 1, pSheet.sheet.getLastColumn()).getValues()[0];
+    var map = PURCH_headerMap_(currentHeaders);
+    var rows = [];
+    var now = PURCH_nowText_();
+    var email = PURCH_userEmail_();
+    (d.items || []).forEach(function(item) {
+      var nama = PURCH_clean_(item.nama);
+      var qty = PURCH_toNumber_(item.qty);
+      var harga = PURCH_toNumber_(item.harga);
+      if (!nama || qty <= 0) return;
+      var obj = {
+        Tanggal: PURCH_dateOnlyText_(d.tgl), Nota: PURCH_clean_(d.nota), Kategori: PURCH_clean_(d.tipe), Vendor: PURCH_clean_(d.vendor),
+        Item: nama, Qty: qty, Harga: harga, Total: qty * harga, SPK: PURCH_clean_(d.spk), Jenis_Hutang: PURCH_clean_(d.jenisHutang),
+        Trx_ID: groupKey,
+        Maklun_Type: targetSheetName === "Data_Maklun" ? PURCH_maklunTypeFromSpk_(d.spk) : "",
+        Unit_Cost: targetSheetName === "Data_Maklun" && PURCH_isMaklunInType_(d.tipe) ? (PURCH_maklunTypeFromSpk_(d.spk) === "FULL_ORDER" ? harga : (PURCH_enrichMaklunInItemsForCost_(d).filter(function(x){ return PURCH_cleanKey_(x.nama) === PURCH_cleanKey_(nama); })[0] || {}).unitCost || harga) : "",
+        Total_Cost: targetSheetName === "Data_Maklun" && PURCH_isMaklunInType_(d.tipe) ? qty * (PURCH_maklunTypeFromSpk_(d.spk) === "FULL_ORDER" ? harga : (PURCH_enrichMaklunInItemsForCost_(d).filter(function(x){ return PURCH_cleanKey_(x.nama) === PURCH_cleanKey_(nama); })[0] || {}).unitCost || harga) : "",
+        Cost_Status: targetSheetName === "Data_Maklun" && PURCH_isMaklunInType_(d.tipe) ? PURCH_maklunCostStatus_(d.spk) : "",
+        Cost_Source: targetSheetName === "Data_Maklun" && PURCH_isMaklunInType_(d.tipe) ? (PURCH_maklunTypeFromSpk_(d.spk) === "FULL_ORDER" ? "PURCH_MAKLUN_FULL_ORDER_FIX_PRICE" : "PURCH_MAKLUN_CMT_WIP_PLUS_JASA") : "",
+        Created_At: now, Created_By: email, Updated_At: now, Updated_By: email, Is_Deleted: false
+      };
+      var row = new Array(currentHeaders.length).fill("");
+      Object.keys(obj).forEach(function(k){ var c = PURCH_col_(map, [k], -1); if(c !== -1) row[c] = obj[k]; });
+      rows.push(row);
+    });
+    if(!rows.length) return "❌ Gagal: Tidak ada item valid!";
+    pSheet.sheet.getRange(pSheet.sheet.getLastRow()+1, 1, rows.length, currentHeaders.length).setValues(rows);
+    PURCH_postStockMovements_(movementRows);
+    PURCH_bumpHeartbeat_("Purchasing simpan pembelian/maklun " + PURCH_clean_(d.nota));
+    return d.mode === 'edit' ? "✅ Transaksi Diperbarui!" : "✅ " + rows.length + " item tersimpan!" + (movementRows.length ? " Stock_Movement: " + movementRows.length : "");
+  } catch (e) {
+    return "❌ Gagal Fatal: " + e.message;
+  } finally { lock.releaseLock(); }
+}
+
+
+function updateAtauSimpanDistribusi(d, emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(15000); } catch(e) { return "❌ Server Sibuk."; }
+  try {
+    d = d || {};
+    var sheetName = "Distribusi_Maklun";
+    var pDist = getSheetWithMap(sheetName);
+    var sh = pDist.sheet;
+    var headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
+    var map = PURCH_headerMap_(headers);
+
+    var movementRows = [];
+    var rows = [];
+    var now = PURCH_nowText_(), email = PURCH_userEmail_();
+    (d.items || []).forEach(function(item, idx) {
+      var qty = PURCH_toNumber_(item.qty);
+      var total = PURCH_toNumber_(item.harga); // di UI Distribusi labelnya Total Rp, bukan harga satuan
+      var trxId = d.mode === 'edit' && d.rowIdxLama ? PURCH_clean_(d.rowIdxLama) : PURCH_makeDistKey_(d, item, idx+1);
+      if (!item.item || qty <= 0) return;
+      var obj = {
+        Tanggal: PURCH_dateOnlyText_(d.tgl), SPK: PURCH_clean_(d.spk), Maklun: PURCH_clean_(d.maklun), Status_Akuntansi: PURCH_clean_(d.tipeDist),
+        Kategori: PURCH_clean_(item.kategori), Item: PURCH_clean_(item.item), Qty: qty, Total: total, Trx_ID: trxId,
+        Cost_Treatment: PURCH_maklunDistMovementType_(d.spk, d.tipeDist) === "MAKLUN_DP_OUT" ? "DP_MAKLUN" : "WIP_CMT",
+        Created_At: now, Created_By: email, Updated_At: now, Updated_By: email, Is_Deleted: false
+      };
+      var row = new Array(headers.length).fill("");
+      Object.keys(obj).forEach(function(k){ var c=PURCH_col_(map,[k],-1); if(c!==-1) row[c]=obj[k]; });
+      rows.push(row);
+      var sourceId = sheetName + "|" + trxId;
+      var mvType = PURCH_maklunDistMovementType_(d.spk, d.tipeDist);
+      var costSource = mvType === "MAKLUN_DP_OUT" ? "PURCH_MAKLUN_DP_BAHAN_FULL_ORDER" : "PURCH_MAKLUN_WIP_CMT";
+      var mv = PURCH_prepareMovementRows_({
+        sourceId: sourceId, refNo: d.spk, tgl: d.tgl, spk: PURCH_clean_(d.spk), items: [{ item: item.item, qty: qty, harga: total, totalCost: total }],
+        direction: "OUT", movementType: mvType, unitCostFromTotal: true,
+        costStatus: PURCH_maklunCostStatus_(d.spk), costSource: costSource,
+        notes: "Kirim bahan ke maklun | Movement: " + mvType + " | SPK: " + PURCH_clean_(d.spk) + " | Maklun: " + PURCH_clean_(d.maklun) + " | Akuntansi: " + PURCH_clean_(d.tipeDist)
+      });
+      movementRows = movementRows.concat(mv);
+    });
+    if(!rows.length) return "❌ Tidak ada item untuk disimpan.";
+
+    if(d.mode === 'edit' && d.rowIdxLama) {
+      hapusDataTransaksi(sheetName, d.rowIdxLama, true);
+      PURCH_voidStockMovements_(sheetName + "|" + PURCH_clean_(d.rowIdxLama), "EDIT_DISTRIBUSI_MAKLUN");
+    }
+    sh.getRange(sh.getLastRow()+1, 1, rows.length, headers.length).setValues(rows);
+    PURCH_postStockMovements_(movementRows);
+    PURCH_bumpHeartbeat_("Purchasing simpan distribusi " + PURCH_clean_(d.spk));
+    return d.mode === 'edit' ? "✅ Item Distribusi Diperbarui!" : "✅ " + rows.length + " item bahan berhasil dikirim! Stock_Movement: " + movementRows.length;
+  } catch(e) { return "❌ Gagal: " + e.message; }
+  finally { lock.releaseLock(); }
+}
+
+
+function updateAtauSimpanSPK(d, emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch(e) { return "❌ Server Sibuk: Gambar sedang diproses orang lain, tunggu sebentar."; }
+
+  try {
+    var pSPK = getSheetWithMap("Data_SPK");
+    var sheet = pSPK.sheet;
+    var statusAktual = "Aktif"; 
+    var cSpk = pSPK.c(["spk", "no spk"], 1);
+    var cStat = pSPK.c(["status"], 2);
+
+    if(d.mode === 'edit' && d.noSpkLama) {
+      for(var i = pSPK.fullData.length - 1; i > 0; i--) {
+        if(pSPK.fullData[i][cSpk] && pSPK.fullData[i][cSpk].toString().trim() === d.noSpkLama.toString().trim()) {
+          statusAktual = pSPK.fullData[i][cStat];
+          sheet.deleteRow(i + 1);
+        }
+      }
+    }
+
+    var folderName = "ERP_Foto_SPK";
+    var folders = DriveApp.getFoldersByName(folderName);
+    var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
+    var picPembuat = d.pembuat || "Admin / Purchasing";
+    
+    var idxTgl = pSPK.c(["tanggal", "tgl"], 0), idxSpk = pSPK.c(["spk", "no spk"], 1), idxStat = pSPK.c(["status"], 2);
+    var idxBahan = pSPK.c(["bahan"], 3), idxJalur = pSPK.c(["jalur", "rute"], 4), idxItem = pSPK.c(["item", "output"], 5);
+    var idxDead = pSPK.c(["deadline"], 7), idxVendor = pSPK.c(["vendor"], 8), idxQty = pSPK.c(["qty", "target"], 9);
+    var idxCatGlobal = pSPK.c(["catatan", "keterangan"], 10), idxPembuat = pSPK.c(["pembuat", "pic"], 11);
+    var idxCatItem = pSPK.c(["catatan item", "detail instruksi"], 12), idxFoto = pSPK.c(["foto", "referensi"], 13);
+    var idxRefPO = pSPK.c(["ref po", "no po sales"], 14);
+    var totalCol = Math.max(pSPK.headers.length, 15);
+
+    var count = 0;
+    var newRows = [];
+
+    for(var i=0; i<d.items.length; i++) {
+      var item = d.items[i];
+      if(item && item.nama) {
+        var cleanItem = item.nama.replace('📦 ', '').replace('🏷️ ', '').replace('🧵 ', '');
+        var finalFotoStrItem = item.oldFotoUrl || ""; 
+        
+        // Memproses Upload Foto Base64 (jika ada)
+        if(item.fotoList && item.fotoList.length > 0) {
+          var fotoUrls = [];
+          for(var j=0; j < item.fotoList.length; j++) {
+            var f = item.fotoList[j];
+            try {
+                var blob = Utilities.newBlob(Utilities.base64Decode(f.base64), f.mime, "SPK_" + d.noSpk + "_" + cleanItem + "_" + (j+1));
+                var file = folder.createFile(blob);
+                file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); 
+                fotoUrls.push(file.getUrl());
+            } catch(imgErr) {} // Lanjut jika 1 gambar gagal
+          }
+          finalFotoStrItem = fotoUrls.join(", ");
+        }
+
+        var rowData = new Array(totalCol).fill("");
+        rowData[idxTgl] = d.tgl; rowData[idxSpk] = d.noSpk; rowData[idxStat] = statusAktual;
+        rowData[idxBahan] = item.bahan || d.bahan || ""; rowData[idxJalur] = d.jalur; rowData[idxItem] = cleanItem;
+        rowData[idxDead] = d.deadline; rowData[idxVendor] = d.vendor; rowData[idxQty] = item.qty;
+        rowData[idxCatGlobal] = d.catatan; rowData[idxPembuat] = picPembuat; rowData[idxCatItem] = item.catatanItem;
+        rowData[idxFoto] = finalFotoStrItem; rowData[idxRefPO] = d.refPOSales || "";
+        
+        newRows.push(rowData);
+        count++;
+      }
+    }
+
+    if(count === 0) return "❌ Gagal: Harus pilih minimal 1 target output!";
+    
+    if(newRows.length > 0) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, totalCol).setValues(newRows);
+    }
+    
+    SpreadsheetApp.flush();
+    // 💡 AUTO-SORT DATABASE SPK: Berdasarkan Kolom 1 (Tanggal) & Kolom 2 (No SPK)
+    if(sheet.getLastRow() > 1) {
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).sort([{column: 1, ascending: true}, {column: 2, ascending: true}]);
+    }
+    PURCH_bumpHeartbeat_("Purchasing simpan SPK " + PURCH_clean_(d.noSpk));
+    
+    return d.mode === 'edit' ? "✅ Berhasil Mengupdate SPK!" : "✅ SPK Baru Terbit!";
+  } catch (e) { 
+    return "❌ Gagal Fatal: " + e.message;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function updateStatusSPK(spk, statusBaru, emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  try {
+    var pSPK = getSheetWithMap("Data_SPK");
+    var cSpk = pSPK.c(["spk", "no spk"], 1);
+    var cStat = pSPK.c(["status"], 2);
+    
+    var updated = false;
+    for(var i=0; i<pSPK.fullData.length; i++) {
+      if(pSPK.fullData[i][cSpk] === spk) { 
+        pSPK.sheet.getRange(i+1, cStat + 1).setValue(statusBaru);
+        updated = true; 
+      }
+    }
+    if(!updated) return "❌ SPK tidak ditemukan!";
+    PURCH_bumpHeartbeat_("Purchasing update status SPK " + PURCH_clean_(spk));
+    return "✅ Status " + spk + " berhasil diubah menjadi " + statusBaru;
+  } catch (e) { return "❌ Gagal mengubah status: " + e.message; }
+}
+
+function hapusDataTransaksi(sheetName, idTrx, silent, emailOp, pasporOp) {
+  var __auth;
+  var __args = Array.prototype.slice.call(arguments);
+  if (__args.length >= 4) __auth = PURCH_requirePassport_(__args[__args.length - 2], __args[__args.length - 1]);
+  else if (PURCH_userEmail_()) __auth = { email: PURCH_userEmail_() };
+  else __auth = PURCH_authFromArgs_(arguments);
+  if (typeof silent !== "boolean") silent = false;
+  var lock = LockService.getScriptLock();
+  var locked = false;
+  try { if (!silent) { lock.waitLock(10000); locked = true; } } catch(e) { return { success: false, msg: "Server Sibuk" }; }
+  try {
+    if (!sheetName || !idTrx) return { success: false, msg: "Parameter tidak lengkap." };
+    var pSheet = getSheetWithMap(sheetName);
+    if (!pSheet) return { success: false, msg: "Sheet database tidak ditemukan." };
+    var sh = pSheet.sheet;
+    var values = pSheet.fullData;
+    var map = PURCH_headerMap_(values[0]);
+    var cTrx = PURCH_col_(map, ["Trx_ID", "Trx ID", "ID"], -1);
+    var cDel = PURCH_col_(map, ["Is_Deleted"], -1);
+    var cTgl = PURCH_col_(map, ["Tanggal", "Tgl"], 0);
+    var cNota = PURCH_col_(map, ["Nota", "PO"], 1);
+    var cSpk = PURCH_col_(map, ["SPK"], sheetName === "Data_SPK" ? 1 : 8);
+    var cMaklun = PURCH_col_(map, ["Maklun", "Vendor"], 2);
+    var cItem = PURCH_col_(map, ["Item", "Bahan"], 5);
+    var cQty = PURCH_col_(map, ["Qty"], 6);
+    var id = PURCH_clean_(idTrx);
+    var deleted = 0;
+    for (var r = values.length - 1; r >= 1; r--) {
+      var row = values[r];
+      var match = false;
+      if (cTrx !== -1 && PURCH_clean_(row[cTrx]) === id) match = true;
+      if (!match && (sheetName === "Data_Pembelian" || sheetName === "Data_Maklun")) {
+        var fallback = sheetName === "Data_Maklun" ? [PURCH_clean_(row[cNota]), formatTglInput(row[cTgl]), PURCH_clean_(row[cSpk])].join("|") : [PURCH_clean_(row[cNota]), formatTglInput(row[cTgl])].join("|");
+        if (fallback === id) match = true;
+      }
+      if (!match && sheetName === "Distribusi_Maklun") {
+        var fallbackD = [formatTglInput(row[cTgl]), row[cSpk], row[cMaklun], row[cItem], row[cQty]].join("|");
+        if (fallbackD === id) match = true;
+      }
+      if (!match && sheetName === "Data_SPK") {
+        if (PURCH_clean_(row[cSpk]) === id) match = true;
+      }
+      if (match) {
+        if (cDel !== -1) sh.getRange(r+1, cDel+1).setValue(true);
+        else sh.deleteRow(r+1);
+        deleted++;
+      }
+    }
+    if (deleted > 0) {
+      if (sheetName === "Data_Pembelian" || sheetName === "Data_Maklun" || sheetName === "Distribusi_Maklun") {
+        PURCH_voidStockMovements_(sheetName + "|" + id, "DELETE_PURCH_TRANSACTION");
+      }
+      PURCH_bumpHeartbeat_("Purchasing hapus data " + PURCH_clean_(sheetName));
+      return { success: true, msg: deleted + " baris berhasil dihapus/void." };
+    }
+    return { success: false, msg: "Data tidak ditemukan." };
+  } catch(e) { return { success: false, msg: e.message }; }
+  finally { if (locked) lock.releaseLock(); }
+}
+
+
+function PURCH_addMasterItemLike_(d, defaultCategory) {
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); } catch(e) { return { success: false, msg: "Server Sibuk" }; }
+  try {
+    d = d || {};
+    var ss = PURCH_masterSs_();
+    var headers = ["Item_ID", "Item_Name", "Category", "Subcategory", "Item_Type", "Unit", "Default_Cost", "Status", "Updated_At", "Updated_By", "Notes"];
+    var sh = PURCH_ensureSheetHeaders_(ss, "Master_Item", headers);
+    var values = sh.getDataRange().getValues();
+    var map = PURCH_headerMap_(values[0]);
+    var cName = PURCH_col_(map, ["Item_Name", "Nama_Item", "Nama Item", "Nama_Barang", "Nama Barang", "Nama_Produk", "Nama Produk", "Item", "Produk", "Nama"], -1);
+    if (cName === -1) throw new Error("Header nama item tidak ditemukan di Master_Item.");
+    var nm = PURCH_clean_(d.nama);
+    if (!nm) return { success: false, msg: "Nama item kosong." };
+    var key = PURCH_cleanKey_(nm);
+    for(var i=1; i<values.length; i++) {
+      if(PURCH_cleanKey_(values[i][cName]) === key) return { success: false, msg: "Item tersebut sudah ada di Master_Item." };
+    }
+    var currentHeaders = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
+    var m = PURCH_headerMap_(currentHeaders);
+    var itemType = PURCH_itemTypeFromPayload_(d, defaultCategory === "Barang Jadi" ? "BARANG_JADI" : "BAHAN");
+    var obj = {
+      Item_ID: PURCH_makeId_("ITEM"),
+      Item_Name: nm,
+      Category: PURCH_categoryFromItemType_(itemType, PURCH_clean_(d.kategori || defaultCategory || "Umum")),
+      Subcategory: PURCH_clean_(d.subKategori || "Umum"),
+      Item_Type: itemType,
+      Unit: "pcs",
+      Default_Cost: 0,
+      Status: "ACTIVE",
+      Updated_At: PURCH_nowText_(),
+      Updated_By: PURCH_userEmail_(),
+      Notes: "Created from Modul Purchasing"
+    };
+    var row = new Array(currentHeaders.length).fill("");
+    Object.keys(obj).forEach(function(k){ var c = PURCH_col_(m,[k],-1); if(c!==-1) row[c]=obj[k]; });
+    sh.getRange(sh.getLastRow()+1, 1, 1, currentHeaders.length).setValues([row]);
+    PURCH_bumpHeartbeat_("Purchasing tambah master item " + nm);
+    return { success: true, msg: "Berhasil menambahkan " + nm };
+  } catch(e) { return { success: false, msg: "Error: " + e.message }; }
+  finally { lock.releaseLock(); }
+}
+function tambahMasterBahan(d, emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  d = d || {};
+  if (!d.itemType) d.itemType = PURCH_itemTypeFromPayload_(d, "BAHAN");
+  return PURCH_addMasterItemLike_(d, d.kategori || (d.itemType === "PACKAGING" ? "Packaging / Aksesoris" : "Bahan Baku"));
+}
+function tambahMasterItem(d, emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  d = d || {};
+  d.itemType = "BARANG_JADI";
+  return PURCH_addMasterItemLike_(d, d.kategori || "Barang Jadi");
+}
+
+
+// ================= MICRO PATCH: MASTER SUPPLIER / VENDOR MAKLUN =================
+function tambahMasterSupplier(d, emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  d = d || {};
+  var nama = PURCH_clean_(d.nama || d.name || d.supplier || d.vendor);
+  if (!nama) return { success: false, msg: 'Nama supplier/vendor kosong.' };
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); } catch(e) { return { success: false, msg: 'Server sibuk. Coba lagi.' }; }
+
+  try {
+    var ss = PURCH_masterSs_();
+    var headers = [
+      'Supplier_ID', 'Supplier_Name', 'Supplier_Type', 'Category',
+      'Contact_Person', 'Phone', 'Address', 'Status',
+      'Created_At', 'Created_By', 'Updated_At', 'Updated_By',
+      'Is_Deleted', 'Notes'
+    ];
+    var sh = PURCH_ensureSheetHeaders_(ss, 'Master_Supplier', headers);
+
+    var key = PURCH_cleanKey_(nama);
+    var duplicateFound = false;
+    ['Master_Supplier', 'Master_Vendor'].forEach(function(sheetName) {
+      if (duplicateFound) return;
+      var sx = ss.getSheetByName(sheetName);
+      if (!sx || sx.getLastRow() < 2) return;
+      var vals = sx.getDataRange().getValues();
+      var map = PURCH_headerMap_(vals[0]);
+      var cName = PURCH_col_(map, ['Supplier_Name', 'Vendor_Name', 'Nama_Supplier', 'Nama Supplier', 'Nama_Vendor', 'Nama Vendor', 'Nama', 'Name'], -1);
+      var cStatus = PURCH_col_(map, ['Status'], -1);
+      var cDel = PURCH_col_(map, ['Is_Deleted', 'Deleted'], -1);
+      if (cName === -1) return;
+      for (var r = 1; r < vals.length; r++) {
+        if (cDel !== -1 && PURCH_isDeletedValue_(vals[r][cDel])) continue;
+        if (!PURCH_isActiveStatus_(cStatus === -1 ? '' : vals[r][cStatus])) continue;
+        if (PURCH_cleanKey_(vals[r][cName]) === key) { duplicateFound = true; break; }
+      }
+    });
+    if (duplicateFound) return { success: false, msg: 'Supplier/vendor tersebut sudah ada di master.' };
+
+    var supplierTypeRaw = PURCH_cleanKey_(d.type || d.supplierType || d.tipe || d.category);
+    var supplierType = supplierTypeRaw.indexOf('MAKLUN') !== -1 ? 'MAKLUN' : 'SUPPLIER';
+    var now = PURCH_nowText_();
+    var currentHeaders = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+    var mapNow = PURCH_headerMap_(currentHeaders);
+    var obj = {
+      Supplier_ID: PURCH_makeId_(supplierType === 'MAKLUN' ? 'MKL' : 'SUP'),
+      Supplier_Name: nama,
+      Supplier_Type: supplierType,
+      Category: supplierType,
+      Contact_Person: PURCH_clean_(d.contact || d.pic || d.contactPerson),
+      Phone: PURCH_clean_(d.phone || d.hp || d.telepon),
+      Address: PURCH_clean_(d.address || d.alamat),
+      Status: 'ACTIVE',
+      Created_At: now,
+      Created_By: __auth.email,
+      Updated_At: now,
+      Updated_By: __auth.email,
+      Is_Deleted: false,
+      Notes: 'Created from Modul Purchasing'
+    };
+    var row = new Array(currentHeaders.length).fill('');
+    Object.keys(obj).forEach(function(k) {
+      var c = PURCH_col_(mapNow, [k], -1);
+      if (c !== -1) row[c] = obj[k];
+    });
+    sh.getRange(sh.getLastRow() + 1, 1, 1, currentHeaders.length).setValues([row]);
+    PURCH_bumpHeartbeat_('Purchasing tambah master supplier/vendor ' + nama);
+    return { success: true, msg: 'Berhasil menambahkan ' + nama, nama: nama, type: supplierType };
+  } catch(e) {
+    return { success: false, msg: 'Error: ' + e.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
+// ================= CETAK & PREVIEW SPK =================
+function getDetailPrintSPK(spkNo, emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  try {
+    var pSPK = getSheetWithMap("Data_SPK");
+    if(!pSPK) return null;
+    
+    var cTgl = pSPK.c(["tanggal", "tgl"], 0), cSpk = pSPK.c(["spk", "no spk"], 1), cBahan = pSPK.c(["bahan"], 3), cJalur = pSPK.c(["jalur", "rute"], 4);
+    var cItem = pSPK.c(["item", "output"], 5), cDead = pSPK.c(["deadline"], 7), cVendor = pSPK.c(["vendor"], 8), cQty = pSPK.c(["qty", "target"], 9);
+    var cCatGlobal = pSPK.c(["catatan", "keterangan"], 10), cPembuat = pSPK.c(["pembuat", "pic"], 11), cCatItem = pSPK.c(["catatan item", "detail instruksi"], 12);
+    var cFoto = pSPK.c(["foto", "referensi"], 13), cRefPO = pSPK.c(["ref po", "no po sales"], 14);
+
+    var res = { spk: spkNo, tglRaw: "", tgl: "", jalur: "", bahan: "", deadlineRaw: "", deadline: "", vendor: "", catatan: "", pembuat: "", refPOSales: "", items: [] };
+    var isFound = false;
+
+    for(var i=0; i<pSPK.rows.length; i++) {
+      var r = pSPK.rows[i];
+      if(r[cSpk] && r[cSpk].toString().trim() === spkNo.toString().trim()) {
+        isFound = true;
+        if(!res.tgl) { 
+          res.tglRaw = r[cTgl] ? formatTglInput(r[cTgl]) : "";  // <-- TYPO DIPERBAIKI DI SINI
+          res.tgl = formatTglLokal(r[cTgl]); 
+        }
+        if(!res.jalur) res.jalur = r[cJalur];
+        if(!res.bahan) res.bahan = r[cBahan];
+        if(!res.deadline && r[cDead]) { 
+          res.deadlineRaw = r[cDead] ? formatTglInput(r[cDead]) : ""; // <-- TYPO DIPERBAIKI DI SINI
+          res.deadline = formatTglLokal(r[cDead]); 
+        }
+        if(!res.vendor && r[cVendor]) res.vendor = r[cVendor];
+        if(!res.catatan && r[cCatGlobal]) res.catatan = r[cCatGlobal];
+        if(!res.pembuat && r[cPembuat]) res.pembuat = r[cPembuat];
+        if(!res.refPOSales && r[cRefPO]) res.refPOSales = r[cRefPO].toString().trim();
+        
+        if(r[cItem]) {
+           res.items.push({
+             nama: r[cItem].toString().trim(),
+             qty: r[cQty] || 0,
+             bahan: r[cBahan] ? r[cBahan].toString().trim() : "",
+             catatanItem: r[cCatItem] || "",
+             fotoItem: r[cFoto] ? r[cFoto].toString() : ""
+           });
+        }
+      }
+    }
+    return isFound ? res : null;
+  } catch(e) {
+    return { error: e.message }; // Kirim error ke depan jika sistem gagal
+  }
+}
+
+function downloadSPKPDF(spkNo, emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  try {
+    var data = getDetailPrintSPK(spkNo);
+    if(!data) return null;
+
+    // --- TARIK DATA SETUP PORTAL ---
+    var sSetup = PURCH_selfSs_().getSheetByName("Data_Setup");
+    var setupData = {};
+    if(sSetup) {
+      var dSetup = sSetup.getDataRange().getValues();
+      for(var i=0; i<dSetup.length; i++) {
+        if(dSetup[i][0]) setupData[dSetup[i][0].toString().trim().toLowerCase()] = dSetup[i][1].toString().trim();
+      }
+    }
+    var namaPerusahaan = setupData['nama'] || "KAMPUNG JAHIT";
+    var alamatPerusahaan = setupData['alamat'] || "Alamat belum disetting di Portal";
+    var logoPerusahaan = setupData['logo'] || "https://dummyimage.com/300x120/000/fff&text=LOGO+KAMPUNG+JAHIT";
+    // -------------------------------
+
+    var textVendor = data.vendor ? data.vendor : "Produksi Internal / In-House";
+    var textDeadline = data.deadline ? data.deadline : "-";
+    var textCatatan = data.catatan ? data.catatan : "-";
+    var namaPembuat = data.pembuat ? data.pembuat : "Admin / Purchasing";
+    var trsHtml = '';
+    var totalTargetQty = 0;
+
+    for(var k=0; k < data.items.length; k++) {
+      var it = data.items[k];
+      totalTargetQty += PURCH_toNumber_(it.qty);
+      
+      var imgTags = [];
+      if(it.fotoItem) {
+        var urls = it.fotoItem.split(',');
+        for(var j=0; j<urls.length; j++) {
+          var u = urls[j].trim();
+          if(!u) continue;
+          try {
+            var fileIdMatch = u.match(/[-\w]{25,}/);
+            if(fileIdMatch) {
+              var file = DriveApp.getFileById(fileIdMatch[0]);
+              var blob = file.getBlob();
+              var b64 = Utilities.base64Encode(blob.getBytes());
+              var mime = blob.getContentType();
+              imgTags.push(`<img src="data:${mime};base64,${b64}" style="width: 100%; max-height: 250px; object-fit: contain; margin-bottom: 5px; border: 1px solid #ccc; border-radius: 4px; display: block;">`);
+            }
+          } catch(err) {}
+        }
+      }
+      var imgHtml = imgTags.length > 0 ? imgTags.join('') : '<span style="color:#aaa; font-size:11px; font-style:italic;">- Tidak ada referensi foto -</span>';
+
+      // ================= MESIN PENGURAI JSON CATATAN BORDIR =================
+      var formatCatatanHtml = "";
+      if (it.catatanItem && it.catatanItem.startsWith("{")) {
+         try {
+           var p = JSON.parse(it.catatanItem);
+           if(p.depan) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Depan:</b> ${p.depan}</div>`;
+           if(p.kiri) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Kiri:</b> ${p.kiri}</div>`;
+           if(p.kanan) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Kanan:</b> ${p.kanan}</div>`;
+           if(p.belakang) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Belakang:</b> ${p.belakang}</div>`;
+           if(p.sintong) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Sintong:</b> ${p.sintong}</div>`;
+           if(p.umum) formatCatatanHtml += `<div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #ccc;"><b>Catatan Umum:</b> ${p.umum}</div>`;
+         } catch(e) {
+           formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Catatan:</b> ${it.catatanItem}</div>`;
+         }
+      } else {
+         if(it.catatanItem) formatCatatanHtml += `<div style="margin-bottom: 3px;"><b>Catatan:</b> ${it.catatanItem}</div>`;
+      }
+      if(!formatCatatanHtml) formatCatatanHtml = "-";
+      // ======================================================================
+
+      trsHtml += `<tr>
+        <td style="text-align:center;">${k+1}</td>
+        <td style="vertical-align: top;">
+          <b style="font-size:14px; display:block; margin-bottom:5px;">${it.nama}</b>
+          <span style="font-size:12px; color:#444; line-height: 1.5; display: block;">Catatan Detail: <br>${formatCatatanHtml}</span>
+        </td>
+        <td style="text-align:center; font-weight:bold; font-size:16px; vertical-align: middle;">${it.qty}</td>
+        <td style="text-align:center; vertical-align: top; padding: 5px;">${imgHtml}</td>
+      </tr>`;
+    }
+
+    trsHtml += `
+      <tr>
+        <td colspan="2" style="text-align: right; font-weight: bold; font-size: 14px; padding-right: 15px; text-transform: uppercase;">Total Target Produksi :</td>
+        <td style="text-align: center; font-weight: bold; font-size: 18px; background-color: #e2e3e5;">${totalTargetQty}</td>
+        <td style="background-color: #e2e3e5;"></td>
+      </tr>
+    `;
+
+    var html = `
+      <!DOCTYPE html>
+      <html><head>
+      <style>
+        @page { size: A4; margin: 15mm; }
+        body { font-family: Helvetica, Arial, sans-serif; color: #333; font-size: 13px; line-height: 1.4; }
+        .info-table td { padding: 4px 8px; vertical-align: top; }
+        .info-table td:first-child { font-weight: bold; width: 130px; }
+        .box-catatan { margin-top: 15px; padding: 10px; border: 1px solid #999; background-color: #fdfdfd; border-radius: 4px; }
+        .item-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        .item-table th, .item-table td { border: 1px solid #333; padding: 8px; text-align: left; }
+        .item-table th { background-color: #e9ecef; text-align: center; text-transform: uppercase; font-size: 13px; padding: 10px; }
+        .sign-table { width: 100%; margin-top: 40px; text-align: center; }
+        .sign-space { height: 70px; }
+      </style>
+      </head><body>
+        
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px double #333; padding-bottom: 15px; margin-bottom: 20px;">
+          <div style="width: 35%;">
+              <img src="${logoPerusahaan}" alt="Logo" style="max-width: 100%; height: auto; max-height: 80px;">
+          </div>
+          <div style="width: 60%; text-align: right;">
+              <h2 style="margin: 0; font-size: 22px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase;">${namaPerusahaan}</h2>
+              <p style="margin: 5px 0 0 0; font-size: 11px; line-height: 1.4;">${alamatPerusahaan}</p>
+              <h3 style="margin: 10px 0 0 0; font-size: 18px; text-transform: uppercase; text-decoration: underline;">SURAT PERINTAH KERJA (SPK)</h3>
+          </div>
+        </div>
+        
+        <table style="width: 100%;">
+          <tr>
+            <td style="width: 65%; vertical-align: top;">
+              <table class="info-table">
+                <tr><td>No. SPK</td><td>: <b>${data.spk}</b></td></tr>
+                <tr><td>Tanggal Terbit</td><td>: ${data.tgl}</td></tr>
+                <tr><td>Deadline Target</td><td style="color:#d9534f; font-weight:bold;">: ${textDeadline}</td></tr>
+                <tr><td>Jalur / Rute</td><td>: ${data.jalur}</td></tr>
+                <tr><td>Vendor Tujuan</td><td>: ${textVendor}</td></tr>
+                <tr><td>Bahan Utama</td><td>: ${data.bahan}</td></tr>
+              </table>
+            </td>
+            <td style="width: 35%; vertical-align: top;">
+              <div class="box-catatan">
+                <b>📌 Catatan Global SPK:</b><br>
+                <span style="white-space: pre-wrap; display: block; margin-top: 5px; color:#555;">${textCatatan}</span>
+              </div>
+            </td>
+          </tr>
+        </table>
+        
+        <h4 style="margin-bottom: 5px; margin-top: 20px;">Rincian Target Produksi:</h4>
+        <table class="item-table">
+          <thead><tr><th style="width: 5%;">No</th><th style="width: 45%;">Item & Detail Instruksi</th><th style="width: 15%;">Target QTY</th><th style="width: 35%;">Gambar Referensi</th></tr></thead>
+          <tbody>${trsHtml}</tbody>
+        </table>
+        
+        <table class="sign-table">
+          <tr>
+            <td style="width: 50%;"><b>Dibuat Oleh,</b><div class="sign-space"></div><hr style="width:50%; margin:auto;">${namaPembuat}</td>
+            <td style="width: 50%;"><b>Diterima Oleh,</b><div class="sign-space"></div><hr style="width:50%; margin:auto;">Vendor / Penanggung Jawab</td>
+          </tr>
+        </table>
+      </body></html>
+    `;
+
+    var pdfBlob = Utilities.newBlob(html, MimeType.HTML).getAs(MimeType.PDF).setName("SPK_" + spkNo + ".pdf");
+    return Utilities.base64Encode(pdfBlob.getBytes());
+  } catch(e) { return "ERROR: " + e.message; }
+}
+
+
+function PURCH_readProduksiInternalProgress_() {
+  var result = { bySpk: {}, error: '', source: {}, rowCount: 0, skipped: 0 };
+  try {
+    var prodSs = PURCH_produksiSs_();
+    result.source = { spreadsheetName: prodSs.getName(), spreadsheetId: prodSs.getId(), sheetName: 'Data_Produksi' };
+
+    var pProd = getSheetWithMap("Data_Produksi", prodSs, { create: false });
+    if (!pProd) {
+      result.error = "Sheet Data_Produksi tidak ditemukan di spreadsheet Produksi: " + prodSs.getName();
+      return result;
+    }
+
+    result.rowCount = pProd.rows.length;
+    var cSpk = pProd.c(["SPK", "No SPK", "No_SPK", "SPK_ID", "SPK ID"], 1);
+    var cProses = pProd.c(["Proses", "Process", "Tahap", "Stage"], 2);
+    var cBahan = pProd.c(["Bahan", "Material", "Nama Bahan", "Item Bahan"], 4);
+    var cQtyBahan = pProd.c(["Qty Bahan", "QTY Bahan", "Qty_Bahan", "Qty Material", "Qty Kain", "Qty Pemakaian Bahan"], 5);
+    var cProduk = pProd.c(["Produk", "Item", "Barang Jadi", "Output", "Nama Produk", "Produk Jadi"], 6);
+    var cQty = pProd.c(["Qty", "QTY", "Jumlah", "Qty Hasil", "Qty Jadi"], 7);
+    var cNilaiBahan = pProd.c(["Nilai Bahan", "Nilai_Bahan", "Total Bahan", "Biaya Bahan"], 9);
+    var cUpah = pProd.c(["Upah Borongan", "Upah_Borongan", "Upah", "Biaya Upah", "Jasa"], 10);
+    var cEkstra = pProd.c(["Biaya Ekstra", "Biaya_Ekstra", "Ekstra", "Biaya Tambahan"], 11);
+    var cHpp = pProd.c(["HPP", "HPP / PCS", "HPP_PCS", "Nilai Perolehan", "Harga Pokok", "HPP Per Pcs"], 13);
+    var cDeleted = pProd.c(["Is_Deleted", "Is Deleted", "Deleted"], -1);
+
+    if (cSpk === -1) {
+      result.error = "Header SPK tidak ditemukan di Data_Produksi. Header terbaca: " + (pProd.headers || []).join(" | ");
+      return result;
+    }
+
+    function ensure_(spk) {
+      if (!result.bySpk[spk]) {
+        result.bySpk[spk] = {
+          qtyBahan: 0,
+          qtyJadi: 0,
+          nilaiBahan: 0,
+          upah: 0,
+          ekstra: 0,
+          totalBiaya: 0,
+          lastProcess: '',
+          bahan: {},
+          detail: {}
+        };
+      }
+      return result.bySpk[spk];
+    }
+
+    function isSetorGudang_(key) {
+      return key === 'SETORGUDANG' || key === 'SETOR' || key === 'MASUKGUDANG' || key === 'GUDANG';
+    }
+    function isPotong_(key) { return key === 'POTONG' || key === 'CUTTING'; }
+
+    for (var i=0; i<pProd.rows.length; i++) {
+      var row = pProd.rows[i];
+      if (cDeleted !== -1 && PURCH_isDeletedValue_(row[cDeleted])) continue;
+      var spk = PURCH_clean_(row[cSpk]);
+      if (!spk || spk === '-') { result.skipped++; continue; }
+      var proses = cProses === -1 ? '' : PURCH_clean_(row[cProses]);
+      var prosesKey = PURCH_cleanKey_(proses);
+      var bahan = cBahan === -1 ? '' : PURCH_clean_(row[cBahan]);
+      var produk = cProduk === -1 ? '' : PURCH_clean_(row[cProduk]);
+      var qty = cQty === -1 ? 0 : PURCH_toNumber_(row[cQty]);
+      var qtyBahan = cQtyBahan === -1 ? 0 : PURCH_toNumber_(row[cQtyBahan]);
+      var nilaiBahan = cNilaiBahan === -1 ? 0 : PURCH_toNumber_(row[cNilaiBahan]);
+      var upah = cUpah === -1 ? 0 : PURCH_toNumber_(row[cUpah]);
+      var ekstra = cEkstra === -1 ? 0 : PURCH_toNumber_(row[cEkstra]);
+      var hpp = cHpp === -1 ? 0 : PURCH_toNumber_(row[cHpp]);
+      var m = ensure_(spk);
+
+      if (proses && prosesKey.indexOf('REJECT') === -1) m.lastProcess = proses;
+
+      // Di modul Produksi v0.9.6, Qty Bahan hanya diisi pada proses Potong baris pertama transaksi.
+      if (isPotong_(prosesKey)) {
+        var bahanPakai = qtyBahan > 0 ? qtyBahan : qty;
+        m.qtyBahan += bahanPakai;
+        if (bahan) m.bahan[bahan] = (m.bahan[bahan] || 0) + bahanPakai;
+      }
+
+      // Hanya Setor Gudang yang dianggap output jadi untuk dashboard Purchasing.
+      if (isSetorGudang_(prosesKey)) {
+        m.qtyJadi += qty;
+        if (produk) {
+          if (!m.detail[produk]) m.detail[produk] = { qtyJadi: 0, biaya: 0, hpp: 0 };
+          m.detail[produk].qtyJadi += qty;
+          if (hpp > 0) {
+            m.detail[produk].hpp = hpp;
+            m.detail[produk].biaya += hpp * qty;
+          }
+        }
+      }
+
+      m.nilaiBahan += nilaiBahan;
+      m.upah += upah;
+      m.ekstra += ekstra;
+      m.totalBiaya += nilaiBahan + upah + ekstra;
+    }
+
+    Object.keys(result.bySpk).forEach(function(spk){
+      var m = result.bySpk[spk];
+      var detailCost = 0;
+      Object.keys(m.detail).forEach(function(prod){ detailCost += PURCH_toNumber_(m.detail[prod].biaya); });
+      if (detailCost > m.totalBiaya) m.totalBiaya = detailCost;
+    });
+  } catch(e) {
+    result.error = e && e.message ? e.message : String(e);
+  }
+  return result;
+}
+
+function getRekapSPK(emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  var pSPK = getSheetWithMap("Data_SPK"), pDist = getSheetWithMap("Distribusi_Maklun");
+  var pMaklun = getSheetWithMap("Data_Maklun"), pImportHPP = getSheetWithMap("Import_HPP_Produksi");
+  
+  if(!pSPK) return [];
+  var spkData = {};
+  var hppInternalMap = {};
+  var prodInternal = PURCH_readProduksiInternalProgress_();
+  var prodInternalMap = prodInternal.bySpk || {};
+  
+  if(pImportHPP) {
+     pImportHPP.rows.forEach(r => { if(r[0]) hppInternalMap[r[0]] = { rawHPP: PURCH_toNumber_(r[2]) }; });
+  }
+  
+  // 💡 TAMBAHAN: Tarik Kolom Tanggal untuk bahan Sorting
+  var cTgl = pSPK.c(["tanggal", "tgl"], 0);
+  var cSpk = pSPK.c(["spk", "no spk"], 1), cJalur = pSPK.c(["jalur", "rute"], 4);
+  var cVendorSpk = pSPK.c(["vendor"], 8), cStat = pSPK.c(["status"], 2);
+  
+  pSPK.rows.forEach(r => {
+    var no = r[cSpk];
+    
+    // Konversi tanggal menjadi angka (Unix Time) agar mudah diurutkan
+    var tglRaw = r[cTgl] ? formatTglInput(r[cTgl]) : "";
+    var tglUnix = tglRaw ? new Date(tglRaw).getTime() : 0;
+
+    if(no && !spkData[no]) spkData[no] = { 
+        spk: no, 
+        jalur: r[cJalur] || "Produksi Internal", 
+        vendorSpk: r[cVendorSpk] || "", 
+        dbStatus: r[cStat], 
+        progress: "Dibuat", 
+        biayaBahanWIP: 0, biayaJasaUmum: 0, qtyKirimTotal: 0, qtyJadiTotal: 0, detail: {},
+        tglUnix: tglUnix // 💡 Simpan angka tanggalnya
+    };
+  });
+
+  if(pDist) {
+    var cDistSpk = pDist.c(["spk"], 1), cDistKat = pDist.c(["kategori"], 4), cDistQty = pDist.c(["qty"], 6), cDistTotal = pDist.c(["total"], 7);
+    pDist.rows.forEach(r => {
+      var no = r[cDistSpk], kat = r[cDistKat] || "", qty = PURCH_toNumber_(r[cDistQty]), nilai = PURCH_toNumber_(r[cDistTotal]);
+      if(no && spkData[no] && (kat.includes("Bahan Baku") || kat.includes("Bahan Mentah") || kat.includes("Aksesoris"))) { 
+        if(spkData[no].jalur === "Maklun CMT" || spkData[no].jalur === "Maklun Sub-Assembly") spkData[no].biayaBahanWIP += nilai;
+        spkData[no].qtyKirimTotal += qty;
+        if(spkData[no].jalur.includes("Maklun")) spkData[no].progress = "Proses Maklun (Bahan Keluar)";
+      }
+    });
+  }
+
+  if(pMaklun) {
+    var cMaklunSpk = pMaklun.c(["spk"], 8), cMaklunTipe = pMaklun.c(["kategori", "tipe"], 2), cMaklunItem = pMaklun.c(["item"], 4), cMaklunQty = pMaklun.c(["qty"], 5), cMaklunTotal = pMaklun.c(["total"], 7);
+    pMaklun.rows.forEach(r => {
+      var no = r[cMaklunSpk], tipe = r[cMaklunTipe], namaItem = r[cMaklunItem], qty = PURCH_toNumber_(r[cMaklunQty]), nilai = PURCH_toNumber_(r[cMaklunTotal]);
+      if(no && spkData[no]) {
+        if(tipe !== "Jasa Umum (Pukul Rata)" && !spkData[no].detail[namaItem]) spkData[no].detail[namaItem] = { qtyJadi: 0, qtyJasa: 0, biayaKhusus: 0 };
+        
+        if(tipe === "Barang Jadi") { 
+          spkData[no].qtyJadiTotal += qty;
+          spkData[no].detail[namaItem].qtyJadi += qty; spkData[no].detail[namaItem].biayaKhusus += nilai; spkData[no].progress = "Barang Diterima (Maklun)";
+        } 
+        else if(tipe === "Jasa Spesifik Varian") { 
+          spkData[no].detail[namaItem].qtyJasa += qty;
+          spkData[no].detail[namaItem].biayaKhusus += nilai;
+          if(spkData[no].progress !== "Barang Diterima (Maklun)") spkData[no].progress = "Proses Maklun (Jasa Tambahan)";
+        }
+        else if(tipe === "Jasa Umum (Pukul Rata)") {
+          spkData[no].biayaJasaUmum += nilai;
+          if(spkData[no].progress !== "Barang Diterima (Maklun)") spkData[no].progress = "Proses Maklun (Jasa Tambahan)";
+        }
+      }
+    });
+  }
+
+  var res = [];
+  for(var k in spkData) { 
+    var item = spkData[k]; var hppHtmlTampilan = "";
+    var totalBiayaSpk = item.biayaBahanWIP + item.biayaJasaUmum;
+    for(var p in item.detail) { totalBiayaSpk += item.detail[p].biayaKhusus; }
+    
+    if (item.jalur === "Produksi Internal") {
+       var prodInfo = prodInternalMap[item.spk] || null;
+       if (prodInfo) {
+         item.qtyKirimTotal = prodInfo.qtyBahan || 0;
+         item.qtyJadiTotal = prodInfo.qtyJadi || 0;
+         totalBiayaSpk = prodInfo.totalBiaya || 0;
+         item.progress = prodInfo.lastProcess ? ("Produksi Internal - " + prodInfo.lastProcess) : "Dipantau Internal";
+
+         var hppList = [];
+         Object.keys(prodInfo.detail || {}).forEach(function(prodName) {
+           var d = prodInfo.detail[prodName] || {};
+           if (d.qtyJadi > 0) {
+             var hppVarian = d.hpp > 0 ? d.hpp : (d.biaya > 0 ? d.biaya / d.qtyJadi : (totalBiayaSpk / Math.max(prodInfo.qtyJadi || 0, 1)));
+             hppList.push(`<div class="text-start mb-1 border-bottom border-light pb-1"><small class="d-block text-light" style="font-size:0.75rem; line-height:1;">${prodName}</small><b>${formatRupiah(hppVarian)}</b> <small>(${d.qtyJadi} pcs)</small></div>`);
+           }
+         });
+         if (hppList.length > 0) hppHtmlTampilan = hppList.join('');
+         else if (prodInfo.qtyJadi > 0) hppHtmlTampilan = `<div class="fw-bold fs-5">${formatRupiah(totalBiayaSpk / Math.max(prodInfo.qtyJadi, 1))}</div>`;
+         else hppHtmlTampilan = `<div class="fw-bold fs-6 text-warning">Menunggu Setor</div>`;
+       } else {
+         var hppInternal = hppInternalMap[item.spk] ? hppInternalMap[item.spk].rawHPP : 0;
+         if (prodInternal.error) {
+           hppHtmlTampilan = `<div class="fw-bold fs-6 text-warning">Data produksi belum terbaca</div><small class="d-block text-light">${PURCH_escape_(prodInternal.error)}</small>`;
+           item.progress = "Dipantau Internal - koneksi Produksi bermasalah";
+         } else {
+           hppHtmlTampilan = hppInternal ? `<div class="fw-bold fs-5">${formatRupiah(hppInternal)}</div>` : `<div class="fw-bold fs-6 text-warning">Belum ada data produksi</div>`;
+           item.progress = "Dipantau Internal";
+         }
+       }
+    } else {
+       var totalOutputSpk = 0;
+       for(var p in item.detail) totalOutputSpk += (item.detail[p].qtyJadi > 0 ? item.detail[p].qtyJadi : item.detail[p].qtyJasa);
+       var pembagiUmum = totalOutputSpk > 0 ? totalOutputSpk : (item.qtyKirimTotal > 0 ? item.qtyKirimTotal : 1);
+       var bebanPukulRataPerPcs = (item.biayaBahanWIP + item.biayaJasaUmum) / pembagiUmum;
+       var listHpp = [];
+       for(var prodName in item.detail) {
+          var d = item.detail[prodName];
+          var finalQty = d.qtyJadi > 0 ? d.qtyJadi : d.qtyJasa;
+          if(finalQty > 0) {
+             var hppVarian = (d.biayaKhusus / finalQty) + bebanPukulRataPerPcs;
+             listHpp.push(`<div class="text-start mb-1 border-bottom border-light pb-1"><small class="d-block text-light" style="font-size:0.75rem; line-height:1;">${prodName}</small><b>${formatRupiah(hppVarian)}</b> <small>(${finalQty} pcs)</small></div>`);
+          } else if (d.biayaKhusus > 0) {
+             listHpp.push(`<div class="text-start mb-1 border-bottom border-light pb-1"><small class="d-block text-light" style="font-size:0.75rem; line-height:1;">${prodName}</small><b class="text-warning">Menunggu QTY</b></div>`);
+          }
+       }
+       hppHtmlTampilan = listHpp.length > 0 ? listHpp.join('') : `<div class="fw-bold fs-5">Rp 0</div>`;
+    }
+    
+    res.push({ 
+      spk: item.spk, jalur: item.jalur, vendorSpk: item.vendorSpk, dbStatus: item.dbStatus, 
+      progress: item.progress, qtyKirim: item.qtyKirimTotal, qtyJadi: item.qtyJadiTotal, 
+      totalBiaya: formatRupiah(totalBiayaSpk), hpp: hppHtmlTampilan,
+      produksiReadError: prodInternal.error || '',
+      produksiRowsRead: prodInternal.rowCount || 0,
+      tglUnix: item.tglUnix // Bawa data angkanya untuk disortir
+    });
+  }
+  
+  // 💡 MESIN SORTING GANDA (Prioritas: Status lalu Tanggal)
+  res.sort((a, b) => {
+     // 1. Cek apakah SPK sudah "Selesai" (1 = Selesai, 0 = Belum)
+     var statusA = (a.dbStatus === "Selesai") ? 1 : 0;
+     var statusB = (b.dbStatus === "Selesai") ? 1 : 0;
+     
+     // Jika statusnya beda, yang Selesai (1) dilempar ke urutan bawah
+     if (statusA !== statusB) {
+        return statusA - statusB; 
+     }
+     
+     // 2. Jika statusnya sama-sama Aktif atau sama-sama Selesai, 
+     // urutkan berdasarkan Tanggal Terbaru di atas (Descending)
+     return b.tglUnix - a.tglUnix;
+  });
+
+  // Karena sudah disortir sempurna, kita tidak perlu memanggil .reverse() lagi
+  return res; 
+}
+
+
+
+function TEST_purchProductionDashboardDebug(emailOp, pasporOp) {
+  try { if (emailOp || pasporOp) PURCH_requirePassport_(emailOp, pasporOp); } catch(e) {}
+  var out = { at: new Date().toISOString(), ok: false };
+  try {
+    var ss = PURCH_produksiSs_();
+    out.produksiSpreadsheet = ss.getName();
+    out.produksiSpreadsheetId = ss.getId();
+    var sh = ss.getSheetByName('Data_Produksi');
+    out.dataProduksiFound = !!sh;
+    out.headers = sh ? sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0] : [];
+    var agg = PURCH_readProduksiInternalProgress_();
+    out.source = agg.source || {};
+    out.error = agg.error || '';
+    out.rowCount = agg.rowCount || 0;
+    out.skipped = agg.skipped || 0;
+    out.spkCount = Object.keys(agg.bySpk || {}).length;
+    out.sample = Object.keys(agg.bySpk || {}).slice(0, 10).map(function(k){ var v = agg.bySpk[k]; return { spk:k, qtyBahan:v.qtyBahan, qtyJadi:v.qtyJadi, totalBiaya:v.totalBiaya, lastProcess:v.lastProcess, bahan:v.bahan, detail:v.detail }; });
+    out.ok = true;
+  } catch(e) {
+    out.error = e && e.message ? e.message : String(e);
+  }
+  return out;
+}
+
+// ================= FINANCE PAYMENT SYNC v0.5 =================
+function PURCH_accountMatches_(account, aliases) {
+  var a = PURCH_cleanKey_(account);
+  aliases = (aliases || []).map(PURCH_cleanKey_);
+  return aliases.some(function(x) { return a === x || a.indexOf(x) !== -1 || x.indexOf(a) !== -1; });
+}
+function PURCH_readFinancePayments_(debitAliases) {
+  var result = { byPair: {}, byRef: {}, rows: [], error: '' };
+  try {
+    var ss = PURCH_financeSs_();
+    var sh = ss.getSheetByName('Data_Jurnal');
+    if (!sh || sh.getLastRow() < 2) return result;
+    var values = sh.getDataRange().getValues();
+    var map = PURCH_headerMap_(values[0]);
+    var cTgl = PURCH_col_(map, ['Tanggal', 'Tgl'], 0);
+    var cTipe = PURCH_col_(map, ['Tipe Transaksi', 'Tipe_Transaksi', 'Type'], 1);
+    var cRef = PURCH_col_(map, ['No. Referensi', 'No Referensi', 'No_Referensi', 'Ref', 'Referensi'], 2);
+    var cKontak = PURCH_col_(map, ['Nama Kontak', 'Nama_Kontak', 'Kontak', 'Vendor', 'Supplier'], 3);
+    var cKet = PURCH_col_(map, ['Keterangan', 'Ket'], 4);
+    var cDebit = PURCH_col_(map, ['Akun Debit', 'Akun_Debit', 'Debit'], 5);
+    var cKredit = PURCH_col_(map, ['Akun Kredit', 'Akun_Kredit', 'Kredit'], 6);
+    var cNom = PURCH_col_(map, ['Nominal', 'Nilai', 'Total'], 7);
+    for (var r = 1; r < values.length; r++) {
+      var row = values[r];
+      var ref = PURCH_clean_(row[cRef]);
+      var vendor = PURCH_clean_(row[cKontak]);
+      var nominal = PURCH_toNumber_(row[cNom]);
+      if (!ref || nominal <= 0) continue;
+      if (!PURCH_accountMatches_(row[cDebit], debitAliases)) continue;
+      // Pembayaran hutang reguler tidak boleh mencampur jurnal pemakaian DP
+      // (Dr Hutang Maklun, Cr Uang Muka Pembelian), karena DP punya kolom/list sendiri.
+      if (PURCH_accountMatches_(row[cKredit], ['Uang Muka Pembelian', 'UANG_MUKA_PEMBELIAN'])) continue;
+      var entry = {
+        tgl: formatTglLokal(row[cTgl]),
+        tglInput: formatTglInput(row[cTgl]),
+        jenis: 'Pembayaran Finance',
+        ket: PURCH_clean_(row[cKet]) || PURCH_clean_(row[cTipe]) || 'Pembayaran dari Finance',
+        total: nominal,
+        ref: ref,
+        vendor: vendor,
+        akunDebit: PURCH_clean_(row[cDebit]),
+        akunKredit: PURCH_clean_(row[cKredit])
+      };
+      result.rows.push(entry);
+      var refKey = PURCH_cleanKey_(ref);
+      var pairKey = refKey + '|' + PURCH_cleanKey_(vendor);
+      if (!result.byRef[refKey]) result.byRef[refKey] = [];
+      result.byRef[refKey].push(entry);
+      if (!result.byPair[pairKey]) result.byPair[pairKey] = [];
+      result.byPair[pairKey].push(entry);
+    }
+  } catch (e) {
+    result.error = e.message;
+  }
+  return result;
+}
+
+function PURCH_readFinanceDpApplyMaklun_() {
+  var result = { byPair: {}, byRef: {}, rows: [], error: '' };
+  try {
+    var ss = PURCH_financeSs_();
+    var sh = ss.getSheetByName('Data_Jurnal');
+    if (!sh || sh.getLastRow() < 2) return result;
+    var values = sh.getDataRange().getValues();
+    var map = PURCH_headerMap_(values[0]);
+    var cTgl = PURCH_col_(map, ['Tanggal', 'Tgl'], 0);
+    var cTipe = PURCH_col_(map, ['Tipe Transaksi', 'Tipe_Transaksi', 'Type'], 1);
+    var cRef = PURCH_col_(map, ['No. Referensi', 'No Referensi', 'No_Referensi', 'Ref', 'Referensi'], 2);
+    var cKontak = PURCH_col_(map, ['Nama Kontak', 'Nama_Kontak', 'Kontak', 'Vendor', 'Supplier'], 3);
+    var cKet = PURCH_col_(map, ['Keterangan', 'Ket'], 4);
+    var cDebit = PURCH_col_(map, ['Akun Debit', 'Akun_Debit', 'Debit'], 5);
+    var cKredit = PURCH_col_(map, ['Akun Kredit', 'Akun_Kredit', 'Kredit'], 6);
+    var cNom = PURCH_col_(map, ['Nominal', 'Nilai', 'Total'], 7);
+    for (var r = 1; r < values.length; r++) {
+      var row = values[r];
+      var ref = PURCH_clean_(row[cRef]);
+      var vendor = PURCH_clean_(row[cKontak]);
+      var nominal = PURCH_toNumber_(row[cNom]);
+      if (!ref || nominal <= 0) continue;
+      if (!PURCH_accountMatches_(row[cDebit], ['Hutang Maklun'])) continue;
+      if (!PURCH_accountMatches_(row[cKredit], ['Uang Muka Pembelian', 'UANG_MUKA_PEMBELIAN'])) continue;
+      var entry = {
+        tgl: formatTglLokal(row[cTgl]),
+        tglInput: formatTglInput(row[cTgl]),
+        jenis: 'DP Maklun Finance',
+        ket: PURCH_clean_(row[cKet]) || PURCH_clean_(row[cTipe]) || 'Pemakaian DP dari Finance',
+        total: nominal,
+        ref: ref,
+        vendor: vendor,
+        akunDebit: PURCH_clean_(row[cDebit]),
+        akunKredit: PURCH_clean_(row[cKredit])
+      };
+      result.rows.push(entry);
+      var refKey = PURCH_cleanKey_(ref);
+      var pairKey = refKey + '|' + PURCH_cleanKey_(vendor);
+      if (!result.byRef[refKey]) result.byRef[refKey] = [];
+      result.byRef[refKey].push(entry);
+      if (!result.byPair[pairKey]) result.byPair[pairKey] = [];
+      result.byPair[pairKey].push(entry);
+    }
+  } catch (e) { result.error = e.message; }
+  return result;
+}
+
+function PURCH_applyFinanceDpMaklun_(vendors, dpMap) {
+  Object.keys(vendors).forEach(function(vendor) {
+    Object.keys(vendors[vendor].pos).forEach(function(nota) {
+      var entries = PURCH_findFinancePayments_(dpMap, nota, vendor);
+      if (!entries.length) return;
+      var total = PURCH_sumFinancePaymentEntries_(entries);
+      // Kalau Finance sudah membuat jurnal pemakaian DP, Finance menjadi sumber utama DP.
+      // Local Distribusi_Maklun hanya fallback agar tidak double count.
+      vendors[vendor].pos[nota].dp = total;
+      vendors[vendor].pos[nota].listPotongan = entries.map(function(e) {
+        return { tgl: e.tgl, jenis: 'DP Finance', ket: e.ket, total: e.total };
+      });
+    });
+  });
+}
+
+function PURCH_findFinancePayments_(paymentMap, ref, vendor) {
+  var refKey = PURCH_cleanKey_(ref);
+  var pairKey = refKey + '|' + PURCH_cleanKey_(vendor);
+  var exact = paymentMap.byPair[pairKey] || [];
+  if (exact.length) return exact;
+  return paymentMap.byRef[refKey] || [];
+}
+function PURCH_sumFinancePaymentEntries_(entries) {
+  return (entries || []).reduce(function(sum, e) { return sum + PURCH_toNumber_(e.total); }, 0);
+}
+function PURCH_applyLocalPaymentsFallback_(vendors, pBayar, jenisLabel, listField, financeMap, hutangAlias) {
+  if (!pBayar) return;
+  var cBTgl = pBayar.c(['tanggal', 'tgl'], 0), cBNota = pBayar.c(['nota', 'po'], 1), cBVendor = pBayar.c(['vendor'], 2), cBNom = pBayar.c(['nominal'], 3), cBJenis = pBayar.c(['jenis_hutang', 'jenis hutang'], -1), cBKet = pBayar.c(['keterangan', 'ket'], -1);
+  pBayar.rows.forEach(function(r) {
+    var nota = PURCH_clean_(r[cBNota]);
+    var vendor = PURCH_clean_(r[cBVendor]);
+    var nom = PURCH_toNumber_(r[cBNom]);
+    if (!nota || !vendor || nom <= 0) return;
+    if (cBJenis !== -1 && hutangAlias && PURCH_cleanKey_(r[cBJenis]).indexOf(PURCH_cleanKey_(hutangAlias)) === -1) return;
+    if (!vendors[vendor] || !vendors[vendor].pos[nota]) return;
+    var finEntries = PURCH_findFinancePayments_(financeMap, nota, vendor);
+    if (finEntries.length) return; // Finance adalah sumber utama; lokal hanya fallback supaya data lama tidak hilang.
+    vendors[vendor].pos[nota].bayar += nom;
+    vendors[vendor].pos[nota][listField].push({ tgl: formatTglLokal(r[cBTgl]), jenis: jenisLabel + ' (Legacy)', ket: cBKet !== -1 ? PURCH_clean_(r[cBKet]) : 'Data_Pembayaran lama', total: nom });
+  });
+}
+function PURCH_applyFinancePayments_(vendors, financeMap, listField) {
+  Object.keys(vendors).forEach(function(vendor) {
+    Object.keys(vendors[vendor].pos).forEach(function(nota) {
+      var entries = PURCH_findFinancePayments_(financeMap, nota, vendor);
+      if (!entries.length) return;
+      var total = PURCH_sumFinancePaymentEntries_(entries);
+      vendors[vendor].pos[nota].bayar = total;
+      vendors[vendor].pos[nota][listField] = entries.map(function(e) {
+        return { tgl: e.tgl, jenis: 'Pembayaran Finance', ket: e.ket, total: e.total };
+      });
+    });
+  });
+}
+
+function getRekapMaklunPO(emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  var pMaklun = getSheetWithMap('Data_Maklun');
+  var pDist = getSheetWithMap('Distribusi_Maklun');
+  var pBayar = getSheetWithMap('Data_Pembayaran');
+  var financeMap = PURCH_readFinancePayments_(['Hutang Maklun']);
+  var financeDpMap = PURCH_readFinanceDpApplyMaklun_();
+  var vendors = {};
+
+  if (pMaklun) {
+    var cTgl = pMaklun.c(['tanggal', 'tgl'], 0), cNota = pMaklun.c(['nota', 'po'], 1), cVendor = pMaklun.c(['vendor'], 3);
+    var cItem = pMaklun.c(['item'], 4), cQty = pMaklun.c(['qty'], 5), cHarga = pMaklun.c(['harga'], 6), cTotal = pMaklun.c(['total'], 7), cSpk = pMaklun.c(['spk'], 8);
+    pMaklun.rows.forEach(function(r) {
+      var tglInput = formatTglLokal(r[cTgl]);
+      var nota = PURCH_clean_(r[cNota]);
+      var vendor = PURCH_clean_(r[cVendor]);
+      var item = r[cItem];
+      var qty = PURCH_toNumber_(r[cQty]);
+      var harga = PURCH_toNumber_(r[cHarga]);
+      var total = PURCH_toNumber_(r[cTotal]);
+      var spk = PURCH_clean_(r[cSpk]);
+      if (!nota || !vendor) return;
+      if (!vendors[vendor]) vendors[vendor] = { pos: {} };
+      if (!vendors[vendor].pos[nota]) vendors[vendor].pos[nota] = { nota: nota, tglStr: '', tglArr: [], items: [], listPotongan: [], totalPO: 0, dp: 0, bayar: 0, spkList: [] };
+      var p = vendors[vendor].pos[nota];
+      if (p.tglArr.indexOf(tglInput) === -1) {
+        p.tglArr.push(tglInput);
+        p.tglStr = p.tglArr.length > 1 ? p.tglArr[0] + "<br><small class='text-muted' style='font-size:0.7rem;'>(Multi-Tgl)</small>" : p.tglArr[0];
+      }
+      p.items.push({ tglItem: tglInput, item: item, qty: qty, harga: harga, total: total });
+      p.totalPO += total;
+      if (spk && p.spkList.indexOf(spk) === -1) p.spkList.push(spk);
+    });
+  }
+
+  if (pDist) {
+    var cDTgl = pDist.c(['tanggal', 'tgl'], 0), cDSpk = pDist.c(['spk'], 1), cDVendor = pDist.c(['maklun', 'vendor'], 2);
+    var cDTipe = pDist.c(['status akuntansi', 'tipe'], 3), cDItem = pDist.c(['item', 'bahan'], 5), cDTotal = pDist.c(['total'], 7);
+    pDist.rows.forEach(function(r) {
+      var tglDist = formatTglLokal(r[cDTgl]);
+      var spk = PURCH_clean_(r[cDSpk]);
+      var vendor = PURCH_clean_(r[cDVendor]);
+      var tipe = PURCH_clean_(r[cDTipe]);
+      var itemBahan = r[cDItem];
+      var total = PURCH_toNumber_(r[cDTotal]);
+      if (tipe === 'DP Potong Tagihan' && vendor && spk && vendors[vendor]) {
+        for (var nota in vendors[vendor].pos) {
+          if (vendors[vendor].pos[nota].spkList.indexOf(spk) !== -1) {
+            vendors[vendor].pos[nota].dp += total;
+            vendors[vendor].pos[nota].listPotongan.push({ tgl: tglDist, jenis: 'Distribusi Bahan', ket: itemBahan, total: total });
+            break;
+          }
+        }
+      }
+    });
+  }
+
+  PURCH_applyFinanceDpMaklun_(vendors, financeDpMap);
+  PURCH_applyFinancePayments_(vendors, financeMap, 'listPotongan');
+  PURCH_applyLocalPaymentsFallback_(vendors, pBayar, 'Pembayaran / Transfer', 'listPotongan', financeMap, 'Maklun');
+
+  var result = [];
+  Object.keys(vendors).forEach(function(v) {
+    var vendorObj = { vendor: v, pos: [], grandTotalSisa: 0 };
+    Object.keys(vendors[v].pos).forEach(function(n) {
+      var p = vendors[v].pos[n];
+      p.sisa = p.totalPO - p.dp - p.bayar;
+      vendorObj.pos.push(p);
+      vendorObj.grandTotalSisa += p.sisa;
+    });
+    if (vendorObj.pos.length) {
+      vendorObj.pos.sort(function(a,b) { return String(b.nota).localeCompare(String(a.nota)); });
+      result.push(vendorObj);
+    }
+  });
+  result.sort(function(a,b) { return a.vendor.localeCompare(b.vendor); });
+  return result;
+}
+
+
+function getRekapHutangUsaha(emailOp, pasporOp) {
+  var __auth = PURCH_requirePassport_(emailOp, pasporOp);
+  var pBeli = getSheetWithMap('Data_Pembelian');
+  var pBayar = getSheetWithMap('Data_Pembayaran');
+  var financeMap = PURCH_readFinancePayments_(['Hutang Usaha']);
+  var vendors = {};
+
+  if (pBeli) {
+    var cTgl = pBeli.c(['tanggal', 'tgl'], 0), cNota = pBeli.c(['nota', 'po'], 1), cVendor = pBeli.c(['vendor'], 3);
+    var cItem = pBeli.c(['item'], 4), cQty = pBeli.c(['qty'], 5), cHarga = pBeli.c(['harga'], 6), cTotal = pBeli.c(['total'], 7);
+    pBeli.rows.forEach(function(r) {
+      var tglInput = formatTglLokal(r[cTgl]);
+      var nota = PURCH_clean_(r[cNota]);
+      var vendor = PURCH_clean_(r[cVendor]);
+      var item = r[cItem];
+      var qty = PURCH_toNumber_(r[cQty]);
+      var harga = PURCH_toNumber_(r[cHarga]);
+      var total = PURCH_toNumber_(r[cTotal]);
+      if (!nota || !vendor) return;
+      if (!vendors[vendor]) vendors[vendor] = { pos: {} };
+      if (!vendors[vendor].pos[nota]) vendors[vendor].pos[nota] = { nota: nota, tglStr: '', tglArr: [], items: [], listPembayaran: [], totalNota: 0, bayar: 0 };
+      var p = vendors[vendor].pos[nota];
+      if (p.tglArr.indexOf(tglInput) === -1) {
+        p.tglArr.push(tglInput);
+        p.tglStr = p.tglArr.length > 1 ? p.tglArr[0] + "<br><small class='text-muted' style='font-size:0.7rem;'>(Multi-Tgl)</small>" : p.tglArr[0];
+      }
+      p.items.push({ tglItem: tglInput, item: item, qty: qty, harga: harga, total: total });
+      p.totalNota += total;
+    });
+  }
+
+  PURCH_applyFinancePayments_(vendors, financeMap, 'listPembayaran');
+  PURCH_applyLocalPaymentsFallback_(vendors, pBayar, 'Pembayaran / Transfer', 'listPembayaran', financeMap, 'Usaha');
+
+  var result = [];
+  Object.keys(vendors).forEach(function(v) {
+    var vendorObj = { vendor: v, pos: [], grandTotalSisa: 0 };
+    Object.keys(vendors[v].pos).forEach(function(n) {
+      var p = vendors[v].pos[n];
+      p.sisa = p.totalNota - p.bayar;
+      vendorObj.pos.push(p);
+      vendorObj.grandTotalSisa += p.sisa;
+    });
+    if (vendorObj.pos.length) {
+      vendorObj.pos.sort(function(a,b) { return String(b.nota).localeCompare(String(a.nota)); });
+      result.push(vendorObj);
+    }
+  });
+  result.sort(function(a,b) { return a.vendor.localeCompare(b.vendor); });
+  return result;
+}
+
+
+
+// duplicate old tambahMasterItem removed in v0.1
+
+
+
+function TEST_purchasingMasterFilterDebug() {
+  var all = PURCH_readMasterItems_();
+  var bahan = all.filter(PURCH_isRawMaterialItem_);
+  var packaging = all.filter(function(it){ return PURCH_itemTypeKey_(it) === "PACKAGING"; });
+  var produk = all.filter(PURCH_isFinishedGoodItem_);
+  var kosong = all.filter(function(it){ return !PURCH_itemTypeKey_(it); });
+  return {
+    success: true,
+    version: PURCH_CFG.VERSION,
+    totalMasterItems: all.length,
+    bahanLoaded_ItemType_BAHAN: bahan.filter(function(it){ return PURCH_itemTypeKey_(it) === "BAHAN"; }).length,
+    packagingLoaded_ItemType_PACKAGING: packaging.length,
+    produkLoaded_ItemType_BARANG_JADI: produk.length,
+    itemTypeKosong: kosong.length,
+    sampleItemTypeKosong: kosong.slice(0, 20),
+    sampleBahanPackaging: bahan.slice(0, 20),
+    sampleProduk: produk.slice(0, 20)
+  };
+}
+function TEST_purchasingSalesPoPullDebug() {
+  var po = PURCH_readPoSalesData_();
+  var salesInfo = {};
+  try { var ss = PURCH_salesSs_(); salesInfo = { salesSpreadsheet: ss.getName(), salesSpreadsheetId: ss.getId(), dataPoFound: !!ss.getSheetByName("Data_PO") }; }
+  catch(e) { salesInfo = { error: e.message }; }
+  return { success: true, version: PURCH_CFG.VERSION, salesInfo: salesInfo, poRowsLoaded: po.length, samplePo: po.slice(0, 20) };
+}
+
+// =================================================================================
+// SETUP & DEBUG RINGAN - tidak dipakai runtime UI
+// =================================================================================
+function SETUP_installPurchasingAdapter() {
+  var ss = PURCH_selfSs_();
+  Object.keys(PURCH_LOCAL_SHEETS).forEach(function(name) { PURCH_ensureSheetHeaders_(ss, name, PURCH_LOCAL_SHEETS[name]); });
+  var kat = ss.getSheetByName("Master_Kategori_Belanja");
+  if (kat && kat.getLastRow() < 2) {
+    kat.getRange(2,1,6,1).setValues([["Bahan Baku"],["Aksesoris"],["Mesin / Peralatan"],["Operasional"],["Konsumsi"],["Perbaikan"]]);
+  }
+  var gudangSs = PURCH_gudangSs_();
+  PURCH_ensureSheetHeaders_(gudangSs, "Stock_Movement", PURCH_STOCK_MOVEMENT_HEADERS);
+  return { success: true, version: PURCH_CFG.VERSION, purchasingSpreadsheet: ss.getName(), purchasingSpreadsheetId: ss.getId(), gudangSpreadsheet: gudangSs.getName(), gudangSpreadsheetId: gudangSs.getId(), sheets: Object.keys(PURCH_LOCAL_SHEETS) };
+}
+function TEST_purchasingStage1Health(emailOp, pasporOp) {
+  var auth = emailOp && pasporOp ? PURCH_requirePassport_(emailOp, pasporOp) : { email:'MANUAL_TEST_NO_SESSION' };
+  var self = PURCH_selfSs_();
+  return {
+    success:true,
+    version:PURCH_CFG.VERSION,
+    authEmail:auth.email,
+    purchasingSpreadsheet:self.getName(),
+    purchasingSpreadsheetId:self.getId(),
+    masterItemsLoaded:PURCH_readMasterItems_().length,
+    suppliersLoaded:PURCH_readSuppliers_().length,
+    heartbeat:PURCH_readGlobalHeartbeat_(),
+    note:'Stage 1 Flow-style security. Untuk test auth, panggil dari client dengan vouch + paspor.'
+  };
+}

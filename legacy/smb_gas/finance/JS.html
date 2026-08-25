@@ -1,0 +1,1792 @@
+<script>
+let state = { bootstrap:null, data:null, activeTab:'dashboard', heavyLoaded:false, renderedTabs:{}, periodKey:'', reportStart:'', reportEnd:'', bankStatement:null, bankStatementLoaded:false, bankStatementLoading:false, bankReconMode:'UNMATCHED' }; 
+let modalFinance;
+let bankReconMatchState = null;
+var FIN_AUTH = window.FIN_BOOTSTRAP || {};
+var __financeHeartbeatVersion = String(FIN_AUTH.serverVersion || FIN_AUTH.heartbeatVersion || '');
+var __financeLoadedOnce = false;
+var __financeLoading = false;
+var __financeRefreshQueued = false;
+var __financeQueuedHeartbeatVersion = '';
+
+function financeEmail(){ return String(FIN_AUTH.email || FIN_AUTH.userEmail || '').trim().toLowerCase(); }
+function financePaspor(){ return String(FIN_AUTH.paspor || FIN_AUTH.passport || '').trim(); }
+
+function runGasFinance(fnName, args, onSuccess, onFailure){
+  args = Array.isArray(args) ? args.slice() : [];
+  args.push(financeEmail(), financePaspor());
+  const runner = google.script.run
+    .withSuccessHandler(onSuccess || function(){})
+    .withFailureHandler(onFailure || function(err){
+      toast('❌ Gagal server: ' + ((err && err.message) || err), 'error');
+      showStatus((err && err.message) || String(err), true);
+    });
+  return runner[fnName].apply(runner, args);
+}
+
+function hydrateUserFinance(user){
+  user = user || {};
+  const name = user.name || user.displayName || FIN_AUTH.displayName || FIN_AUTH.email || '';
+  const email = user.email || FIN_AUTH.email || '';
+  setText('user-email', name || email || 'User');
+}
+
+function bukaLinkModul(url){
+  if(!url || url === '#') return false;
+  try { window.top.location.href = url; }
+  catch(e){ window.location.href = url; }
+  return false;
+}
+
+function financeModalTerbuka(){ return !!document.querySelector('.modal.show'); }
+
+function prosesRefreshFinanceTertunda(){
+  if(!__financeRefreshQueued) return;
+  if(financeModalTerbuka() || __financeLoading) return;
+  __financeRefreshQueued = false;
+  if(__financeQueuedHeartbeatVersion) __financeHeartbeatVersion = String(__financeQueuedHeartbeatVersion);
+  __financeQueuedHeartbeatVersion = '';
+  refreshAll({ silent:true, source:'heartbeat_queued' });
+}
+
+function cekHeartbeatFinance(silent){
+  if(!financeEmail() || !financePaspor()) return;
+  runGasFinance('ERP_globalHeartbeat', [__financeHeartbeatVersion], function(res){
+    if(!res || !res.ok){
+      if(res && res.shouldLogout && res.portalUrl){
+        toast('⚠️ Sesi Finance habis. Kembali ke Portal...', 'warning');
+        setTimeout(function(){ bukaLinkModul(res.portalUrl); }, 800);
+      }
+      return;
+    }
+    FIN_AUTH.email = res.userEmail || FIN_AUTH.email;
+    FIN_AUTH.displayName = res.displayName || FIN_AUTH.displayName;
+    FIN_AUTH.paspor = res.paspor || res.passport || FIN_AUTH.paspor;
+    FIN_AUTH.passport = res.passport || res.paspor || FIN_AUTH.passport;
+    hydrateUserFinance(res.user || { name: res.displayName, email: res.userEmail });
+    const serverVersion = String(res.serverVersion || '');
+    if(res.shouldRefresh && __financeLoadedOnce){
+      if(financeModalTerbuka() || __financeLoading){
+        __financeRefreshQueued = true;
+        __financeQueuedHeartbeatVersion = serverVersion;
+        return;
+      }
+      if(serverVersion) __financeHeartbeatVersion = serverVersion;
+      refreshAll({ silent:true, source:'heartbeat' });
+      return;
+    }
+    if(serverVersion) __financeHeartbeatVersion = serverVersion;
+  }, function(err){
+    if(!silent) toast('⚠️ Heartbeat Finance gagal: ' + ((err && err.message) || err), 'warning');
+  });
+}
+
+function startHeartbeatFinance(){
+  cekHeartbeatFinance(true);
+  setInterval(function(){ cekHeartbeatFinance(true); }, 60000);
+  document.addEventListener('hidden.bs.modal', function(){ setTimeout(prosesRefreshFinanceTertunda, 250); });
+}
+
+function logoutFinance(){
+  const btn = document.getElementById('btn-logout-finance');
+  if(btn){ btn.disabled = true; btn.innerText = 'Logout...'; }
+  runGasFinance('ERP_globalLogout', [financePaspor()], function(res){
+    const url = (res && res.portalUrl) || FIN_AUTH.portalUrl || '';
+    toast('✅ Logout berhasil.', 'success');
+    setTimeout(function(){ if(url) bukaLinkModul(url); }, 500);
+  }, function(err){
+    if(btn){ btn.disabled = false; btn.innerText = 'Logout'; }
+    toast('❌ Logout gagal: ' + ((err && err.message) || err), 'error');
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const modalEl = document.getElementById('modalFinance');
+  if(modalEl) modalFinance = bootstrap.Modal.getOrCreateInstance(modalEl);
+  initFinanceModalSubmitGuard();
+  initBankReconActionDelegation();
+  initJurnalActionDelegation();
+  initFinance();
+});
+
+function initFinanceModalSubmitGuard(){
+  if(window.__finModalSubmitGuardReady) return;
+  window.__finModalSubmitGuardReady = true;
+  document.addEventListener('submit', function(ev){
+    const form = ev.target;
+    if(!form || !form.matches || !form.matches('#modalFinance form.finance-modal-form')) return;
+    // Pengaman GAS HTML Service: jangan pernah biarkan form popup melakukan navigasi native.
+    ev.preventDefault();
+  }, true);
+}
+
+function initBankReconActionDelegation(){
+  if(window.__finBankReconActionReady) return;
+  window.__finBankReconActionReady = true;
+  document.addEventListener('click', function(ev){
+    const btn = ev.target && ev.target.closest ? ev.target.closest('[data-bank-recon-action]') : null;
+    if(!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const action = btn.getAttribute('data-bank-recon-action') || '';
+    const txKey = btn.getAttribute('data-tx-key') || '';
+    if(!txKey){ toast('Tx_Key mutasi bank tidak ditemukan. Klik Refresh lalu coba lagi.', 'danger'); return; }
+    if(action === 'match' || action === 'detail') bukaModalMatchBank(txKey);
+    else if(action === 'unlink') unlinkBankStatement(txKey);
+  });
+}
+
+
+function initJurnalActionDelegation(){
+  if(window.__finJurnalActionReady) return;
+  window.__finJurnalActionReady = true;
+  document.addEventListener('click', function(ev){
+    const btn = ev.target && ev.target.closest ? ev.target.closest('[data-jurnal-action]') : null;
+    if(!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if(btn.disabled) return;
+    const action = btn.getAttribute('data-jurnal-action') || '';
+    const jurnalKey = btn.getAttribute('data-jurnal-key') || '';
+    if(!jurnalKey){ toast('Kunci jurnal tidak ditemukan. Refresh data lalu coba lagi.', 'danger'); return; }
+    if(action === 'edit') bukaModalEditJurnal(jurnalKey);
+    else if(action === 'delete') hapusJurnal(jurnalKey);
+  });
+}
+
+function initFinance(){
+  showStatus('Memuat modul Finance...', false);
+  runGasFinance('FIN_getBootstrap', [], res => {
+    state.bootstrap = res || {};
+    if(res && res.heartbeat && res.heartbeat.version) __financeHeartbeatVersion = String(res.heartbeat.version);
+    FIN_AUTH.email = res.email || res.userEmail || FIN_AUTH.email;
+    FIN_AUTH.displayName = (res.user && res.user.name) || (res.auth && res.auth.displayName) || FIN_AUTH.displayName;
+    FIN_AUTH.paspor = res.paspor || res.passport || FIN_AUTH.paspor;
+    FIN_AUTH.passport = res.passport || res.paspor || FIN_AUTH.passport;
+    hydrateUserFinance(res.user || res.auth || {});
+    renderModuleLinks(res.moduleLinks || []);
+    renderCOAFromBootstrap();
+    initPeriodFilter();
+    refreshAll({ silent:false, source:'init', lite:true });
+    startHeartbeatFinance();
+  }, err => showStatus((err && err.message) || String(err), true));
+}
+
+function renderCOAFromBootstrap(){
+  if(!state.data) state.data = {};
+  const coa = state.bootstrap?.coa || [];
+  if(coa.length && !(state.data.coa || []).length){
+    state.data.coa = coa;
+  }
+}
+
+function refreshAll(opts){
+  opts = opts || {};
+  if(__financeLoading) return;
+  __financeLoading = true;
+  const lite = opts.lite !== false;
+  if(!opts.silent) showStatus(lite ? 'Memuat ringkasan finance...' : 'Refresh data finance lengkap...', false);
+  const payload = Object.assign({ mode: lite ? 'LITE' : 'FULL', sync:false, journalLimit:250, arusKasLimit:250 }, getFinanceFilterPayload());
+  runGasFinance('FIN_getDashboardData', [payload], res => {
+    __financeLoading = false;
+    __financeLoadedOnce = true;
+    state.data = Object.assign({}, state.data || {}, res || {});
+    state.heavyLoaded = !!(res && res.heavyLoaded);
+    state.renderedTabs = {};
+  state.bankStatementLoaded = false;
+  state.bankStatement = null;
+    renderActiveTab();
+    showStatus('');
+    renderSourceWarnings();
+  }, err => {
+    __financeLoading = false;
+    showStatus((err && err.message) || String(err), true);
+  });
+}
+
+function normalizeFinanceTab(tab){
+  const t = String(tab || 'dashboard').trim();
+  const key = t.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const map = {
+    dashboard: 'dashboard',
+    jurnal: 'jurnal',
+    piutang: 'piutang',
+    hutang: 'hutang',
+    aruskas: 'aruskas',
+    cashflow: 'aruskas',
+    labarugi: 'labarugi',
+    laporanlabarugi: 'labarugi',
+    neraca: 'neraca',
+    cogm: 'cogm',
+    cogs: 'cogm',
+    coa: 'setting',
+    setting: 'setting',
+    settings: 'setting',
+    coasetting: 'setting'
+  };
+  return map[key] || t;
+}
+
+function pindah(tab){
+  tab = normalizeFinanceTab(tab);
+  state.activeTab = tab;
+  document.querySelectorAll('section[id^="tab-"]').forEach(el => el.classList.add('d-none'));
+  document.getElementById('tab-' + tab)?.classList.remove('d-none');
+  document.querySelectorAll('.glass-sidebar .nav-link').forEach(a => a.classList.remove('active'));
+  document.getElementById('nav-' + tab)?.classList.add('active');
+  const m = document.getElementById('mobileTab'); if(m) m.value = tab;
+  renderActiveTab();
+  ensureFinanceTabData(tab);
+}
+
+function renderAll(){
+  renderActiveTab();
+}
+
+function renderActiveTab(){
+  const tab = normalizeFinanceTab(state.activeTab || 'dashboard');
+  state.activeTab = tab;
+  if(tab === 'dashboard') renderDashboard();
+  else if(tab === 'jurnal') renderJurnal();
+  else if(tab === 'piutang') renderPiutang();
+  else if(tab === 'hutang') renderHutang();
+  else if(tab === 'aruskas') renderArusKas();
+  else if(tab === 'labarugi') renderLabaRugi();
+  else if(tab === 'neraca') renderNeraca();
+  else if(tab === 'cogm') renderCogm();
+  else if(tab === 'setting' || tab === 'coa') renderCOA();
+  state.renderedTabs[tab] = true;
+}
+
+
+
+function renderSourceWarnings(){ /* clean UI: source warnings are debug-only */ }
+
+function renderDashboard(){
+  syncPeriodUiLabel();
+  const s = state.data?.summary || {};
+  setText('mCash', rupiah(s.cashBalance));
+  setText('mPiutang', rupiah(s.totalPiutang));
+  setText('mHutang', rupiah(s.totalHutang));
+  setText('mDp', rupiah(s.totalDpOpen));
+  setText('mRevenue', rupiah(s.revenueMtd));
+  setText('mExpense', rupiah(s.expenseMtd));
+  setText('mLaba', rupiah(s.labaOperasionalMtd));
+
+  const mpStoreRows = (state.data?.omniFinance?.summary?.marketplaceOutstandingByStoreRows || [])
+    .filter(x => num(x.sisaTagihan)>0)
+    .sort((a,b)=>num(b.sisaTagihan)-num(a.sisaTagihan))
+    .map(x => ({
+      invoiceNo: 'Marketplace',
+      customer: x.store || x.customer || 'Marketplace',
+      source: 'MARKETPLACE',
+      sisaTagihan: x.sisaTagihan,
+      statusPembayaran: 'BELUM CAIR'
+    }));
+  const otherPiutang = [...(state.data?.invoices || [])]
+    .filter(x => num(x.sisaTagihan)>0 && clean(x.source) !== 'marketplace')
+    .sort((a,b)=>num(b.sisaTagihan)-num(a.sisaTagihan))
+    .slice(0,5);
+  const piutang = mpStoreRows.concat(otherPiutang);
+  setHtml('dashPiutang', table(piutang, [
+    ['Sumber','source','status'],['Grup/Invoice','invoiceNo'],['Customer/Toko','customer'],['Sisa','sisaTagihan','money'],['Status','statusPembayaran','status']
+  ]));
+
+  const kas = (state.data?.arusKas || []).slice(0,8);
+  setHtml('dashKas', table(kas, [
+    ['Tanggal','tanggal'],['Tipe','tipe','status'],['Ref','noReferensi'],['Kas/Bank','akunKasBank'],['Masuk','masuk','money'],['Keluar','keluar','money']
+  ]));
+}
+
+function jurnalActionHtml(r){
+  const key = escAttr(r.jurnalKey || r.sourceKey || ('JRNROW:' + (r.rowNumber || '')));
+  const locked = !!r.isReconciled || !!r.bankTxKey || clean(r.reconStatus) === 'MATCHED';
+  const lockAttr = locked ? ' disabled title="Sudah direkonsiliasi. Batalkan link bank terlebih dahulu."' : '';
+  return `<div class="d-flex gap-1 flex-wrap">
+    <button type="button" class="btn btn-sm btn-outline-primary fw-bold" data-jurnal-action="edit" data-jurnal-key="${key}"${lockAttr}>Edit</button>
+    <button type="button" class="btn btn-sm btn-outline-danger fw-bold" data-jurnal-action="delete" data-jurnal-key="${key}"${lockAttr}>Hapus</button>
+    ${locked ? '<span class="badge text-bg-success align-self-center">Sudah Recon</span>' : ''}
+  </div>`;
+}
+
+function renderJurnal(){
+  const q = clean(document.getElementById('searchJurnal')?.value);
+  let rows = [...(state.data?.jurnal || [])];
+  if(q) rows = rows.filter(r => clean([r.tanggal,r.tipeTransaksi,r.noReferensi,r.namaKontak,r.akunDebit,r.akunKredit,r.keterangan,r.operator].join(' ')).includes(q));
+  setHtml('jurnalTable', table(rows, [
+    ['Tanggal','tanggal'],
+    ['Tipe','tipeTransaksi','status'],
+    ['Ref','noReferensi'],
+    ['Kontak','namaKontak'],
+    ['Debit','akunDebit'],
+    ['Kredit','akunKredit'],
+    ['Nominal','nominal','money'],
+    ['Ket','keterangan'],
+    ['Aksi','_aksi','html']
+  ], r => { r._aksi = jurnalActionHtml(r); return r; }));
+}
+
+function renderPiutang(){
+  const q = clean(document.getElementById('searchPiutang')?.value);
+  let rows = [...(state.data?.invoices || [])];
+  if(q) rows = rows.filter(r => clean([r.invoiceNo,r.noPo,r.customer,r.statusPembayaran].join(' ')).includes(q));
+
+  rows = sortAgingRows(rows, 'sisaTagihan', 'tanggal');
+
+  setHtml('piutangTable', table(rows, [
+    ['Sumber','source','status'],
+    ['Tanggal','tanggal'],
+    ['Invoice','invoiceNo'],
+    ['PO','noPo'],
+    ['Customer','customer'],
+    ['Akun Piutang','akunPiutang'],
+    ['Nilai Invoice','nilaiInvoice','money'],
+    ['DP','dpTerpotong','money'],
+    ['Terbayar','terbayar','money'],
+    ['Sisa','sisaTagihan','money'],
+    ['Status','statusPembayaran','status'],
+    ['Umur Piutang','_umur','html']
+  ], r => {
+    r._umur = agingBadge(r.tanggal, num(r.sisaTagihan) <= 0, 'piutang');
+    return r;
+  }));
+}
+
+function renderHutang(){
+  const q = clean(document.getElementById('searchHutang')?.value);
+  let rows = [...(state.data?.hutang || [])];
+  if(q) rows = rows.filter(r => clean([r.ref,r.vendor,r.source,r.status].join(' ')).includes(q));
+
+  rows = sortAgingRows(rows, 'sisaHutang', 'tanggal');
+
+  setHtml('hutangTable', table(rows, [
+    ['Tanggal','tanggal'],
+    
+    ['Ref','ref'],
+    ['Vendor','vendor'],
+    ['Total','totalHutang','money'],
+    ['Terbayar','terbayar','money'],
+    ['Sisa','sisaHutang','money'],
+    ['Status','status','status'],
+    ['Umur Hutang','_umur','html']
+  ], r => {
+    r._umur = agingBadge(r.tanggal, num(r.sisaHutang) <= 0, 'hutang');
+    return r;
+  }));
+}
+
+function renderArusKas(){
+  ensureBankStatementLoaded();
+  const q = clean(document.getElementById('searchKas')?.value);
+  let rows = [...(state.data?.arusKas || [])];
+  if(q) rows = rows.filter(r => clean([r.tipe,r.noReferensi,r.namaKontak,r.akunKasBank,r.akunLawan,r.keterangan].join(' ')).includes(q));
+  rows.sort((a,b) => clean(b.tanggalKey || b.tanggal).localeCompare(clean(a.tanggalKey || a.tanggal)));
+  if(!rows.length){
+    setHtml('arusKasTable', '<div class="empty-state">Belum ada arus kas yang terbaca. Pastikan transaksi kas/bank dicatat di Data_Jurnal dengan akun Kas/Bank/BCA/Mandiri/BRI/BNI/Giro/Saldo.</div>');
+    return;
+  }
+  setHtml('arusKasTable', table(rows, [
+    ['Tanggal','tanggal'],['Tipe','tipe','status'],['Ref','noReferensi'],['Kontak','namaKontak'],['Kas/Bank','akunKasBank'],['Akun Lawan','akunLawan'],['Masuk','masuk','money'],['Keluar','keluar','money'],['Keterangan','keterangan'],['Aksi','_aksi','html']
+  ], r => { r._aksi = jurnalActionHtml(r); return r; }));
+}
+
+
+
+function renderNeraca(){
+  if((state.data?.cogmCogs || {}).deferred && !state.heavyLoaded){
+    setHtml('neracaBox', `<div class="card p-4 shadow-sm"><div class="fw-bold text-primary">Valuasi stok belum dimuat</div><div class="text-muted small mt-1">Neraca akan dimuat dengan nilai persediaan saat tab ini dibuka.</div></div>`);
+    return;
+  }
+  const n = state.data?.neraca || {};
+  setHtml('neracaBox', `
+    <div class="row g-4">
+      <div class="col-lg-4"><h6 class="fw-bold text-primary">ASET</h6>${table(n.aset || [], [['Akun','akun'],['Saldo','saldo','money']])}<div class="text-end fw-bold mt-2">Total Aset: ${rupiah(n.totalAset)}</div></div>
+      <div class="col-lg-4"><h6 class="fw-bold text-danger">LIABILITAS</h6>${table(n.liabilitas || [], [['Akun','akun'],['Saldo','saldo','money']])}<div class="text-end fw-bold mt-2">Total Liabilitas: ${rupiah(n.totalLiabilitas)}</div></div>
+      <div class="col-lg-4"><h6 class="fw-bold text-dark">EKUITAS</h6>${table(n.ekuitas || [], [['Akun','akun'],['Saldo','saldo','money']])}<div class="text-end fw-bold mt-2">Total Ekuitas: ${rupiah(n.totalEkuitas)}</div></div>
+    </div>
+    <div class="alert alert-info small fw-semibold mt-4 mb-0">Neraca as-of memakai Kas/Bank dari jurnal, Piutang konvensional dan marketplace kumulatif sampai tanggal akhir, Saldo Toko dari settlement dikurangi jurnal kredit, serta persediaan dari Gudang/Omni.</div>
+  `);
+}
+
+function renderCogm(){
+  const c = state.data?.cogmCogs || {};
+  if(c.deferred && !state.heavyLoaded){
+    setHtml('cogmBox', `<div class="card p-4 shadow-sm"><div class="fw-bold text-primary">COGM/COGS belum dimuat</div><div class="text-muted small mt-1">Data berat akan dimuat otomatis saat tab ini dibuka.</div></div>`);
+    return;
+  }
+  const rows = c.rows || [];
+  const spk = c.spkRows || [];
+  const inventory = c.inventory || {};
+  const cogs = c.cogs || {};
+
+  setHtml('cogmBox', `
+    <div class="row g-3 mb-4">
+      <div class="col-md-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted fw-bold small">Persediaan Bahan</div><h5 class="fw-bolder mb-0">${rupiah(inventory.bahanValue)}</h5><small class="text-muted">Qty ${fmtQty(inventory.bahanQty)}</small></div></div>
+      <div class="col-md-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted fw-bold small">WIP / BSG</div><h5 class="fw-bolder mb-0">${rupiah(inventory.wipValue)}</h5><small class="text-muted">Dari SPK belum selesai</small></div></div>
+      <div class="col-md-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted fw-bold small">Barang Jadi</div><h5 class="fw-bolder mb-0">${rupiah(inventory.barangJadiValue)}</h5><small class="text-muted">Qty ${fmtQty(inventory.barangJadiQty)}</small></div></div>
+      <div class="col-md-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted fw-bold small">COGS Periode Ini</div><h5 class="fw-bolder mb-0 text-danger">${rupiah(cogs.nominal)}</h5><small class="text-muted">Qty ${fmtQty(cogs.qty)} · Final ${rupiah(cogs.finalValue)} · Prov ${rupiah(cogs.provisionalValue)}</small></div></div>
+    </div>
+    <h6 class="fw-bold text-primary">Ringkasan COGM & COGS</h6>
+    ${table(rows, [['Komponen','komponen'],['Qty','qty'],['Nominal','nominal','money']])}
+    <h6 class="fw-bold text-primary mt-4">COGM per SPK</h6>
+    ${table(spk, [
+      ['SPK','spk'],['Jalur','jalur'],['Target','targetQty'],['Output','outputQty'],['Bahan/WIP','wipMaterial','money'],['DP Bahan','dpMaterial','money'],['Upah','upahBorongan','money'],['Overhead','overhead','money'],['Maklun/Jasa','maklunJasa','money'],['Total Cost','totalCost','money'],['COGM/Pcs','cogmPerPcs','money'],['WIP Ending','wipEnding','money']
+    ])}
+    
+  `);
+}
+
+function fmtQty(v){
+  const n = num(v);
+  return Number.isInteger(n) ? n.toLocaleString('id-ID') : n.toLocaleString('id-ID', {maximumFractionDigits: 2});
+}
+
+function renderCOA(){
+  const rows = coaRows();
+  if(!rows.length){
+    setHtml('coaTable', `<div class="empty-state">COA belum terbaca. Klik Refresh atau jalankan SETUP_installFinanceModule() untuk memastikan Master_COA tersedia.</div>`);
+    return;
+  }
+  setHtml('coaTable', table(rows, [
+    ['Kode','code'],['Nama Akun','name'],['Tipe','type'],['Group','group'],['Normal','normalBalance'],['Posting','isPosting','status'],['Status','status','status'],['Aksi','_aksi','html']
+  ], r => {
+    r._aksi = `<div class="btn-group btn-group-sm"><button class="btn btn-outline-primary fw-bold" onclick="bukaModalCOA(${Number(r.rowNumber||0)})">Edit</button><button class="btn btn-outline-danger fw-bold" onclick="hapusCOA(${Number(r.rowNumber||0)})">Hapus</button></div>`;
+    return r;
+  }));
+}
+
+/* ================= MODAL INPUT ================= */
+
+function bukaModalEditJurnal(jurnalKey){
+  openModal('✏️ Edit Jurnal', '<div class="alert alert-light border mb-0">Memuat detail jurnal...</div>');
+  runGasFinance('FIN_getJurnalDetail', [{jurnalKey}], res => {
+    const r = (res && res.row) || {};
+    const key = r.jurnalKey || jurnalKey;
+    if(r.isReconciled){
+      openModal('✏️ Edit Jurnal', '<div class="alert alert-warning mb-0">Jurnal sudah direkonsiliasi. Batalkan pencocokan bank terlebih dahulu.</div>');
+      return;
+    }
+    openModal('✏️ Edit Jurnal', `
+      <form id="formModalFinance" data-jurnal-key="${escAttr(key)}" onsubmit="submitEditJurnal(event)" class="finance-modal-form">
+        <div class="row g-3 align-items-end">
+          <div class="col-md-4"><label class="form-label">Tanggal</label><input id="jeTanggal" type="date" class="form-control" value="${escAttr(r.tanggal || today())}" required></div>
+          <div class="col-md-4"><label class="form-label">Tipe Transaksi</label><input id="jeTipe" class="form-control" value="${escAttr(r.tipeTransaksi || 'JURNAL_MANUAL')}" required></div>
+          <div class="col-md-4"><label class="form-label">No. Referensi</label><input id="jeRef" class="form-control" value="${escAttr(r.noReferensi || '')}"></div>
+          <div class="col-md-6"><label class="form-label">Nama Kontak</label><input id="jeKontak" class="form-control" value="${escAttr(r.namaKontak || '')}"></div>
+          <div class="col-md-6"><label class="form-label">Nominal</label><input id="jeNominal" class="form-control" inputmode="decimal" value="${escAttr(String(num(r.nominal || 0)))}" required></div>
+          <div class="col-md-6">${accountInput('jeDebit', 'Akun Debit', null, '', r.akunDebit || '')}</div>
+          <div class="col-md-6">${accountInput('jeKredit', 'Akun Kredit', null, '', r.akunKredit || '')}</div>
+          <div class="col-12"><label class="form-label">Keterangan</label><input id="jeKet" class="form-control" value="${escAttr(r.keterangan || '')}"></div>
+          <div class="col-12 small text-muted">Perubahan jurnal pembayaran invoice akan menghitung ulang nilai terbayar dan sisa tagihan invoice.</div>
+          <div class="col-12"><button id="btnUpdateJurnal" class="btn btn-primary fw-bold w-100" type="submit">Simpan Perubahan</button></div>
+        </div>
+      </form>`);
+  }, err => openModal('✏️ Edit Jurnal', `<div class="alert alert-danger mb-0">${esc((err && err.message) || String(err))}</div>`));
+}
+
+function submitEditJurnal(e, jurnalKey){
+  if(e && typeof e.preventDefault === 'function') e.preventDefault();
+  const form = e && e.currentTarget ? e.currentTarget : null;
+  jurnalKey = String(jurnalKey || (form && form.dataset ? form.dataset.jurnalKey : '') || '').trim();
+  if(!jurnalKey){ toast('Kunci jurnal tidak ditemukan. Tutup popup lalu buka ulang.', 'danger'); return false; }
+  const payload = {
+    jurnalKey,
+    tanggal: val('jeTanggal'),
+    tipeTransaksi: val('jeTipe'),
+    noReferensi: val('jeRef'),
+    namaKontak: val('jeKontak'),
+    akunDebit: val('jeDebit'),
+    akunKredit: val('jeKredit'),
+    nominal: val('jeNominal'),
+    keterangan: val('jeKet')
+  };
+  const btn = document.getElementById('btnUpdateJurnal');
+  if(btn){ btn.disabled = true; btn.innerText = 'Menyimpan...'; }
+  runGasFinance('FIN_updateJurnal', [payload], res => {
+    toast((res && res.message) || 'Jurnal diperbarui.', 'success');
+    modalFinance.hide();
+    refreshAll({silent:true, source:'edit-jurnal'});
+  }, err => {
+    if(btn){ btn.disabled = false; btn.innerText = 'Simpan Perubahan'; }
+    toast((err && err.message) || String(err), 'danger');
+  });
+}
+
+function hapusJurnal(jurnalKey){
+  if(!confirm('Hapus jurnal ini dari riwayat? Data audit tetap disimpan dan laporan akan dihitung ulang.')) return;
+  runGasFinance('FIN_deleteJurnal', [{jurnalKey, reason:'Dihapus dari Riwayat Finance'}], res => {
+    toast((res && res.message) || 'Jurnal dihapus.', 'success');
+    refreshAll({silent:true, source:'delete-jurnal'});
+  }, err => toast((err && err.message) || String(err), 'danger'));
+}
+
+function bukaModalJurnal(){
+  openModal('✍️ Input Jurnal Manual', `
+    <form id="formModalFinance" onsubmit="submitModalJurnal(event)" class="finance-modal-form">
+      <div class="row g-3 align-items-end">
+        <div class="col-md-4"><label class="form-label">Tanggal</label><input id="jTanggal" type="date" class="form-control" value="${today()}"></div>
+        <div class="col-md-4">${accountInput('jDebit', 'Akun Debit', null)}</div>
+        <div class="col-md-4">${accountInput('jKredit', 'Akun Kredit', null)}</div>
+        <div class="col-md-4"><label class="form-label">Nominal</label><input id="jNominal" class="form-control" inputmode="decimal" placeholder="0"></div>
+        <div class="col-md-8"><label class="form-label">Keterangan</label><input id="jKet" class="form-control" placeholder="Keterangan jurnal"></div>
+        <div class="col-12 pt-2"><button class="btn btn-primary fw-bold w-100" type="submit">Simpan Jurnal</button></div>
+      </div>
+    </form>`);
+}
+
+function bukaModalPenerimaan(){
+  openModal('➕ Input Penerimaan', `
+    <form id="formModalFinance" onsubmit="submitModalPenerimaan(event)" class="finance-modal-form">
+      <div class="row g-3 align-items-end">
+        <div class="col-md-4"><label class="form-label">Tanggal</label><input id="pTanggal" type="date" class="form-control" value="${today()}"></div>
+        <div class="col-md-4">${accountInput('pBank', 'Kas / Bank', bankFilter)}</div>
+        <div class="col-md-4">${accountInput('pAkunKredit', 'Akun Kredit', null, 'onchange="updatePenerimaanContext()" oninput="updatePenerimaanContext()"')}</div>
+        <div id="pContext" class="col-12"></div>
+        <div class="col-md-4"><label class="form-label">Nominal</label><input id="pNominal" class="form-control" inputmode="decimal" placeholder="0"></div>
+        <div class="col-md-8"><label class="form-label">Keterangan</label><input id="pKet" class="form-control" placeholder="Keterangan penerimaan"></div>
+        <div class="col-12 pt-2"><button class="btn btn-success fw-bold w-100" type="submit">Simpan Penerimaan</button></div>
+      </div>
+    </form>`);
+  setTimeout(updatePenerimaanContext, 0);
+}
+
+function updatePenerimaanContext(){
+  const akun = selectedAccount('pAkunKredit');
+  const key = clean([akun.name, akun.group, akun.type].join(' '));
+  const box = document.getElementById('pContext');
+  if(!box) return;
+
+  if(key.includes('UANGMUKAPENJUALAN') || key.includes('DPCUSTOMER')){
+    box.innerHTML = `
+      <div class="row g-3 align-items-end">
+        <div class="col-md-6"><label class="form-label">Nama Konsumen</label><select id="pCustomer" class="form-select" onchange="syncPoByCustomer()">${customerOptions()}</select></div>
+        <div class="col-md-6"><label class="form-label">No PO</label><select id="pPo" class="form-select">${poOptions()}</select></div>
+        <div class="col-12 small text-muted">Jurnal: Dr Kas/Bank, Cr Uang Muka Penjualan. No PO menjadi referensi DP.</div>
+      </div>`;
+    syncPoByCustomer();
+    return;
+  }
+
+  if(key.includes('PIUTANG')){
+    box.innerHTML = `
+      <div class="row g-3 align-items-end">
+        <div class="col-md-6"><label class="form-label">Nama Konsumen</label><select id="pCustomer" class="form-select" onchange="syncInvoiceByCustomer()">${customerOptions()}</select></div>
+        <div class="col-md-6"><label class="form-label">No Invoice</label><select id="pInvoice" class="form-select" onchange="fillInvoiceAmount()">${invoiceOptions()}</select></div>
+        <input type="hidden" id="pRef" value="">
+        <div class="col-12 small text-muted">Jurnal: Dr Kas/Bank, Cr Piutang. Sistem update pembayaran invoice ke Modul Penjualan.</div>
+      </div>`;
+    syncInvoiceByCustomer();
+    return;
+  }
+
+  box.innerHTML = `
+    <div class="row g-3 align-items-end">
+      <div class="col-md-6"><label class="form-label">Nama Konsumen / Kontak</label><input id="pKontak" class="form-control" placeholder="Nama konsumen/kontak"></div>
+      <div class="col-md-6"><label class="form-label">No PO / Invoice / Ref</label><input id="pRef" class="form-control" placeholder="Opsional"></div>
+    </div>`;
+}
+
+function bukaModalPenerimaanInvoice(invoiceNo){
+  const inv = (state.data?.invoices || []).find(x => clean(x.invoiceNo) === clean(invoiceNo));
+  if(!inv) return;
+  openModal('➕ Penerimaan Invoice', `
+    <form id="formModalFinance" data-invoice-no="${escAttr(inv.invoiceNo)}" onsubmit="submitModalPenerimaanInvoice(event)" class="finance-modal-form">
+      <div class="alert alert-info"><b>${esc(inv.invoiceNo)}</b><br>${esc(inv.customer||'')}<br>Sisa tagihan: <b>${rupiah(inv.sisaTagihan)}</b></div>
+      <div class="row g-3 align-items-end">
+        <div class="col-md-4"><label class="form-label">Tanggal</label><input id="piTanggal" type="date" class="form-control" value="${today()}"></div>
+        <div class="col-md-4">${accountInput('piBank', 'Kas / Bank', bankFilter)}</div>
+        <div class="col-md-4">${accountInput('piAkunKredit', 'Akun Kredit', piutangFilter, '', inv.akunPiutang || 'Piutang Konvensional')}</div>
+        <div class="col-md-4"><label class="form-label">Nominal</label><input id="piNominal" class="form-control" inputmode="decimal" value="${num(inv.sisaTagihan)}"></div>
+        <div class="col-md-8"><label class="form-label">Keterangan</label><input id="piKet" class="form-control" value="Pembayaran invoice ${escAttr(inv.invoiceNo)}"></div>
+        <div class="col-12 pt-2"><button class="btn btn-primary fw-bold w-100" type="submit">Simpan Pembayaran Invoice</button></div>
+      </div>
+    </form>`);
+}
+
+function bukaModalPengeluaran(){
+  openModal('➖ Input Pengeluaran', `
+    <form id="formModalFinance" onsubmit="submitModalPengeluaran(event)" class="finance-modal-form">
+      <div class="row g-3 align-items-end">
+        <div class="col-md-4"><label class="form-label">Tanggal</label><input id="kTanggal" type="date" class="form-control" value="${today()}"></div>
+        <div class="col-md-4">${accountInput('kBank', 'Kas / Bank', bankFilter)}</div>
+        <div class="col-md-4">${accountInput('kAkunDebit', 'Akun Debit / Lawan Kas-Bank', null, 'onchange="updatePengeluaranContext()" oninput="updatePengeluaranContext()"')}</div>
+        <div id="kContext" class="col-12"></div>
+        <div class="col-md-4"><label class="form-label">Nominal</label><input id="kNominal" class="form-control" inputmode="decimal" placeholder="0"></div>
+        <div class="col-md-8"><label class="form-label">Keterangan</label><input id="kKet" class="form-control" placeholder="Keterangan pengeluaran"></div>
+        <div class="col-12 pt-2"><button class="btn btn-danger fw-bold w-100" type="submit">Simpan Pengeluaran</button></div>
+      </div>
+    </form>`);
+  setTimeout(updatePengeluaranContext, 0);
+}
+
+function updatePengeluaranContext(){
+  const akun = selectedAccount('kAkunDebit');
+  const key = clean([akun.name, akun.group, akun.type].join(' '));
+  const box = document.getElementById('kContext');
+  if(!box) return;
+
+  if(key.includes('HUTANG')){
+    box.innerHTML = `
+      <div class="row g-3 align-items-end">
+        <div class="col-md-6"><label class="form-label">Supplier / Maklun</label><select id="kVendor" class="form-select" onchange="syncHutangByVendor()">${vendorOptions()}</select></div>
+        <div class="col-md-6"><label class="form-label">No PO / Invoice / Ref Hutang</label><select id="kHutangRef" class="form-select" onchange="fillHutangAmount()">${hutangOptions()}</select></div>
+        <input type="hidden" id="kRef" value="">
+        <div class="col-12 small text-muted">Jurnal: Dr Hutang, Cr Kas/Bank. Dipakai untuk pembayaran supplier/maklun.</div>
+      </div>`;
+    syncHutangByVendor();
+    return;
+  }
+
+  box.innerHTML = `
+    <div class="row g-3 align-items-end">
+      <div class="col-md-6"><label class="form-label">Supplier / Maklun / Kontak</label><input id="kKontak" class="form-control" placeholder="Nama supplier/maklun/kontak"></div>
+      <div class="col-md-6"><label class="form-label">No PO / Invoice / Ref</label><input id="kRef" class="form-control" placeholder="Opsional"></div>
+    </div>`;
+}
+
+function bukaModalPengeluaranHutang(ref){
+  const h = (state.data?.hutang || []).find(x => clean(x.ref) === clean(ref));
+  if(!h) return;
+  openModal('➖ Pembayaran Hutang', `
+    <form id="formModalFinance" data-hutang-ref="${escAttr(h.ref)}" onsubmit="submitModalPengeluaranHutang(event)" class="finance-modal-form">
+      <div class="alert alert-danger"><b>${esc(h.ref)}</b><br>${esc(h.vendor||'')}<br>Sisa hutang: <b>${rupiah(h.sisaHutang)}</b></div>
+      <div class="row g-3 align-items-end">
+        <div class="col-md-4"><label class="form-label">Tanggal</label><input id="phTanggal" type="date" class="form-control" value="${today()}"></div>
+        <div class="col-md-4">${accountInput('phBank', 'Kas / Bank', bankFilter)}</div>
+        <div class="col-md-4">${accountInput('phAkun', 'Akun Hutang', hutangFilter, '', h.akunHutang || 'Hutang Usaha')}</div>
+        <div class="col-md-4"><label class="form-label">Nominal</label><input id="phNominal" class="form-control" inputmode="decimal" value="${num(h.sisaHutang)}"></div>
+        <div class="col-md-8"><label class="form-label">Keterangan</label><input id="phKet" class="form-control" value="Pembayaran hutang ${escAttr(h.ref)}"></div>
+        <div class="col-12 pt-2"><button class="btn btn-danger fw-bold w-100" type="submit">Simpan Pembayaran Hutang</button></div>
+      </div>
+    </form>`);
+}
+
+function bukaModalCOA(rowNumber){
+  const coa = (state.data?.coa || []).find(x => Number(x.rowNumber) === Number(rowNumber)) || {};
+  const isEdit = !!coa.rowNumber;
+  openModal(isEdit ? '✏️ Edit COA' : '➕ Tambah COA', `
+    <form id="formModalFinance" onsubmit="submitModalCOA(event, ${Number(coa.rowNumber||0)})" class="finance-modal-form">
+      <div class="row g-3">
+        <div class="col-md-4"><label class="form-label">Kode Akun</label><input id="coaCode" class="form-control" value="${escAttr(coa.code||'')}" required></div>
+        <div class="col-md-8"><label class="form-label">Nama Akun</label><input id="coaName" class="form-control" value="${escAttr(coa.name||'')}" required></div>
+        <div class="col-md-4"><label class="form-label">Tipe</label><select id="coaType" class="form-select">
+          ${selectOpts(['ASET','LIABILITAS','EKUITAS','PENDAPATAN','BEBAN','HPP','COGS','EXPENSE','ASSET'], coa.type)}
+        </select></div>
+        <div class="col-md-4"><label class="form-label">Saldo Normal</label><select id="coaNormal" class="form-select">${selectOpts(['DEBIT','KREDIT','CREDIT'], coa.normalBalance)}</select></div>
+        <div class="col-md-4"><label class="form-label">Account Group</label><input id="coaGroup" class="form-control" value="${escAttr(coa.group||'')}" placeholder="KAS_BANK / PIUTANG / HUTANG / BOP_PRODUKSI"></div>
+        <div class="col-md-4"><label class="form-label">Parent Code</label><input id="coaParent" class="form-control" value="${escAttr(coa.parentCode||'')}"></div>
+        <div class="col-md-4"><label class="form-label">Is Posting</label><select id="coaPosting" class="form-select">${selectOpts(['TRUE','FALSE'], String(coa.isPosting || 'TRUE').toUpperCase())}</select></div>
+        <div class="col-md-4"><label class="form-label">Status</label><select id="coaStatus" class="form-select">${selectOpts(['ACTIVE','INACTIVE'], coa.status || 'ACTIVE')}</select></div>
+        <div class="col-12"><label class="form-label">Notes</label><input id="coaNotes" class="form-control" value="${escAttr(coa.notes||'')}"></div>
+        <div class="col-12"><button class="btn btn-primary fw-bold w-100" type="submit">Simpan COA</button></div>
+      </div>
+    </form>`);
+}
+
+function hapusCOA(rowNumber){
+  const coa = (state.data?.coa || []).find(x => Number(x.rowNumber) === Number(rowNumber)) || {};
+  if(!rowNumber) return;
+  if(!confirm(`Hapus/nonaktifkan COA "${coa.name || rowNumber}"?`)) return;
+  callSave('FIN_deleteCoa', {rowNumber}, 'COA dihapus.');
+}
+
+/* ================= SUBMIT ================= */
+
+function submitModalJurnal(e){
+  e.preventDefault();
+  const payload = {
+    tanggal: val('jTanggal'),
+    tipeTransaksi: 'JURNAL_MANUAL',
+    akunDebit: val('jDebit'),
+    akunKredit: val('jKredit'),
+    nominal: val('jNominal'),
+    keterangan: val('jKet')
+  };
+  callSave('FIN_simpanJurnal', payload, 'Jurnal tersimpan.');
+}
+
+function submitModalPenerimaan(e){
+  e.preventDefault();
+  const akun = selectedAccount('pAkunKredit');
+  const key = clean([akun.name, akun.group, akun.type].join(' '));
+  let payload = {
+    tanggal: val('pTanggal'),
+    noReferensi: val('pRef'),
+    akunKasBank: val('pBank'),
+    akunKredit: val('pAkunKredit'),
+    akunLawan: val('pAkunKredit'),
+    nominal: val('pNominal'),
+    keterangan: val('pKet')
+  };
+
+  if(key.includes('PIUTANG')){
+    payload.mode = 'INVOICE';
+    payload.invoiceNo = val('pInvoice');
+    payload.noReferensi = payload.invoiceNo || payload.noReferensi;
+    payload.namaKontak = selectedText('pCustomer');
+  } else if(key.includes('UANGMUKAPENJUALAN') || key.includes('DPCUSTOMER')){
+    payload.mode = 'DP_CUSTOMER';
+    payload.noPo = val('pPo');
+    payload.namaKontak = selectedText('pCustomer') || val('pKontak');
+    if(!payload.noReferensi && payload.noPo) payload.noReferensi = payload.noPo;
+  } else {
+    payload.mode = 'UMUM';
+    payload.namaKontak = val('pKontak');
+  }
+
+  callSave('FIN_catatPenerimaan', payload, 'Penerimaan tersimpan.');
+}
+
+function submitModalPenerimaanInvoice(e){
+  e.preventDefault();
+  const invoiceNo = String(e.currentTarget?.dataset?.invoiceNo || '');
+  const inv = (state.data?.invoices || []).find(x => clean(x.invoiceNo) === clean(invoiceNo)) || {};
+  const payload = {
+    mode:'INVOICE',
+    invoiceNo,
+    tanggal:val('piTanggal'),
+    akunKasBank:val('piBank'),
+    akunKredit:val('piAkunKredit'),
+    nominal:val('piNominal'),
+    namaKontak:inv.customer || '',
+    keterangan:val('piKet')
+  };
+  callSave('FIN_catatPenerimaan', payload, 'Pembayaran invoice tersimpan.');
+}
+
+function submitModalPengeluaran(e){
+  e.preventDefault();
+  const akun = selectedAccount('kAkunDebit');
+  const key = clean([akun.name, akun.group, akun.type].join(' '));
+  const payload = {
+    tanggal: val('kTanggal'),
+    tipeTransaksi: 'PENGELUARAN',
+    noReferensi: val('kRef'),
+    akunDebit: val('kAkunDebit'),
+    akunLawan: val('kAkunDebit'),
+    akunKasBank: val('kBank'),
+    nominal: val('kNominal'),
+    keterangan: val('kKet')
+  };
+
+  if(key.includes('HUTANG')){
+    const ref = val('kHutangRef');
+    const h = (state.data?.hutang || []).find(x => clean(x.ref) === clean(ref)) || {};
+    payload.noReferensiHutang = ref;
+    payload.ref = ref;
+    payload.namaKontak = h.vendor || selectedText('kVendor');
+    payload.akunHutang = val('kAkunDebit');
+  } else {
+    payload.namaKontak = val('kKontak');
+  }
+
+  callSave('FIN_catatPengeluaran', payload, 'Pengeluaran tersimpan.');
+}
+
+function submitModalPengeluaranHutang(e){
+  e.preventDefault();
+  const ref = String(e.currentTarget?.dataset?.hutangRef || '');
+  const h = (state.data?.hutang || []).find(x => clean(x.ref) === clean(ref)) || {};
+  const payload = {
+    noReferensiHutang: ref,
+    ref,
+    tanggal:val('phTanggal'),
+    akunKasBank:val('phBank'),
+    akunHutang:val('phAkun'),
+    akunDebit:val('phAkun'),
+    nominal:val('phNominal'),
+    namaKontak:h.vendor || '',
+    keterangan:val('phKet')
+  };
+  callSave('FIN_catatPengeluaran', payload, 'Pembayaran hutang tersimpan.');
+}
+
+function submitModalCOA(e, rowNumber){
+  e.preventDefault();
+  const payload = {
+    rowNumber: Number(rowNumber || 0),
+    code: val('coaCode'),
+    name: val('coaName'),
+    type: val('coaType'),
+    normalBalance: val('coaNormal') === 'CREDIT' ? 'KREDIT' : val('coaNormal'),
+    group: val('coaGroup'),
+    parentCode: val('coaParent'),
+    isPosting: val('coaPosting') !== 'FALSE',
+    status: val('coaStatus'),
+    notes: val('coaNotes')
+  };
+  callSave('FIN_saveCoa', payload, 'COA tersimpan.');
+}
+
+function callSave(fn, payload, okMsg){
+  showStatus('Menyimpan data...', false);
+  runGasFinance(fn, [payload], res => {
+    modalFinance.hide();
+    toast((res && res.message) || okMsg, 'success');
+    refreshAll({ silent:true, source:'save' });
+  }, err => showStatus((err && err.message) || String(err), true));
+}
+
+
+/* ================= BANK RECONCILIATION ================= */
+
+function ensureBankStatementLoaded(){
+  if(state.bankStatementLoaded || state.bankStatementLoading) { renderBankStatement(); return; }
+  loadBankStatement(false);
+}
+
+function loadBankStatement(force){
+  if(state.bankStatementLoading) return;
+  if(state.bankStatementLoaded && !force){ renderBankStatement(); return; }
+  state.bankStatementLoading = true;
+  setHtml('bankStatementTable', '<div class="alert alert-light border mb-0">Memuat mutasi bank...</div>');
+  const payload = {...getFinanceFilterPayload(), bankReconMode: state.bankReconMode || 'UNMATCHED'};
+  runGasFinance('FIN_getBankStatementData', [payload], res => {
+    state.bankStatementLoading = false;
+    state.bankStatementLoaded = true;
+    state.bankStatement = res || { rows: [], summary: {} };
+    renderBankStatement();
+  }, err => {
+    state.bankStatementLoading = false;
+    setHtml('bankStatementTable', '<div class="alert alert-danger mb-0">Gagal memuat mutasi bank: '+esc((err && err.message) || String(err))+'</div>');
+  });
+}
+
+function renderBankStatement(){
+  const box = document.getElementById('bankStatementTable');
+  if(!box) return;
+  const data = state.bankStatement || { rows: [], summary: {} };
+  const q = clean(document.getElementById('searchBankStatement')?.value);
+  let rows = [...(data.rows || [])];
+  if(q) rows = rows.filter(r => clean([r.bankAccount,r.description,r.refNo,r.direction,r.matchStatus,r.sourceFile,r.matchedJurnalKey].join(' ')).includes(q));
+  rows.sort((a,b) => clean(b.dateKey || b.statementDate).localeCompare(clean(a.dateKey || a.statementDate)));
+  const sum = data.summary || {};
+  const modeLabel = (state.bankReconMode || 'UNMATCHED') === 'UNMATCHED_PERIOD' ? 'Belum cocok · periode laporan' : 'Semua mutasi belum cocok';
+  setHtml('bankStatementSummary', `${esc(modeLabel)} · Masuk: <b>${rupiah(sum.totalMasuk||0)}</b> · Keluar: <b>${rupiah(sum.totalKeluar||0)}</b> · Baris: <b>${num(sum.totalRows||rows.length)}</b> · Belum match: <b>${num(sum.unmatched||0)}</b>`);
+  if(!rows.length){
+    setHtml('bankStatementTable', '<div class="empty-state">Tidak ada mutasi bank yang belum dicocokkan pada filter ini.</div>');
+    return;
+  }
+  setHtml('bankStatementTable', table(rows, [
+    ['Tanggal','statementDate'],['Bank','bankAccount'],['Keterangan','description'],['Ref','refNo'],['Masuk','masuk','money'],['Keluar','keluar','money'],['Saldo','balance','money'],['Aksi','_aksi','html']
+  ], r => {
+    const txAttr = escAttr(r.txKey || '');
+    r._aksi = `<button type="button" class="btn btn-sm btn-primary fw-bold" data-bank-recon-action="match" data-tx-key="${txAttr}">Cocokkan</button>`;
+    return r;
+  }));
+}
+
+function setBankReconMode(mode){
+  state.bankReconMode = mode === 'UNMATCHED_PERIOD' ? 'UNMATCHED_PERIOD' : 'UNMATCHED';
+  state.bankStatementLoaded = false;
+  loadBankStatement(true);
+}
+
+function jsArg(v){ return JSON.stringify(String(v ?? '')); }
+
+function bukaModalMatchBank(txKey){
+  bankReconMatchState = null;
+  openModal('🔗 Cocokkan Mutasi Bank', '<div class="alert alert-light border mb-0">Mencari transaksi Finance...</div>');
+  runGasFinance('FIN_findBankReconCandidates', [{txKey, maxDays:60}], res => {
+    const selected = new Set((res && res.selectedKeys) || []);
+    bankReconMatchState = { txKey, tx:(res && res.tx) || {}, candidates:(res && res.candidates) || [], selected, search:'' };
+    renderBankReconMatchModal();
+  }, err => openModal('🔗 Cocokkan Mutasi Bank', `<div class="alert alert-danger mb-0">${esc((err && err.message) || String(err))}</div>`));
+}
+
+function renderBankReconMatchModal(){
+  const s = bankReconMatchState;
+  if(!s) return;
+  const tx = s.tx || {};
+  const html = `
+    <div class="card p-3 mb-3 bg-light border">
+      <div class="d-flex justify-content-between gap-3 flex-wrap">
+        <div><div class="fw-bold">${esc(tx.statementDate || tx.dateKey || '')} · ${esc(tx.direction || '')}</div><div>${esc(tx.bankAccount || '')}</div></div>
+        <div class="text-end"><div class="small text-muted">Nominal Mutasi</div><div class="fs-5 fw-bold">${rupiah(tx.amount || 0)}</div></div>
+      </div>
+      <div class="small mt-2">${esc(tx.description || '')}</div>
+      ${tx.refNo ? `<div class="small text-muted">Ref: ${esc(tx.refNo)}</div>` : ''}
+    </div>
+    <div class="alert alert-info py-2">Pilih satu atau beberapa transaksi Finance. Total pilihan harus sama persis dengan nominal mutasi bank.</div>
+    <div class="row g-2 mb-2 align-items-end">
+      <div class="col-md-7"><label class="form-label fw-bold">Cari transaksi</label><input id="bankReconCandidateSearch" class="form-control" placeholder="Ref, kontak, akun, keterangan..." oninput="filterBankReconCandidates(this.value)"></div>
+      <div class="col-md-5"><div id="bankReconSelectionSummary"></div></div>
+    </div>
+    <div id="bankReconCandidateTable"></div>
+    <div class="d-flex gap-2 mt-3 flex-wrap">
+      <button id="btnSaveBankReconMatch" type="button" class="btn btn-success fw-bold flex-grow-1" onclick="submitBankReconMultiMatch()" disabled>Simpan Pencocokan</button>
+      <button type="button" class="btn btn-outline-secondary" onclick="clearBankReconSelection()">Kosongkan Pilihan</button>
+    </div>
+    <details class="mt-3">
+      <summary class="fw-bold">Tidak menemukan transaksi? Buat jurnal dari mutasi bank</summary>
+      <form id="formModalFinance" data-tx-key="${escAttr(s.txKey)}" onsubmit="submitCreateJurnalFromBank(event)" class="finance-modal-form mt-3">
+        <div class="row g-3 align-items-end">
+          <div class="col-md-5">${accountInput('bankReconAkunLawan', 'Akun Lawan', null)}</div>
+          <div class="col-md-3"><label class="form-label">Ref</label><input id="bankReconRef" class="form-control" value="${escAttr(tx.refNo || '')}"></div>
+          <div class="col-md-4"><label class="form-label">Kontak</label><input id="bankReconKontak" class="form-control" placeholder="Opsional"></div>
+          <div class="col-12"><label class="form-label">Keterangan</label><input id="bankReconKet" class="form-control" value="${escAttr(tx.description || '')}"></div>
+          <div class="col-12"><div id="bankReconCreateStatus" class="small mb-2"></div><button id="btnCreateJurnalFromBank" class="btn btn-primary fw-bold w-100" type="submit">Buat Jurnal & Link</button></div>
+        </div>
+      </form>
+    </details>`;
+  document.getElementById('modalFinanceTitle').innerHTML = '🔗 Cocokkan Mutasi Bank';
+  document.getElementById('modalFinanceBody').innerHTML = html;
+  renderBankReconCandidateTable();
+  updateBankReconSelectionSummary();
+}
+
+function filterBankReconCandidates(value){
+  if(!bankReconMatchState) return;
+  bankReconMatchState.search = clean(value);
+  renderBankReconCandidateTable();
+}
+
+function renderBankReconCandidateTable(){
+  const box = document.getElementById('bankReconCandidateTable');
+  const s = bankReconMatchState;
+  if(!box || !s) return;
+  const q = s.search || '';
+  let rows = [...(s.candidates || [])];
+  if(q) rows = rows.filter(r => clean([r.tanggal,r.noReferensi,r.namaKontak,r.akunKasBank,r.akunLawan,r.keterangan,r.nominal].join(' ')).includes(q));
+  if(!rows.length){ box.innerHTML = '<div class="alert alert-warning mb-0">Tidak ada transaksi Finance yang sesuai akun bank, arah transaksi, dan rentang tanggal.</div>'; return; }
+  const body = rows.map(r => {
+    const checked = s.selected.has(String(r.jurnalKey)) ? ' checked' : '';
+    return `<tr>
+      <td class="text-center"><input class="form-check-input" type="checkbox"${checked} data-jurnal-key="${escAttr(r.jurnalKey)}" onchange="toggleBankReconCandidate(this.getAttribute('data-jurnal-key'), this.checked)"></td>
+      <td>${esc(r.tanggal || '')}<div class="small text-muted">${num(r.dateDiff || 0)} hari</div></td>
+      <td><div class="fw-semibold">${esc(r.noReferensi || '-')}</div><div class="small text-muted">${esc(r.namaKontak || '')}</div></td>
+      <td><div>${esc(r.akunLawan || '')}</div><div class="small text-muted">${esc(r.keterangan || '')}</div></td>
+      <td class="text-end fw-bold">${rupiah(r.nominal || 0)}</td>
+    </tr>`;
+  }).join('');
+  box.innerHTML = `<div class="table-responsive border rounded" style="max-height:420px;overflow:auto"><table class="table table-sm table-hover align-middle mb-0"><thead class="table-light" style="position:sticky;top:0;z-index:1"><tr><th style="width:42px"></th><th>Tanggal</th><th>Referensi/Kontak</th><th>Akun Lawan/Keterangan</th><th class="text-end">Nominal</th></tr></thead><tbody>${body}</tbody></table></div><div class="small text-muted mt-1">Menampilkan ${num(rows.length)} kandidat.</div>`;
+}
+
+function toggleBankReconCandidate(jurnalKey, checked){
+  const s = bankReconMatchState;
+  if(!s) return;
+  if(checked) s.selected.add(String(jurnalKey)); else s.selected.delete(String(jurnalKey));
+  updateBankReconSelectionSummary();
+}
+
+function bankReconSelectedTotal(){
+  const s = bankReconMatchState;
+  if(!s) return 0;
+  const map = new Map((s.candidates || []).map(r => [String(r.jurnalKey), Number(r.nominal || 0)]));
+  let total = 0;
+  s.selected.forEach(k => { total += Number(map.get(String(k)) || 0); });
+  return total;
+}
+
+function updateBankReconSelectionSummary(){
+  const s = bankReconMatchState;
+  if(!s) return;
+  const total = bankReconSelectedTotal();
+  const target = Number((s.tx && s.tx.amount) || 0);
+  const diff = target - total;
+  const exact = s.selected.size > 0 && Math.abs(diff) <= 0.01;
+  const box = document.getElementById('bankReconSelectionSummary');
+  if(box) box.innerHTML = `<div class="border rounded p-2 ${exact ? 'bg-success-subtle' : 'bg-warning-subtle'}"><div class="small">Dipilih: <b>${num(s.selected.size)} transaksi</b></div><div class="fw-bold">${rupiah(total)}</div><div class="small ${exact ? 'text-success' : 'text-danger'}">Selisih: ${rupiah(diff)}</div></div>`;
+  const btn = document.getElementById('btnSaveBankReconMatch');
+  if(btn) btn.disabled = !exact;
+}
+
+function clearBankReconSelection(){
+  if(!bankReconMatchState) return;
+  bankReconMatchState.selected.clear();
+  renderBankReconCandidateTable();
+  updateBankReconSelectionSummary();
+}
+
+function submitBankReconMultiMatch(){
+  const s = bankReconMatchState;
+  if(!s || !s.selected.size){ toast('Pilih transaksi Finance terlebih dahulu.', 'danger'); return; }
+  const total = bankReconSelectedTotal();
+  const target = Number((s.tx && s.tx.amount) || 0);
+  if(Math.abs(target - total) > 0.01){ toast('Total transaksi terpilih harus sama dengan nominal mutasi bank.', 'danger'); return; }
+  const btn = document.getElementById('btnSaveBankReconMatch');
+  if(btn){ btn.disabled = true; btn.innerText = 'Menyimpan...'; }
+  runGasFinance('FIN_linkBankStatementToJurnals', [{ txKey:s.txKey, jurnalKeys:Array.from(s.selected), method:s.selected.size > 1 ? 'MANUAL_MULTI' : 'MANUAL' }], res => {
+    toast((res && res.message) || 'Pencocokan tersimpan.', 'success');
+    modalFinance.hide();
+    bankReconMatchState = null;
+    state.bankStatementLoaded = false;
+    loadBankStatement(true);
+    refreshAll({silent:true, source:'bank-recon-multi-link'});
+  }, err => {
+    if(btn){ btn.disabled = false; btn.innerText = 'Simpan Pencocokan'; }
+    toast((err && err.message) || String(err), 'danger');
+  });
+}
+
+function linkBankStatement(txKey, jurnalKey){
+  runGasFinance('FIN_linkBankStatementToJurnals', [{txKey, jurnalKeys:[jurnalKey], method:'MANUAL'}], res => {
+    toast((res && res.message) || 'Mutasi bank sudah dilink.', 'success');
+    modalFinance.hide();
+    state.bankStatementLoaded = false;
+    loadBankStatement(true);
+    refreshAll({silent:true, source:'bank-recon-link'});
+  }, err => toast((err && err.message) || String(err), 'danger'));
+}
+
+function unlinkBankStatement(txKey){
+  if(!confirm('Batalkan link rekonsiliasi mutasi bank ini?')) return;
+  runGasFinance('FIN_unlinkBankStatement', [{txKey}], res => {
+    toast((res && res.message) || 'Link dibatalkan.', 'success');
+    state.bankStatementLoaded = false;
+    loadBankStatement(true);
+    refreshAll({silent:true, source:'bank-recon-unlink'});
+  }, err => toast((err && err.message) || String(err), 'danger'));
+}
+
+function submitCreateJurnalFromBank(e, txKey){
+  if(e && typeof e.preventDefault === 'function') e.preventDefault();
+  const form = e && e.currentTarget ? e.currentTarget : null;
+  txKey = String(txKey || (form && form.dataset ? form.dataset.txKey : '') || '').trim();
+  if(!txKey){ toast('Tx_Key mutasi bank tidak ditemukan. Tutup popup lalu buka ulang.', 'danger'); return false; }
+  const payload = {
+    txKey,
+    akunLawan: val('bankReconAkunLawan'),
+    noReferensi: val('bankReconRef'),
+    namaKontak: val('bankReconKontak'),
+    keterangan: val('bankReconKet')
+  };
+  if(!payload.akunLawan){ toast('Akun lawan wajib dipilih.', 'danger'); return; }
+  const btn = document.getElementById('btnCreateJurnalFromBank');
+  const status = document.getElementById('bankReconCreateStatus');
+  if(btn){ btn.disabled = true; btn.innerText = 'Membuat jurnal...'; }
+  if(status){ status.className = 'small mb-2 text-primary'; status.textContent = 'Menyimpan jurnal dan menghubungkan mutasi bank...'; }
+  runGasFinance('FIN_createJurnalFromBankStatement', [payload], res => {
+    toast((res && res.message) || 'Jurnal dibuat dan dilink.', 'success');
+    modalFinance.hide();
+    bankReconMatchState = null;
+    state.bankStatementLoaded = false;
+    loadBankStatement(true);
+    refreshAll({silent:true, source:'bank-recon-create-journal'});
+  }, err => {
+    if(btn){ btn.disabled = false; btn.innerText = 'Buat Jurnal & Link'; }
+    if(status){ status.className = 'small mb-2 text-danger'; status.textContent = (err && err.message) || String(err); }
+    toast((err && err.message) || String(err), 'danger');
+  });
+}
+
+function autoMatchBankStatements(){
+  if(!confirm('Auto match mutasi bank dengan Data_Jurnal berdasarkan tanggal, akun bank, dan nominal yang sama?')) return;
+  const payload = {...getFinanceFilterPayload(), bankReconMode: state.bankReconMode || 'UNMATCHED'};
+  runGasFinance('FIN_autoMatchBankStatements', [payload], res => {
+    toast((res && res.message) || 'Auto match selesai.', 'success');
+    state.bankStatementLoaded = false;
+    loadBankStatement(true);
+    refreshAll({silent:true, source:'bank-recon-auto'});
+  }, err => toast((err && err.message) || String(err), 'danger'));
+}
+
+function bukaModalUploadBankCsv(){
+  window.__financeBankFilePayload = null;
+  openModal('📥 Upload Mutasi Bank', `
+    <form id="formModalFinance" onsubmit="submitUploadBankStatementFile(event)" class="finance-modal-form">
+      <div class="row g-3 align-items-end">
+        <div class="col-md-6">${accountInput('bankCsvAccount', 'Akun Kas/Bank', bankFilter)}</div>
+        <div class="col-md-6"><label class="form-label">Tanggal Import</label><input id="bankCsvImportDate" type="date" class="form-control" value="${today()}"></div>
+        <div class="col-12"><label class="form-label">File Mutasi Bank</label><input id="bankCsvFile" type="file" class="form-control" accept=".csv,.txt,.pdf,text/csv,text/plain,application/pdf" onchange="handleBankStatementFile(this)" required></div>
+        <div class="col-12"><label class="form-label">Catatan</label><input id="bankCsvNotes" class="form-control" placeholder="Opsional"></div>
+        <div class="col-12 small text-muted">Mendukung CSV/TXT dan PDF. File disimpan ke Bank_Statement untuk rekonsiliasi, tidak otomatis masuk Data_Jurnal.</div>
+        <div class="col-12"><div id="bankCsvPreview" class="alert alert-light border mb-0">Pilih file mutasi bank terlebih dahulu.</div></div>
+        <div class="col-12 pt-2"><button class="btn btn-primary fw-bold w-100" type="submit">Import ke Rekonsiliasi Bank</button></div>
+      </div>
+    </form>`);
+}
+
+const FIN_PDFJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+const FIN_PDFJS_WORKER_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+function FIN_loadPdfJsClient_(){
+  if(window.pdfjsLib){
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = FIN_PDFJS_WORKER_CDN;
+    return Promise.resolve(window.pdfjsLib);
+  }
+  if(window.__finPdfJsPromise) return window.__finPdfJsPromise;
+  window.__finPdfJsPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = FIN_PDFJS_CDN;
+    script.async = true;
+    script.onload = () => {
+      if(!window.pdfjsLib){ reject(new Error('PDF.js gagal dimuat.')); return; }
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = FIN_PDFJS_WORKER_CDN;
+      resolve(window.pdfjsLib);
+    };
+    script.onerror = () => reject(new Error('PDF.js tidak dapat dimuat dari CDN.'));
+    document.head.appendChild(script);
+  });
+  return window.__finPdfJsPromise;
+}
+
+async function FIN_extractPdfLayoutClient_(file){
+  const lib = await FIN_loadPdfJsClient_();
+  const buffer = await file.arrayBuffer();
+  const pdf = await lib.getDocument({ data:new Uint8Array(buffer) }).promise;
+  const pages = [];
+  for(let pageNo=1; pageNo<=pdf.numPages; pageNo++){
+    const page = await pdf.getPage(pageNo);
+    const viewport = page.getViewport({ scale:1 });
+    const content = await page.getTextContent({ normalizeWhitespace:true, disableCombineTextItems:false });
+    const grouped = [];
+    (content.items || []).forEach(item => {
+      const text = String(item && item.str || '').replace(/\s+/g, ' ').trim();
+      if(!text) return;
+      const tr = item.transform || [];
+      const x = Number(tr[4] || 0);
+      const y = Number(tr[5] || 0);
+      const width = Number(item.width || 0);
+      const height = Math.abs(Number(item.height || tr[3] || 0));
+      let row = null;
+      for(let i=grouped.length-1; i>=0 && i>=grouped.length-5; i--){
+        if(Math.abs(grouped[i].y - y) <= 2.2){ row = grouped[i]; break; }
+      }
+      if(!row){ row = { y:y, cells:[] }; grouped.push(row); }
+      row.cells.push({ x:Math.round(x*100)/100, w:Math.round(width*100)/100, h:Math.round(height*100)/100, t:text });
+    });
+    grouped.forEach(row => row.cells.sort((a,b) => a.x-b.x));
+    grouped.sort((a,b) => b.y-a.y);
+    pages.push({
+      page:pageNo,
+      width:Math.round(viewport.width*100)/100,
+      height:Math.round(viewport.height*100)/100,
+      rows:grouped.map(row => ({ y:Math.round(row.y*100)/100, cells:row.cells }))
+    });
+  }
+  return { engine:'PDFJS_LAYOUT_V1', pageCount:pdf.numPages, pages:pages };
+}
+
+function FIN_readFileAsDataUrl_(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => resolve((e && e.target && e.target.result) || '');
+    reader.onerror = () => reject(new Error('Gagal membaca file PDF.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleBankStatementFile(input){
+  const file = input && input.files && input.files[0];
+  const preview = document.getElementById('bankCsvPreview');
+  window.__financeBankFilePayload = null;
+  if(!file){ if(preview) preview.textContent='Pilih file mutasi bank terlebih dahulu.'; return; }
+  const name = file.name || 'bank_statement';
+  const lower = name.toLowerCase();
+  const isPdf = file.type === 'application/pdf' || lower.endsWith('.pdf');
+  const isText = lower.endsWith('.csv') || lower.endsWith('.txt') || /^text\//i.test(file.type || '') || !file.type;
+  if(!isPdf && !isText){
+    if(preview) preview.innerHTML = '<span class="text-danger">Format belum didukung. Gunakan CSV/TXT atau PDF.</span>';
+    return;
+  }
+
+  if(isPdf){
+    if(preview) preview.innerHTML = `<b>${esc(name)}</b><br>⏳ Membaca struktur PDF...`;
+    try {
+      const layout = await FIN_extractPdfLayoutClient_(file);
+      window.__financeBankFilePayload = {
+        fileName:name,
+        fileType:'PDF',
+        mimeType:file.type || 'application/pdf',
+        pdfLayout:layout
+      };
+      if(preview) preview.innerHTML = `<b>${esc(name)}</b><br>${num(layout.pageCount || 0)} halaman terbaca terstruktur. Saat import, jumlah dan nilai DB/CR akan diverifikasi dengan ringkasan e-statement sebelum disimpan.`;
+    } catch(layoutErr){
+      try {
+        const result = await FIN_readFileAsDataUrl_(file);
+        const base64 = String(result).split(',').pop() || '';
+        window.__financeBankFilePayload = { fileName:name, fileType:'PDF', mimeType:file.type || 'application/pdf', base64:base64 };
+        if(preview) preview.innerHTML = `<b>${esc(name)}</b><br>PDF.js tidak tersedia; sistem akan memakai fallback Google Drive. Import hanya dilanjutkan jika total dan jumlah transaksi lolos verifikasi.`;
+      } catch(readErr){
+        if(preview) preview.innerHTML = '<span class="text-danger">Gagal membaca PDF: '+esc((readErr && readErr.message) || String(readErr))+'</span>';
+      }
+    }
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = function(e){
+    const text = String((e && e.target && e.target.result) || '');
+    window.__financeBankFilePayload = { fileName:name, fileType:'CSV', mimeType:file.type || 'text/plain', csvText:text };
+    const lines = text.split(/\r?\n/).filter(Boolean).length;
+    if(preview) preview.innerHTML = `<b>${esc(name)}</b><br>${num(lines)} baris terbaca. Siap import ke Bank_Statement.`;
+  };
+  reader.onerror = function(){ if(preview) preview.innerHTML = '<span class="text-danger">Gagal membaca file.</span>'; };
+  reader.readAsText(file);
+}
+
+// Backward compatibility untuk tombol lama / cache browser lama.
+function handleBankCsvFile(input){ handleBankStatementFile(input); }
+
+function submitUploadBankStatementFile(e){
+  e.preventDefault();
+  const fp = window.__financeBankFilePayload || null;
+  if(!fp){ toast('File mutasi bank belum terbaca.', 'warning'); return; }
+  const payload = {
+    ...fp,
+    fileName: fp.fileName || 'bank_statement',
+    bankAccount: val('bankCsvAccount'),
+    importDate: val('bankCsvImportDate'),
+    notes: val('bankCsvNotes')
+  };
+  showStatus('Mengimport mutasi bank...', false);
+  runGasFinance('FIN_importBankStatementFile', [payload], res => {
+    modalFinance.hide();
+    toast((res && res.message) || 'Mutasi bank berhasil diimport.', 'success');
+    state.bankStatementLoaded = false;
+    loadBankStatement(true);
+    refreshAll({ silent:true, source:'bank_statement_import' });
+  }, err => showStatus((err && err.message) || String(err), true));
+}
+
+function submitUploadBankCsv(e){ submitUploadBankStatementFile(e); }
+
+/* ================= CONTEXT OPTIONS ================= */
+
+function bankFilter(a){
+  const key = clean([a.code,a.name,a.group].join(' '));
+  return key.includes('KASBANK') || key.includes('KAS') || key.includes('BANK') || key.includes('GIRO') || key.includes('SALDO');
+}
+function piutangFilter(a){ return clean([a.name,a.group,a.type].join(' ')).includes('PIUTANG'); }
+function hutangFilter(a){ return clean([a.name,a.group,a.type].join(' ')).includes('HUTANG'); }
+function accountInput(id, label, filterFn, attrs, value){
+  const listId = 'list_' + id;
+  let rows = coaRows();
+  if(filterFn) rows = rows.filter(filterFn);
+  const v = value || '';
+  return `<label class="form-label">${esc(label)}</label><input id="${escAttr(id)}" class="form-control" list="${escAttr(listId)}" value="${escAttr(v)}" placeholder="Ketik/cari nama akun..." ${attrs||''}>${accountDatalist(listId, rows)}`;
+}
+function accountDatalist(id, rows){
+  rows = rows || [];
+  return `<datalist id="${escAttr(id)}">${rows.map(a => `<option value="${escAttr(a.name)}" label="${escAttr((a.code? a.code+' - ' : '') + (a.group ? a.group : ''))}"></option>`).join('')}</datalist>`;
+}
+function selectOpts(rows, selected){
+  const sk = clean(selected);
+  return (rows||[]).map(x => `<option value="${escAttr(x)}" ${clean(x)===sk?'selected':''}>${esc(x)}</option>`).join('');
+}
+
+function updateSelectOptions(id, html){
+  const el = document.getElementById(id);
+  if(el) el.innerHTML = html;
+}
+
+function syncPoByCustomer(){
+  const cust = selectedText('pCustomer');
+  updateSelectOptions('pPo', poOptions(cust));
+}
+
+function syncInvoiceByCustomer(){
+  const cust = selectedText('pCustomer');
+  updateSelectOptions('pInvoice', invoiceOptions(cust));
+  fillInvoiceAmount();
+}
+
+function fillInvoiceAmount(){
+  const invoiceNo = val('pInvoice');
+  const inv = (state.data?.invoices || []).find(x => clean(x.invoiceNo) === clean(invoiceNo));
+  if(inv && document.getElementById('pNominal')) document.getElementById('pNominal').value = num(inv.sisaTagihan);
+  if(inv && !val('pRef')) document.getElementById('pRef').value = inv.invoiceNo;
+}
+
+function syncHutangByVendor(){
+  const vendor = selectedText('kVendor');
+  updateSelectOptions('kHutangRef', hutangOptions(vendor));
+  fillHutangAmount();
+}
+
+function fillHutangAmount(){
+  const ref = val('kHutangRef');
+  const h = (state.data?.hutang || []).find(x => clean(x.ref) === clean(ref));
+  if(h && document.getElementById('kNominal')) document.getElementById('kNominal').value = num(h.sisaHutang);
+  if(h && !val('kRef')) document.getElementById('kRef').value = h.ref;
+}
+
+function customerOptions(){
+  const map = {};
+  (state.data?.invoices || []).forEach(x => { if(x.customer) map[x.customer] = true; });
+  (state.data?.salesPOs || []).forEach(x => { if(x.customer) map[x.customer] = true; });
+  const rows = Object.keys(map).sort();
+  return '<option value="">Pilih konsumen...</option>' + rows.map(c => `<option value="${escAttr(c)}">${esc(c)}</option>`).join('');
+}
+
+function poOptions(customer){
+  let rows = state.data?.salesPOs || [];
+  if(customer) rows = rows.filter(x => clean(x.customer) === clean(customer));
+  return '<option value="">Pilih PO...</option>' + rows.map(x => `<option value="${escAttr(x.noPo)}">${esc(x.noPo)} — ${esc(x.customer||'')} — ${rupiah(x.total)}</option>`).join('');
+}
+
+function invoiceOptions(customer){
+  let rows = (state.data?.invoices || []).filter(x => num(x.sisaTagihan) > 0);
+  if(customer) rows = rows.filter(x => clean(x.customer) === clean(customer));
+  return '<option value="">Pilih invoice...</option>' + rows.map(x => `<option value="${escAttr(x.invoiceNo)}">${esc(x.invoiceNo)} — ${esc(x.customer||'')} — Sisa ${rupiah(x.sisaTagihan)}</option>`).join('');
+}
+
+function vendorOptions(){
+  const map = {};
+  (state.data?.hutang || []).forEach(x => { if(x.vendor && num(x.sisaHutang)>0) map[x.vendor] = true; });
+  const rows = Object.keys(map).sort();
+  return '<option value="">Pilih vendor...</option>' + rows.map(v => `<option value="${escAttr(v)}">${esc(v)}</option>`).join('');
+}
+
+function hutangOptions(vendor){
+  let rows = (state.data?.hutang || []).filter(x => num(x.sisaHutang) > 0);
+  if(vendor) rows = rows.filter(x => clean(x.vendor) === clean(vendor));
+  return '<option value="">Pilih hutang...</option>' + rows.map(x => `<option value="${escAttr(x.ref)}">${esc(x.ref)} — ${esc(x.vendor||'')} — ${rupiah(x.sisaHutang)}</option>`).join('');
+}
+
+function coaRows(){ return state.data?.coa || state.bootstrap?.coa || []; }
+
+function coaOptions(filterFn){
+  let rows = coaRows();
+  if(filterFn) rows = rows.filter(filterFn);
+  if(!rows.length) rows = coaRows();
+  return '<option value="">Pilih akun...</option>' + rows.map(a => `<option value="${escAttr(a.name)}">${esc(a.name)}</option>`).join('');
+}
+
+function bankOptions(){
+  const rows = coaRows().filter(a => {
+    const key = clean([a.code,a.name,a.group].join(' '));
+    return key.includes('KASBANK') || key.includes('KAS') || key.includes('BANK') || key.includes('GIRO') || key.includes('SALDO');
+  });
+  return '<option value="">Pilih kas/bank...</option>' + rows.map(a => `<option value="${escAttr(a.name)}">${esc(a.name)}</option>`).join('');
+}
+
+function selectedAccount(selectId){
+  const value = val(selectId);
+  return coaRows().find(a => clean(a.name) === clean(value) || clean(a.code) === clean(value)) || { name:value, group:'', type:'', normalBalance:'' };
+}
+
+function selectedText(id){
+  const el = document.getElementById(id);
+  if(!el) return '';
+  const opt = el.options ? el.options[el.selectedIndex] : null;
+  if(!opt) return el.value || '';
+  return opt.value || opt.text || '';
+}
+
+function setSelectValueLoose(selectEl, wanted){
+  const key = clean(wanted);
+  for(let i=0;i<selectEl.options.length;i++){
+    if(clean(selectEl.options[i].value) === key || clean(selectEl.options[i].text).includes(key)){
+      selectEl.selectedIndex = i;
+      return;
+    }
+  }
+}
+
+
+function sortAgingRows(rows, balanceField, dateField){
+  return [...(rows || [])].sort((a,b) => {
+    const aOpen = num(a[balanceField]) > 0;
+    const bOpen = num(b[balanceField]) > 0;
+    if(aOpen !== bOpen) return aOpen ? -1 : 1;
+    const da = parseClientDate(a[dateField])?.getTime() || 0;
+    const db = parseClientDate(b[dateField])?.getTime() || 0;
+    return da - db;
+  });
+}
+
+function agingDays(tanggal){
+  const d = parseClientDate(tanggal);
+  if(!d) return '';
+  const todayDate = new Date();
+  todayDate.setHours(0,0,0,0);
+  d.setHours(0,0,0,0);
+  return Math.max(0, Math.floor((todayDate.getTime() - d.getTime()) / 86400000));
+}
+
+function agingBadge(tanggal, closed, type){
+  const days = agingDays(tanggal);
+  if(days === '') return '<span class="badge bg-secondary">-</span>';
+  if(closed) return `<span class="badge bg-success">Lunas · ${days} hari</span>`;
+  let cls = 'bg-info text-dark';
+  if(days >= 30) cls = 'bg-danger';
+  else if(days >= 14) cls = 'bg-warning text-dark';
+  return `<span class="badge ${cls}">${days} hari</span>`;
+}
+
+function parseClientDate(v){
+  if(v instanceof Date && !isNaN(v.getTime())) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  const s = String(v || '').trim();
+  if(!s) return null;
+
+  let m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  if(m) return new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
+
+  m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+  if(m) return new Date(Number(m[3]), Number(m[2])-1, Number(m[1]));
+
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/* ================= UI HELPERS ================= */
+
+function openModal(title, html){
+  const titleEl = document.getElementById('modalFinanceTitle');
+  const bodyEl = document.getElementById('modalFinanceBody');
+  const modalEl = document.getElementById('modalFinance');
+  if(!titleEl || !bodyEl || !modalEl){ toast('Komponen popup Finance tidak ditemukan. Pastikan Index.html ikut diganti.', 'danger'); return; }
+  titleEl.innerHTML = title;
+  bodyEl.innerHTML = html;
+  if(!modalFinance) modalFinance = bootstrap.Modal.getOrCreateInstance(modalEl);
+  modalFinance.show();
+}
+
+function renderModuleLinks(rows){
+  const el = document.getElementById('menu-modul-list');
+  if(!rows || !rows.length){
+    el.innerHTML = '<li><h6 class="dropdown-header">Tidak ada link modul</h6></li>';
+    return;
+  }
+  el.innerHTML = rows.map(m => `<li><a class="dropdown-item fw-bold" href="${escAttr(m.url)}" target="_top" onclick="return bukaLinkModul(this.href)">${esc(m.name || m.nama || m.code)}</a></li>`).join('');
+}
+
+function table(rows, cols, mutate){
+  rows = rows || [];
+  if(!rows.length) return '<div class="alert alert-light border mb-0">Belum ada data.</div>';
+  const prepared = mutate ? rows.map(r => mutate({...r})) : rows;
+  return `<table class="table table-sm table-hover align-middle mb-0">
+    <thead class="table-light"><tr>${cols.map(c=>`<th class="${c[2]==='money'?'text-end':'text-start'}">${esc(c[0])}</th>`).join('')}</tr></thead>
+    <tbody>${prepared.map(r => `<tr>${cols.map(c => cell(r,c)).join('')}</tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function cell(row,col){
+  const key=col[1], type=col[2], v=row[key];
+  if(type==='money') return `<td class="text-end fw-bold">${rupiah(v)}</td>`;
+  if(type==='html') return `<td>${v||''}</td>`;
+  if(type==='status') return `<td>${statusBadge(v)}</td>`;
+  return `<td class="text-start">${esc(v ?? '')}</td>`;
+}
+
+function statusBadge(v){
+  const s=String(v||'').toUpperCase();
+  let cls='bg-secondary';
+  if(['LUNAS','OK','MASUK','ACTIVE','AKTIF'].includes(s)) cls='bg-success';
+  else if(['PARSIAL','KELUAR','PENDING'].includes(s)) cls='bg-warning text-dark';
+  else if(['BELUM BAYAR','BELUM','ERROR'].includes(s)) cls='bg-danger';
+  else cls='bg-info text-dark';
+  return `<span class="badge ${cls}">${esc(v||'-')}</span>`;
+}
+
+function showStatus(msg, isErr){
+  const el=document.getElementById('notif-global');
+  if(!msg){ el.innerHTML=''; return; }
+  el.innerHTML=`<div class="alert ${isErr?'alert-danger':'alert-info'} fw-semibold shadow-sm">${esc(msg)}</div>`;
+}
+
+function toast(msg,type){
+  const box=document.getElementById('toast-container');
+  const div=document.createElement('div');
+  div.className='custom-toast '+(type?('toast-'+type):'');
+  div.textContent=msg;
+  box.appendChild(div);
+  setTimeout(()=>{div.classList.add('fade-out'); setTimeout(()=>div.remove(),350);},2600);
+}
+
+function setText(id,v){ const el=document.getElementById(id); if(el) el.textContent=v; }
+function setHtml(id,v){ const el=document.getElementById(id); if(el) el.innerHTML=v; }
+function val(id){ return document.getElementById(id)?.value || ''; }
+function today(){ return new Date().toISOString().slice(0,10); }
+
+function num(v){
+  if(typeof v==='number') return isNaN(v)?0:v;
+  let s=String(v||'').replace(/[^0-9,.-]/g,'');
+  if(!s) return 0;
+  const c=s.lastIndexOf(','), d=s.lastIndexOf('.');
+  if(c!==-1 && d!==-1){
+    if(c>d) s=s.replace(/\./g,'').replace(',','.');
+    else s=s.replace(/,/g,'');
+  } else if(c!==-1){
+    const p=s.split(',');
+    if(p.length===2 && p[1].length<=2) s=p[0].replace(/\./g,'')+'.'+p[1];
+    else s=s.replace(/,/g,'');
+  } else if(d!==-1){
+    const p=s.split('.');
+    if(p.length>2) s=s.replace(/\./g,'');
+  }
+  return Number(s)||0;
+}
+
+function rupiah(v){
+  return new Intl.NumberFormat('id-ID',{style:'currency',currency:'IDR',maximumFractionDigits:0}).format(num(v));
+}
+function clean(v){ return String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function esc(s){ return String(s ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+function escAttr(s){ return esc(s).replace(/`/g,'&#96;'); }
+
+
+/* =========================
+ * v1.5.2 Laba Rugi Source Reader UI
+ * ========================= */
+
+function renderMoneyRows(title, rows){
+  rows = rows || [];
+  return `<h6 class="fw-bold mt-4">${esc(title)}</h6>${table(rows, [['Uraian','label'],['Akun','akun'],['Nominal','nominal','money']])}`;
+}
+function renderLabaRugi(){
+  const lr = state.data?.labaRugi || {};
+  if(!state.heavyLoaded && (lr.mode || '').includes('SOURCE')){
+    // tampilkan ringkasan dulu; detail HPP akan lengkap setelah lazy load selesai
+  }
+  setHtml('labaRugiBox', `
+    <div class="row g-3 mb-4">
+      <div class="col-md-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted fw-bold small">Total Penjualan</div><h5 class="fw-bolder text-success mb-0">${rupiah(lr.totalPenjualan)}</h5></div></div>
+      <div class="col-md-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted fw-bold small">Pendapatan Bersih</div><h5 class="fw-bolder text-primary mb-0">${rupiah(lr.pendapatanBersih)}</h5></div></div>
+      <div class="col-md-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted fw-bold small">HPP / COGS</div><h5 class="fw-bolder text-danger mb-0">${rupiah(lr.hargaPokokPenjualan)}</h5><small class="text-muted">Final ${rupiah(lr.cogsFinal)} · Prov ${rupiah(lr.cogsProvisional)}</small></div></div>
+      <div class="col-md-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted fw-bold small">Laba Operasional</div><h5 class="fw-bolder text-dark mb-0">${rupiah(lr.labaOperasional ?? lr.labaBersih)}</h5></div></div>
+    </div>
+    <div class="card p-4 shadow-sm mb-4">
+      <div class="fw-bold text-primary">LAPORAN LABA / RUGI</div>
+      <div class="small text-muted">${esc(lr.note || 'Data dibaca langsung dari modul sumber. Data_Jurnal hanya kas/bank dan penyesuaian manual.')}</div>
+    </div>
+    <h5 class="fw-bolder text-success">PENDAPATAN</h5>
+    ${renderMoneyRows('1. Penjualan Konvensional', lr.penjualanKonvensionalRows || [])}
+    <div class="text-end fw-bold">Subtotal Penjualan Konvensional: ${rupiah(lr.subtotalPenjualanKonvensional)}</div>
+    ${renderMoneyRows('2. Penjualan Online', lr.penjualanOnlineRows || [])}
+    <div class="text-end fw-bold">Subtotal Penjualan Online: ${rupiah(lr.subtotalPenjualanOnline)}</div>
+    <div class="text-end fw-bolder border-top pt-2 mt-2">TOTAL PENJUALAN: ${rupiah(lr.totalPenjualan)}</div>
+    ${renderMoneyRows('3. Potongan Penjualan', lr.potonganPenjualanRows || [])}
+    <div class="text-end fw-bold">Total Potongan Penjualan: ${rupiah(lr.totalPotonganPenjualan)}</div>
+    <div class="text-end fw-bolder fs-5 border-top pt-2 mt-2">PENDAPATAN BERSIH: ${rupiah(lr.pendapatanBersih)}</div>
+    <h5 class="fw-bolder text-danger mt-5">HARGA POKOK PENJUALAN</h5>
+    ${table(lr.hppRows || [], [['Uraian','label'],['Nominal','nominal','money']])}
+    ${lr.cogsRows && lr.cogsRows.length ? `<h6 class="fw-bold mt-4">Detail COGS dari Gudang</h6>${table(lr.cogsRows, [['Bucket','akun'],['Status','costStatus'],['Nominal','nominal','money']])}` : ''}
+    <div class="text-end fw-bolder border-top pt-2 mt-2">LABA KOTOR: ${rupiah(lr.labaKotor)}</div>
+    <h5 class="fw-bolder text-warning mt-5">BIAYA PENJUALAN</h5>
+    ${table(lr.biayaPenjualanRows || [], [['Akun','akun'],['Nominal','nominal','money']])}
+    <div class="text-end fw-bold">Total Biaya Penjualan: ${rupiah(lr.totalBiayaPenjualan)}</div>
+    <h5 class="fw-bolder text-secondary mt-5">BIAYA ADMINISTRASI & UMUM</h5>
+    ${table(lr.biayaAdminRows || [], [['Akun','akun'],['Nominal','nominal','money']])}
+    <div class="text-end fw-bold">Total Biaya Adm & Umum: ${rupiah(lr.totalBiayaAdmin)}</div>
+    ${(lr.bebanLainRows || []).length ? `<h5 class="fw-bolder text-secondary mt-5">BEBAN LAIN</h5>${table(lr.bebanLainRows, [['Akun','akun'],['Nominal','nominal','money']])}<div class="text-end fw-bold">Total Beban Lain: ${rupiah(lr.totalBebanLain)}</div>` : ''}
+    <div class="text-end fw-bolder fs-4 border-top pt-3 mt-3">LABA/RUGI OPERASIONAL: ${rupiah(lr.labaOperasional ?? lr.labaBersih)}</div>
+  `);
+}
+
+
+/* =========================
+ * v1.6.1 Date Range Filter + Financial Print Reports
+ * ========================= */
+function financeMonthNames(){ return ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember']; }
+function dateKeyLocal(d){
+  const x = d instanceof Date ? d : new Date(d);
+  if(isNaN(x.getTime())) return '';
+  return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0') + '-' + String(x.getDate()).padStart(2,'0');
+}
+function currentMonthRange(){
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth()+1, 0);
+  return { dateStart: dateKeyLocal(start), dateEnd: dateKeyLocal(end), period: now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') };
+}
+function normalizeDateInput(v){
+  const s = String(v || '').trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? '' : dateKeyLocal(d);
+}
+function getActiveReportRange(){
+  if(!state.reportStart || !state.reportEnd){
+    const r = currentMonthRange();
+    state.reportStart = r.dateStart;
+    state.reportEnd = r.dateEnd;
+    state.periodKey = r.period;
+  }
+  if(state.reportStart > state.reportEnd){ const t = state.reportStart; state.reportStart = state.reportEnd; state.reportEnd = t; }
+  state.periodKey = String(state.reportStart || '').slice(0,7) || currentMonthRange().period;
+  return { dateStart: state.reportStart, dateEnd: state.reportEnd, period: state.periodKey };
+}
+function getActivePeriodKey(){ return getActiveReportRange().period; }
+function getFinanceFilterPayload(){ return getActiveReportRange(); }
+function isFullMonthRange(r){
+  if(!r || !r.dateStart || !r.dateEnd) return false;
+  const s = new Date(r.dateStart + 'T00:00:00');
+  const e = new Date(r.dateEnd + 'T00:00:00');
+  if(isNaN(s.getTime()) || isNaN(e.getTime())) return false;
+  const first = new Date(s.getFullYear(), s.getMonth(), 1);
+  const last = new Date(s.getFullYear(), s.getMonth()+1, 0);
+  return dateKeyLocal(first) === r.dateStart && dateKeyLocal(last) === r.dateEnd;
+}
+function formatTanggalIndo(key){
+  const m = String(key || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m) return key || '';
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+function periodLabel(){
+  const r = getActiveReportRange();
+  if(isFullMonthRange(r)){
+    const m = String(r.dateStart).match(/^(\d{4})-(\d{2})/);
+    return m ? (financeMonthNames()[Number(m[2])-1] + ' ' + m[1]) : `${formatTanggalIndo(r.dateStart)} - ${formatTanggalIndo(r.dateEnd)}`;
+  }
+  return `${formatTanggalIndo(r.dateStart)} - ${formatTanggalIndo(r.dateEnd)}`;
+}
+function initPeriodFilter(){
+  const r = currentMonthRange();
+  state.reportStart = state.reportStart || r.dateStart;
+  state.reportEnd = state.reportEnd || r.dateEnd;
+  state.periodKey = state.periodKey || r.period;
+  setPeriodControlsFromRange(getActiveReportRange());
+  syncPeriodUiLabel();
+}
+function setPeriodControlsFromRange(r){
+  const awal = document.getElementById('filterTanggalAwal');
+  const akhir = document.getElementById('filterTanggalAkhir');
+  if(awal) awal.value = r.dateStart || '';
+  if(akhir) akhir.value = r.dateEnd || '';
+}
+function readPeriodControls(){
+  const fallback = currentMonthRange();
+  const awal = normalizeDateInput(document.getElementById('filterTanggalAwal')?.value) || fallback.dateStart;
+  const akhir = normalizeDateInput(document.getElementById('filterTanggalAkhir')?.value) || fallback.dateEnd;
+  return awal <= akhir ? { dateStart: awal, dateEnd: akhir, period: awal.slice(0,7) } : { dateStart: akhir, dateEnd: awal, period: akhir.slice(0,7) };
+}
+function syncPeriodUiLabel(){
+  const label = periodLabel();
+  document.querySelectorAll('[data-fin-period-label]').forEach(el => el.textContent = label);
+}
+function applyReportPeriod(){
+  const next = readPeriodControls();
+  const current = getActiveReportRange();
+  if(next.dateStart === current.dateStart && next.dateEnd === current.dateEnd){ toast('Periode sudah aktif: ' + periodLabel(), 'info'); return; }
+  state.reportStart = next.dateStart;
+  state.reportEnd = next.dateEnd;
+  state.periodKey = next.period;
+  state.heavyLoaded = false;
+  state.renderedTabs = {};
+  state.bankStatementLoaded = false;
+  state.bankStatement = null;
+  state.data = Object.assign({}, state.data || {}, { cogmCogs: { deferred:true, periodKey:next.period, dateStart:next.dateStart, dateEnd:next.dateEnd }, labaRugi: {}, neraca: {} });
+  refreshAll({ silent:false, source:'date_range_filter', lite:true });
+}
+function resetReportPeriod(){
+  const r = currentMonthRange();
+  state.reportStart = r.dateStart; state.reportEnd = r.dateEnd; state.periodKey = r.period;
+  setPeriodControlsFromRange(r);
+  state.heavyLoaded = false; state.renderedTabs = {};
+  state.bankStatementLoaded = false;
+  state.bankStatement = null;
+  refreshAll({ silent:false, source:'period_reset', lite:true });
+}
+function reportTitleForTab(tab){
+  tab = normalizeFinanceTab(tab || state.activeTab || 'dashboard');
+  if(tab === 'labarugi') return 'Laporan Laba / Rugi';
+  if(tab === 'neraca') return 'Neraca';
+  if(tab === 'cogm') return 'Laporan COGM & COGS';
+  if(tab === 'dashboard') return 'Ringkasan Finance';
+  if(tab === 'aruskas') return 'Laporan Arus Kas';
+  if(tab === 'piutang') return 'Laporan Piutang';
+  if(tab === 'hutang') return 'Laporan Hutang';
+  return 'Laporan Finance';
+}
+function reportElementForTab(tab){
+  tab = normalizeFinanceTab(tab || state.activeTab || 'dashboard');
+  if(tab === 'labarugi') return document.getElementById('labaRugiBox');
+  if(tab === 'neraca') return document.getElementById('neracaBox');
+  if(tab === 'cogm') return document.getElementById('cogmBox');
+  if(tab === 'dashboard') return document.getElementById('tab-dashboard');
+  if(tab === 'aruskas') return document.getElementById('arusKasTable');
+  if(tab === 'piutang') return document.getElementById('piutangTable');
+  if(tab === 'hutang') return document.getElementById('hutangTable');
+  return document.getElementById('tab-' + tab);
+}
+function moneyCell(label, amount, bold){ return `<tr class="${bold?'bold':''}"><td>${esc(label || '')}</td><td class="rp">Rp</td><td class="num">${rupiah(amount).replace('Rp ','')}</td></tr>`; }
+function reportRows(title, rows, totalLabel, totalValue){
+  let html = `<tr class="section"><td colspan="3">${esc(title)}</td></tr>`;
+  (rows || []).forEach(r => html += moneyCell(r.label || r.akun || r.store || r.komponen || '-', r.nominal ?? r.saldo ?? 0, false));
+  if(totalLabel) html += moneyCell(totalLabel, totalValue, true);
+  return html;
+}
+function buildLabaRugiPrint(){
+  const lr = state.data?.labaRugi || {};
+  return `<table class="report-table"><tbody>
+    <tr class="section"><td colspan="3">PENDAPATAN</td></tr>
+    ${reportRows('1. Penjualan Konvensional', lr.penjualanKonvensionalRows || [], 'Subtotal Penjualan Konvensional', lr.subtotalPenjualanKonvensional)}
+    ${reportRows('2. Penjualan Online', lr.penjualanOnlineRows || [], 'Subtotal Penjualan Online', lr.subtotalPenjualanOnline)}
+    ${moneyCell('TOTAL PENJUALAN', lr.totalPenjualan, true)}
+    ${reportRows('3. Potongan Penjualan', lr.potonganPenjualanRows || [], 'Total Potongan Penjualan', lr.totalPotonganPenjualan)}
+    ${moneyCell('PENDAPATAN BERSIH', lr.pendapatanBersih, true)}
+    <tr class="spacer"><td colspan="3"></td></tr>
+    ${reportRows('HARGA POKOK PENJUALAN', lr.hppRows || [], 'Harga Pokok Penjualan', lr.hargaPokokPenjualan)}
+    ${moneyCell('LABA KOTOR', lr.labaKotor, true)}
+    <tr class="spacer"><td colspan="3"></td></tr>
+    ${reportRows('BIAYA PENJUALAN', lr.biayaPenjualanRows || [], 'Total Biaya Penjualan', lr.totalBiayaPenjualan)}
+    <tr class="spacer"><td colspan="3"></td></tr>
+    ${reportRows('BIAYA ADMINISTRASI & UMUM', lr.biayaAdminRows || [], 'Total Biaya Adm & Umum', lr.totalBiayaAdmin)}
+    ${(lr.bebanLainRows || []).length ? reportRows('BEBAN LAIN', lr.bebanLainRows, 'Total Beban Lain', lr.totalBebanLain) : ''}
+    ${moneyCell('LABA/RUGI OPERASIONAL', lr.labaOperasional ?? lr.labaBersih, true)}
+  </tbody></table>`;
+}
+function buildNeracaPrint(){
+  const n = state.data?.neraca || {};
+  return `<table class="report-table"><tbody>
+    ${reportRows('ASET', n.aset || [], 'Total Aset', n.totalAset)}
+    <tr class="spacer"><td colspan="3"></td></tr>
+    ${reportRows('LIABILITAS', n.liabilitas || [], 'Total Liabilitas', n.totalLiabilitas)}
+    <tr class="spacer"><td colspan="3"></td></tr>
+    ${reportRows('EKUITAS', n.ekuitas || [], 'Total Ekuitas', n.totalEkuitas)}
+  </tbody></table>`;
+}
+function buildCogmPrint(){
+  const c = state.data?.cogmCogs || {};
+  return `<table class="report-table"><tbody>${reportRows('RINGKASAN COGM & COGS', c.rows || [], '', 0)}</tbody></table><div class="small-note">${esc(c.note || '')}</div>`;
+}
+function buildGenericPrint(tab){ const el = reportElementForTab(tab); return el ? `<div class="generic-print">${el.innerHTML}</div>` : ''; }
+function buildFinancialPrintContent(tab){
+  tab = normalizeFinanceTab(tab || state.activeTab || 'dashboard');
+  if(tab === 'labarugi') return buildLabaRugiPrint();
+  if(tab === 'neraca') return buildNeracaPrint();
+  if(tab === 'cogm') return buildCogmPrint();
+  return buildGenericPrint(tab);
+}
+function printFinanceReport(tab){
+  tab = normalizeFinanceTab(tab || state.activeTab || 'dashboard');
+  if((tab === 'labarugi' || tab === 'neraca' || tab === 'cogm') && !state.heavyLoaded){
+    toast('Memuat data lengkap sebelum cetak...', 'info');
+    ensureFinanceTabData(tab);
+    setTimeout(()=>printFinanceReport(tab), 1800);
+    return;
+  }
+  const title = reportTitleForTab(tab);
+  const period = periodLabel();
+  const content = buildFinancialPrintContent(tab);
+  if(!content){ toast('Area laporan tidak ditemukan.', 'error'); return; }
+  const companyName = (state.bootstrap?.company?.name || state.bootstrap?.companyName || 'CV KIRAL');
+  const companyAddr = (state.bootstrap?.company?.address || state.bootstrap?.companyAddress || '');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)} ${esc(period)}</title><style>
+    @page{size:A4;margin:14mm 13mm}body{font-family:Arial,Helvetica,sans-serif;color:#111;font-size:11.5px}.kop{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:9px;margin-bottom:12px}.company{font-size:18px;font-weight:800;letter-spacing:.2px}.addr{font-size:10.5px;color:#555;margin-top:3px}.report-title{text-align:right;font-size:16px;font-weight:800}.period{text-align:right;font-size:12px;font-weight:700;margin-top:3px}.report-table{width:100%;border-collapse:collapse}.report-table td{padding:3.8px 2px;vertical-align:top}.report-table .section td{font-weight:800;text-transform:uppercase;padding-top:10px;padding-bottom:4px}.report-table .bold td{font-weight:800;border-top:1.4px solid #111}.report-table .spacer td{height:7px}.rp{width:28px;text-align:center}.num{width:150px;text-align:right}.small-note{font-size:10px;color:#666;margin-top:10px}.generic-print .btn,.generic-print .badge,.generic-print .alert,.generic-print .small.text-muted,.generic-print .text-muted{display:none!important}.generic-print .card{box-shadow:none!important;border:0!important}.print-footer{margin-top:22px;border-top:1px solid #999;padding-top:7px;font-size:9.5px;color:#666;display:flex;justify-content:space-between}
+    </style></head><body><div class="kop"><div><div class="company">${esc(companyName)}</div>${companyAddr?`<div class="addr">${esc(companyAddr)}</div>`:''}</div><div><div class="report-title">${esc(title)}</div><div class="period">${esc(period)}</div></div></div>${content}<div class="print-footer"><span>ERP Finance CV Kiral</span><span>Dicetak ${new Date().toLocaleString('id-ID')}</span></div><script>window.onload=function(){setTimeout(function(){window.print();},300)}<\/script></body></html>`;
+  const w = window.open('', '_blank');
+  if(!w){ toast('Popup print diblokir browser.', 'warning'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+}
+function ensureFinanceTabData(tab){
+  tab = normalizeFinanceTab(tab);
+  if(tab !== 'neraca' && tab !== 'cogm' && tab !== 'labarugi') return;
+  if(state.heavyLoaded || __financeLoading) return;
+  __financeLoading = true;
+  showStatus(tab === 'labarugi' ? 'Memuat Laba/Rugi lengkap periode ' + periodLabel() + '...' : 'Memuat COGM/COGS & valuasi stok periode ' + periodLabel() + '...', false);
+  runGasFinance('FIN_getFinanceHeavyData', [getFinanceFilterPayload()], res => {
+    __financeLoading = false;
+    state.data = Object.assign({}, state.data || {}, res || {});
+    state.heavyLoaded = !!(res && res.heavyLoaded);
+    renderActiveTab();
+    showStatus('');
+    renderSourceWarnings();
+  }, err => {
+    __financeLoading = false;
+    showStatus((err && err.message) || String(err), true);
+  });
+}
+// Ekspos aksi rekonsiliasi secara eksplisit untuk kompatibilitas HTML Service GAS.
+window.bukaModalMatchBank = bukaModalMatchBank;
+window.unlinkBankStatement = unlinkBankStatement;
+window.submitBankReconMultiMatch = submitBankReconMultiMatch;
+window.toggleBankReconCandidate = toggleBankReconCandidate;
+window.filterBankReconCandidates = filterBankReconCandidates;
+window.clearBankReconSelection = clearBankReconSelection;
+window.submitCreateJurnalFromBank = submitCreateJurnalFromBank;
+window.submitEditJurnal = submitEditJurnal;
+</script>

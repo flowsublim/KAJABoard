@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portal ERP CV KIRAL</title>
+  <?!= include('CSS'); ?>
+</head>
+<body>
+<script>window.__BOOTSTRAP__ = <?!= BOOTSTRAP_JSON ?>;</script>
+
+<div class="portal-wrap" id="portalApp">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">ERP</div>
+      <h1>Portal ERP CV KIRAL</h1>
+    </div>
+    <button class="logout" onclick="logoutPortal()" title="Logout dari semua modul">⏻</button>
+  </header>
+
+  <main class="module-panel">
+    <div id="moduleGrid" class="module-grid"></div>
+    <div id="moduleEmpty" class="empty hide">Belum ada modul yang bisa dibuka.</div>
+  </main>
+</div>
+
+<div class="overlay" id="loginOverlay">
+  <div class="login-card" id="loginBox"></div>
+</div>
+
+<div class="toast" id="toastBox"></div>
+
+<?!= include('JS'); ?>
+</body>
+</html>

@@ -1,0 +1,1579 @@
+<script>
+  // ================= STAGE 1 FLOW SESSION + SAFE GAS RUNNER =================
+  var PURCH_SESSION = window.PURCH_BOOTSTRAP || {};
+  var PURCH_LAST_HEARTBEAT = (PURCH_SESSION.heartbeat && PURCH_SESSION.heartbeat.version) || '';
+  var PURCH_HEARTBEAT_TIMER = null;
+  var PURCH_ACTIVE_TAB = 'dashboard';
+  // Cache status data tab supaya pindah tab tidak selalu memanggil server.
+  // Data tetap bisa di-refresh oleh heartbeat 60 detik atau aksi simpan/update.
+  var PURCH_TAB_DATA_LOADED = { dashboard:false, riwayat:false, hutang:false, 'rekap-maklun':false };
+
+  function purchBootStatus(msg, type) {
+    var el = document.getElementById('purch-boot-status');
+    if (!el) return;
+    el.className = 'small mb-2 ' + (type === 'error' ? 'text-danger fw-bold' : (type === 'success' ? 'text-success' : 'text-muted'));
+    el.textContent = msg || '';
+  }
+
+  function purchInitSessionUi() {
+    var name = PURCH_SESSION.displayName || PURCH_SESSION.email || 'User';
+    var el = document.getElementById('user-email');
+    if (el) el.textContent = name;
+    purchBootStatus('Menghubungkan database Purchasing...', 'info');
+  }
+
+  function purchSessionArgs() {
+    var email = PURCH_SESSION.email || PURCH_SESSION.vouch || '';
+    var paspor = PURCH_SESSION.paspor || PURCH_SESSION.passport || '';
+    if (!email || !paspor) throw new Error('Sesi tidak lengkap. Masuk ulang dari Portal.');
+    return [email, paspor];
+  }
+
+  function runGasPurch(functionName, args, onSuccess, onFailure) {
+    args = Array.isArray(args) ? args.slice() : [];
+    var finalArgs;
+    try { finalArgs = args.concat(purchSessionArgs()); }
+    catch (sessionErr) {
+      purchBootStatus(sessionErr.message, 'error');
+      showToast('❌ ' + sessionErr.message, 'error');
+      if (typeof onFailure === 'function') onFailure(sessionErr);
+      return;
+    }
+    var fail = function(err) {
+      var msg = (err && err.message) ? err.message : String(err || 'Server error');
+      console.error('GAS Error [' + functionName + ']:', err);
+      showToast('❌ ' + msg, 'error');
+      if (typeof onFailure === 'function') onFailure(err);
+    };
+    try {
+      var runner = google.script.run
+        .withFailureHandler(fail)
+        .withSuccessHandler(function(res){ if (typeof onSuccess === 'function') onSuccess(res); });
+      if (!runner[functionName]) throw new Error('Fungsi server tidak ditemukan: ' + functionName);
+      runner[functionName](...finalArgs);
+    } catch (err) { fail(err); }
+  }
+
+  function purchModalHide(id) {
+    var el = document.getElementById(id);
+    if (!el || !window.bootstrap || !bootstrap.Modal) return;
+    var inst = bootstrap.Modal.getInstance(el) || bootstrap.Modal.getOrCreateInstance(el);
+    inst.hide();
+  }
+
+  function purchModalShow(id) {
+    var el = document.getElementById(id);
+    if (!el || !window.bootstrap || !bootstrap.Modal) return;
+    bootstrap.Modal.getOrCreateInstance(el).show();
+  }
+
+  function PURCH_logout() {
+    runGasPurch('PURCH_logout', [], function(res) {
+      showToast('✅ Logout berhasil', 'success');
+      setTimeout(function(){ window.top.location.href = (res && res.portalUrl) || (PURCH_SESSION.portalUrl || '/'); }, 350);
+    });
+  }
+  window.PURCH_logout = PURCH_logout;
+
+  // ================= FUNGSI TOAST NOTIFIKASI OTOMATIS =================
+  function showToast(message, type = "success") {
+    var container = document.getElementById("toast-container");
+    if(!container) return;
+    
+    var toast = document.createElement("div");
+    toast.className = "custom-toast toast-" + type;
+    toast.innerHTML = message;
+    container.appendChild(toast);
+    
+    setTimeout(function() {
+        toast.classList.add("fade-out");
+        setTimeout(function() { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+    }, 2500); 
+  }
+
+  
+  function numInput(v) {
+    var s = (v == null ? "" : String(v)).trim().replace(/[^0-9,.-]/g, "");
+    if (!s) return 0;
+    var lc = s.lastIndexOf(","), ld = s.lastIndexOf(".");
+    if (lc > -1 && ld > -1) { s = lc > ld ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, ""); }
+    else if (lc > -1) { s = s.replace(/\./g, "").replace(",", "."); }
+    var n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+  }
+
+  var master = {}, maxRows = 20, counter = { 'row-beli': 1, 'row-maklun': 1, 'row-spk': 1, 'row-dist': 1 };
+  var globalRiwayat = { beli: [], maklun: [], dist: [] };
+
+  function pindah(t, forceLoad) { 
+    PURCH_ACTIVE_TAB = t || 'dashboard';
+    ['beli','maklun','distribusi','hutang','dashboard','rekap-maklun'].forEach(x => {
+      var el = document.getElementById('tab-'+x);
+      if(el) el.classList.add('d-none');
+    }); 
+    var targetTab = document.getElementById('tab-'+t);
+    if(targetTab) targetTab.classList.remove('d-none'); 
+    
+    document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.nav-' + t).forEach(el => el.classList.add('active'));
+    
+    var boxFilter = document.getElementById('box-filter');
+    if(boxFilter) {
+      if(t === 'beli' || t === 'maklun' || t === 'distribusi') boxFilter.classList.remove('d-none'); 
+      else boxFilter.classList.add('d-none');    
+    }
+
+    // Jangan refresh data setiap pindah tab.
+    // Load hanya saat pertama kali tab dibuka, atau saat dipaksa oleh boot/heartbeat/aksi simpan.
+    loadTabDataPurch(t, !!forceLoad);
+  }
+
+  function loadTabDataPurch(t, forceLoad) {
+    if(t === 'dashboard') {
+      if(forceLoad || !PURCH_TAB_DATA_LOADED.dashboard) {
+        PURCH_TAB_DATA_LOADED.dashboard = true;
+        muatRekapSPK();
+      }
+      return;
+    }
+
+    if(t === 'hutang') {
+      if(forceLoad || !PURCH_TAB_DATA_LOADED.hutang) {
+        PURCH_TAB_DATA_LOADED.hutang = true;
+        muatHutang();
+      }
+      return;
+    }
+
+    if(t === 'rekap-maklun') {
+      if(forceLoad || !PURCH_TAB_DATA_LOADED['rekap-maklun']) {
+        PURCH_TAB_DATA_LOADED['rekap-maklun'] = true;
+        muatTagihanMaklun();
+      }
+      return;
+    }
+
+    if(t === 'beli' || t === 'maklun' || t === 'distribusi') {
+      if(forceLoad || !PURCH_TAB_DATA_LOADED.riwayat) {
+        PURCH_TAB_DATA_LOADED.riwayat = true;
+        muatRiwayatTransaksi();
+      }
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    try {
+      purchInitSessionUi();
+      renderSemuaBarisKosong();
+      refreshMasterData(function(){
+        purchBootStatus('', '');
+        pindah('dashboard', true);
+        startPurchHeartbeat();
+      });
+    } catch(e) {
+      console.error("Init Error: ", e);
+      purchBootStatus("Error UI: " + e.message, "error");
+      showToast("❌ Error UI: " + e.message, "error");
+    }
+  });
+
+  function renderSemuaBarisKosong() {
+    renderBaris("area-items-beli", "row-beli", false);
+    renderBaris("area-items-maklun", "row-maklun", true);
+    renderBarisSPK();
+    renderBarisDistribusi();
+  }
+
+  function formatToInputDate(tglStr) {
+    if(!tglStr || tglStr === "-") return "";
+    var p = tglStr.split("/");
+    if(p.length === 3) return p[2] + "-" + p[1] + "-" + p[0];
+    return tglStr;
+  }
+
+  function setSelectByText(selectId, text) {
+    var sel = document.getElementById(selectId);
+    if(!sel || !text) return;
+    Array.from(sel.options).forEach(opt => {
+      if(opt.value === text || opt.value.includes(text)) opt.selected = true;
+    });
+  }
+
+  function refreshMasterData(callback) {
+    runGasPurch('getMasterData', [], function(res) {
+        try {
+          master = res;
+          window.masterDataLocal = res;
+          window.setupPerusahaan = res.setup; 
+          
+          var optVendor = '<option value="">-- Pilih Vendor --</option>';
+          if(res.vendors) res.vendors.forEach(i => optVendor += '<option value="'+i+'">'+i+'</option>');
+          
+          ['b-vendor', 'm-vendor', 'd-maklun', 's-vendor-spk'].forEach(id => {
+             var el = document.getElementById(id);
+             if(el) el.innerHTML = optVendor;
+          });
+
+          var optFilterVendor = '<option value="">-- Semua Vendor --</option>';
+          if(res.vendors) res.vendors.forEach(i => optFilterVendor += '<option value="'+i+'">'+i+'</option>');
+          if(document.getElementById('f-vendor')) document.getElementById('f-vendor').innerHTML = optFilterVendor;
+
+          var selectPo = document.getElementById("input-nopo");
+          if (selectPo && res.poSalesData) {
+            selectPo.innerHTML = '<option value="">-- Pilih No PO (Opsional) --</option>';
+            var uniquePos = [...new Set(res.poSalesData.map(function(item) { return item.noPo; }))];
+            uniquePos.forEach(function(po) {
+              if(po && po.trim() !== "") { 
+                var opt = document.createElement("option");
+                opt.value = po; opt.textContent = "PO: " + po; 
+                selectPo.appendChild(opt);
+              }
+            });
+          }
+
+          var optKategori = '';
+          if(res.kategoriBeli) { res.kategoriBeli.forEach(k => optKategori += '<option value="'+k+'">'+k+'</option>'); }
+          if(document.getElementById('b-tipe')) document.getElementById('b-tipe').innerHTML = optKategori;
+
+          // 💡 PERBAIKAN 1: ISI DROPDOWN SPK UNTUK MAKLUN DAN DISTRIBUSI BAHAN
+          var optSPK = '<option value="">-- Pilih SPK --</option>';
+          if(res.spk) {
+              res.spk.forEach(s => optSPK += `<option value="${s}">${s}</option>`);
+          }
+          ['m-spk', 'd-spk'].forEach(id => {
+             var el = document.getElementById(id);
+             if(el) {
+                 el.innerHTML = optSPK;
+                 // 💡 PERBAIKAN 2: Pasang trigger otomatis! Saat SPK dipilih, Item Maklun langsung ganti
+                 if(id === 'm-spk') el.onchange = updItemMaklunForm;
+             }
+          });
+
+          var optBeliDist = '<option value="">-- Pilih Bahan / Aksesoris --</option>';
+          var groupedBahan = {};
+          if(res.listBahan) {
+              res.listBahan.forEach(b => {
+                 var s = b.sub || "Umum";
+                 if(!groupedBahan[s]) groupedBahan[s] = [];
+                 groupedBahan[s].push(b);
+              });
+              for(var subKat in groupedBahan) {
+                 optBeliDist += `<optgroup label="📁 ${subKat}">`;
+                 groupedBahan[subKat].forEach(b => {
+                     var ikon = (b.kat || "").toLowerCase().includes("aksesoris") ? "🏷️" : "🧵";
+                     optBeliDist += `<option value="${b.nama}">${ikon} ${b.nama}</option>`;
+                 });
+                 optBeliDist += `</optgroup>`;
+              }
+          }
+          
+          document.querySelectorAll('.row-beli .i-sel').forEach(sel => { if(sel) sel.innerHTML = optBeliDist; });
+          document.querySelectorAll('.row-dist .d-item-sel').forEach(sel => { if(sel) sel.innerHTML = optBeliDist; });
+          
+          var optBahan = '<option value="">- Kosong -</option>' + optBeliDist;
+          ['s-bahan1', 's-bahan2', 's-bahan3'].forEach(id => {
+             var el = document.getElementById(id);
+             if(el) el.innerHTML = optBahan;
+          });
+
+          updateDropdownSPK();
+
+          var namaModulAktif = "Pembelian / Purchasing";
+          var htmlMenu = `<li><div class="dropdown-item fw-bold" style="background:#f8f9fa; color:#0d6efd; cursor:default;">🛒 ${namaModulAktif} (Aktif)</div></li>`;
+          var htmlPortal = "";
+          
+          if(res.modulLinks && res.modulLinks.length > 0) {
+            res.modulLinks.forEach(m => {
+              var nmLower = m.nama.toLowerCase();
+              if(nmLower.includes("utama") || nmLower.includes("portal")) {
+                htmlPortal = `<li><hr class="dropdown-divider"></li>
+                              <li><a class="dropdown-item fw-bold text-center" href="${m.url}" style="color: #dc3545; background-color: #fee2e2; padding-top: 8px; padding-bottom: 8px;" target="_top">🏠 Home / Portal Utama</a></li>`;
+              } else {
+                htmlMenu += `<li><a class="dropdown-item fw-bold text-dark" href="${m.url}" target="_top">${m.nama}</a></li>`;
+              }
+            });
+          } else {
+             htmlMenu += '<li><span class="dropdown-item text-muted" style="font-size:0.85rem;">(Belum ada Web_App_URL di Master_Module)</span></li>';
+          }
+          htmlMenu += htmlPortal;
+          
+          var containerMenu = document.getElementById("menu-modul-list");
+          if(containerMenu) containerMenu.innerHTML = htmlMenu;
+
+          if (typeof callback === 'function') callback(res);
+          else muatRiwayatTransaksi();
+          
+        } catch(renderErr) {
+          console.error("Crash saat menyusun UI Master Data:", renderErr);
+          showToast("❌ Gagal menyusun tampilan: " + renderErr.message, "error");
+        }
+      }, function(err) {
+         var msg = (err && err.message) ? err.message : err;
+         purchBootStatus('Gagal mengambil master data: ' + msg, 'error');
+      });
+  }
+
+  // 💡 HELPER BARU: PEMBENTUK DROPDOWN PRODUK DENGAN GROUPING
+  function getOptProduk() {
+    var opt = '<option value="">-- Pilih Output / Size --</option>';
+    if(master && master.produk) {
+       var grouped = {};
+       master.produk.forEach(b => {
+           var s = b.sub || "Umum";
+           if(!grouped[s]) grouped[s] = [];
+           grouped[s].push(b);
+       });
+       for(var s in grouped) {
+           opt += `<optgroup label="📁 ${s}">`;
+           grouped[s].forEach(b => { opt += `<option value="${b.nama}">📦 ${b.nama}</option>`; });
+           opt += `</optgroup>`;
+       }
+    }
+    if(master && master.aksesorisJadi) {
+       opt += '<optgroup label="🏷️ Aksesoris Jadi">';
+       master.aksesorisJadi.forEach(i => opt += `<option value="${i}">🏷️ ${i}</option>`);
+       opt += '</optgroup>';
+    }
+    return opt;
+  }
+
+  function updateDropdownSPK() {
+    var optProd = getOptProduk();
+    document.querySelectorAll('.i-spk-prod').forEach(el => {
+        if(!el) return;
+        var valLama = el.value; 
+        el.innerHTML = optProd;
+        if(valLama) el.value = valLama;
+    });
+  }
+
+  function aturJalurSPK() {
+    var jalur = document.getElementById('s-jalur').value;
+    var divVendor = document.getElementById('area-vendor-spk');
+    if(!divVendor) return;
+    if(jalur === "Produksi Internal") {
+      divVendor.classList.add('d-none');
+      var selV = document.getElementById('s-vendor-spk');
+      if(selV) selV.value = "";
+    } else {
+      divVendor.classList.remove('d-none');
+    }
+  }
+
+  // ================= SPK: BAHAN PER OUTPUT (modal-only, tidak ikut boot) =================
+  function purchCleanSpkSelectValue_(v) {
+    return (v || '').toString()
+      .replace(/^\s*(🧵|🏷️|📦)\s*/g, '')
+      .trim();
+  }
+
+  function purchGetOptBahanSPK_() {
+    var opt = '<option value="">-- Pilih Bahan untuk Output Ini --</option>';
+    var grouped = {};
+    if(master && master.listBahan) {
+      master.listBahan.forEach(function(b) {
+        var sub = b.sub || 'Umum';
+        if(!grouped[sub]) grouped[sub] = [];
+        grouped[sub].push(b);
+      });
+      Object.keys(grouped).forEach(function(sub) {
+        opt += '<optgroup label="📁 ' + sub + '">';
+        grouped[sub].forEach(function(b) {
+          var ikon = ((b.kat || '').toLowerCase().indexOf('aksesoris') >= 0) ? '🏷️' : '🧵';
+          opt += '<option value="' + b.nama + '">' + ikon + ' ' + b.nama + '</option>';
+        });
+        opt += '</optgroup>';
+      });
+    }
+    return opt;
+  }
+
+  function purchHideLegacyBahanSpkRow_() {
+    ['s-bahan1', 's-bahan2', 's-bahan3'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if(el) {
+        el.value = '';
+        var row = el.closest('.row');
+        if(row) row.classList.add('d-none');
+      }
+    });
+  }
+
+  function purchBuildSpkRowHtml_(i, dNone, optOutput, optBahan, it) {
+    it = it || {};
+    var qty = it.qty || 0;
+    var bahanVal = purchCleanSpkSelectValue_(it.bahan || '');
+    var fotoLama = it.fotoItem || '';
+    var labelFoto = fotoLama ? '<small class="text-success fw-bold d-block mt-1">✓ Gambar Tersimpan</small>' : '';
+
+    var vDepan = '', vKiri = '', vKanan = '', vBelakang = '', vSintong = '', vUmum = '';
+    if (it.catatanItem && it.catatanItem.toString().indexOf('{') === 0) {
+      try {
+        var p = JSON.parse(it.catatanItem);
+        vDepan = p.depan || ''; vKiri = p.kiri || ''; vKanan = p.kanan || '';
+        vBelakang = p.belakang || ''; vSintong = p.sintong || ''; vUmum = p.umum || '';
+      } catch(e) { vUmum = it.catatanItem || ''; }
+    } else {
+      vUmum = it.catatanItem || '';
+    }
+
+    return `
+        <div class="row align-items-center mb-3 row-spk p-3 box-item-spk rounded shadow-sm ${dNone || ''}" id="row-spk-${i}">
+          <div class="col-12 d-flex justify-content-between border-bottom border-secondary pb-2 mb-2">
+            <span class="fw-bold text-dark fs-6">📦 Item Output #${i}</span>
+            <button type="button" class="btn btn-sm btn-danger fw-bold px-2 py-0" onclick="hapusBaris('row-spk', ${i})">Hapus</button>
+          </div>
+          <div class="col-md-5 mb-2">
+            <label class="text-muted fw-bold" style="font-size:0.75rem;">Pilih Item / Varian</label>
+            <select class="form-select border-primary fw-bold i-spk-prod" id="i-prod-${i}">${optOutput}</select>
+          </div>
+          <div class="col-md-5 mb-2">
+            <label class="text-muted fw-bold" style="font-size:0.75rem;">Bahan untuk Output Ini</label>
+            <select class="form-select border-success fw-bold i-spk-bahan" id="i-bahan-${i}">${optBahan}</select>
+          </div>
+          <div class="col-md-2 mb-2">
+            <label class="text-danger fw-bold" style="font-size:0.75rem;">Target QTY</label>
+            <input type="number" class="form-control border-danger fw-bold i-spk-qty text-center" placeholder="0" value="${qty}">
+          </div>
+          <div class="col-md-12 mb-2">
+            <label class="text-muted fw-bold" style="font-size:0.75rem;">📝 Detail Catatan Item / Posisi Bordir (Kosongkan yg tidak perlu)</label>
+            <div class="row g-2">
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-depan" placeholder="Depan" value="${vDepan}"></div>
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-kiri" placeholder="Kiri" value="${vKiri}"></div>
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-kanan" placeholder="Kanan" value="${vKanan}"></div>
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-belakang" placeholder="Belakang" value="${vBelakang}"></div>
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-sintong" placeholder="Sintong" value="${vSintong}"></div>
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-primary i-spk-catatan" placeholder="Cat. Umum" value="${vUmum}"></div>
+            </div>
+          </div>
+          <div class="col-md-12 mb-2">
+            <label class="text-muted fw-bold" style="font-size:0.75rem;">📸 Foto Referensi Item</label>
+            <input type="file" class="form-control border-info i-spk-foto" accept="image/*" multiple>
+            <input type="hidden" class="i-spk-foto-lama" value="${fotoLama}">
+            ${labelFoto}
+          </div>
+        </div>`;
+  }
+
+
+  function renderBaris(targetId, rowClass, isMaklun) {
+    var area = document.getElementById(targetId);
+    if(!area) return;
+    
+    var html = "";
+    for(var i=1; i<=maxRows; i++) {
+      var dNone = (i > 1) ? "d-none" : "";
+      html += `
+        <div class="row align-items-center mb-2 ${rowClass} ${dNone}" id="${rowClass}-${i}">
+          <div class="col-12 col-md-5 mb-1 mb-md-0">
+            <select class="form-select border-primary i-sel ${isMaklun?'m-sel':'b-sel'}" id="${rowClass}-sel-${i}"><option value="">-- Pilih Item --</option></select>
+            <input type="text" class="form-control border-primary i-txt d-none ${isMaklun?'m-txt':'b-txt'}" id="${rowClass}-txt-${i}" placeholder="Nama Jasa / Kebutuhan...">
+          </div>
+          <div class="col-5 col-md-3"><input type="number" class="form-control fw-bold i-qty" id="${rowClass}-qty-${i}" placeholder="QTY" value="0"></div>
+          <div class="col-5 col-md-3"><input type="number" class="form-control border-success i-hrg" id="${rowClass}-hrg-${i}" placeholder="Harga Satuan" value="0"></div>
+          <div class="col-2 col-md-1 d-flex justify-content-end"><button type="button" class="btn btn-outline-danger fw-bold px-2 py-1" onclick="hapusBaris('${rowClass}', ${i})">X</button></div>
+        </div>`;
+    }
+    area.innerHTML = html;
+  }
+
+  function renderBarisSPK() {
+    var area = document.getElementById("area-items-spk");
+    if(!area) return;
+    
+    var html = "";
+    for(var i=1; i<=maxRows; i++) {
+      var dNone = (i > 1) ? "d-none" : "";
+      html += `
+        <div class="row align-items-center mb-3 row-spk p-3 box-item-spk rounded shadow-sm ${dNone}" id="row-spk-${i}">
+          <div class="col-12 d-flex justify-content-between border-bottom border-secondary pb-2 mb-2">
+            <span class="fw-bold text-dark fs-6">📦 Item Output #${i}</span>
+            <button type="button" class="btn btn-sm btn-danger fw-bold px-2 py-0" onclick="hapusBaris('row-spk', ${i})">Hapus</button>
+          </div>
+          <div class="col-md-8 mb-2">
+            <label class="text-muted fw-bold" style="font-size:0.75rem;">Pilih Item / Varian</label>
+            <select class="form-select border-primary fw-bold i-spk-prod" id="i-prod-${i}"><option value="">-- Pilih Output --</option></select>
+          </div>
+          <div class="col-md-4 mb-2">
+            <label class="text-danger fw-bold" style="font-size:0.75rem;">Target QTY Item</label>
+            <input type="number" class="form-control border-danger fw-bold i-spk-qty text-center" placeholder="0" value="0">
+          </div>
+          <div class="col-md-12 mb-2">
+            <label class="text-muted fw-bold" style="font-size:0.75rem;">📝 Detail Catatan Item / Posisi Bordir (Kosongkan yg tidak perlu)</label>
+            <div class="row g-2">
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-depan" placeholder="Depan"></div>
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-kiri" placeholder="Kiri"></div>
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-kanan" placeholder="Kanan"></div>
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-belakang" placeholder="Belakang"></div>
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-sintong" placeholder="Sintong"></div>
+              <div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-primary i-spk-catatan" placeholder="Cat. Umum"></div>
+            </div>
+          </div>
+          <div class="col-md-12 mb-2">
+            <label class="text-muted fw-bold" style="font-size:0.75rem;">📸 Foto Referensi Item</label>
+            <input type="file" class="form-control border-info i-spk-foto" accept="image/*" multiple>
+            <input type="hidden" class="i-spk-foto-lama" value="">
+          </div>
+        </div>`;
+    }
+    area.innerHTML = html;
+  }
+
+  function renderBarisDistribusi() {
+    var area = document.getElementById("area-items-dist");
+    if(!area) return;
+    var html = "";
+    for(var i=1; i<=maxRows; i++) {
+      var dNone = (i > 1) ? "d-none" : "";
+      html += `
+        <div class="row align-items-center mb-2 row-dist ${dNone}" id="row-dist-${i}">
+          <div class="col-12 col-md-7 mb-1 mb-md-0">
+            <select class="form-select border-secondary d-item-sel" id="d-item-sel-${i}" style="font-size:0.9rem;"><option value="">-- Pilih Bahan --</option></select>
+          </div>
+          <div class="col-5 col-md-2"><input type="number" class="form-control fw-bold text-center border-secondary" id="d-qty-${i}" placeholder="QTY" value="0"></div>
+          <div class="col-5 col-md-2"><input type="number" class="form-control fw-bold text-center border-success px-1" id="d-hrg-${i}" placeholder="Total Rp" value="0" style="font-size:0.9rem;"></div>
+          <div class="col-2 col-md-1 d-flex justify-content-end"><button type="button" class="btn btn-outline-danger fw-bold px-2 py-1" onclick="hapusBarisDist(${i})">X</button></div>
+        </div>`;
+    }
+    area.innerHTML = html;
+  }
+
+  function tambahBaris(tipe) {
+    if(counter[tipe] < maxRows) { 
+      counter[tipe]++;
+      var el = document.getElementById(tipe + "-" + counter[tipe]);
+      if(el) el.classList.remove("d-none"); 
+    } 
+  }
+
+  function hapusBaris(tipe, id) {
+    var row = document.getElementById(tipe + "-" + id);
+    if(!row) return;
+    row.classList.add("d-none");
+    if(row.querySelector('.i-sel')) row.querySelector('.i-sel').value = "";
+    if(row.querySelector('.i-txt')) row.querySelector('.i-txt').value = "";
+    if(row.querySelector('.i-qty')) row.querySelector('.i-qty').value = "0";
+    if(row.querySelector('.i-hrg')) row.querySelector('.i-hrg').value = "0";
+    if(row.querySelector('.i-spk-prod')) row.querySelector('.i-spk-prod').value = "";
+    if(row.querySelector('.i-spk-bahan')) row.querySelector('.i-spk-bahan').value = "";
+    if(row.querySelector('.i-spk-qty')) row.querySelector('.i-spk-qty').value = "0";
+    if(row.querySelector('.i-spk-depan')) row.querySelector('.i-spk-depan').value = "";
+    if(row.querySelector('.i-spk-kiri')) row.querySelector('.i-spk-kiri').value = "";
+    if(row.querySelector('.i-spk-kanan')) row.querySelector('.i-spk-kanan').value = "";
+    if(row.querySelector('.i-spk-belakang')) row.querySelector('.i-spk-belakang').value = "";
+    if(row.querySelector('.i-spk-sintong')) row.querySelector('.i-spk-sintong').value = "";
+    if(row.querySelector('.i-spk-catatan')) row.querySelector('.i-spk-catatan').value = "";
+    if(row.querySelector('.i-spk-foto-lama')) row.querySelector('.i-spk-foto-lama').value = "";
+  }
+
+  function isPurchStockTipe(t) {
+    var k = (t || "").toString().toLowerCase();
+    return k.includes("bahan") || k.includes("aksesoris") || k.includes("packing") || k.includes("persediaan");
+  }
+
+  function updTipeBeli() {
+    var el = document.getElementById('b-tipe');
+    if(!el) return;
+    var t = el.value;
+    var isBahan = isPurchStockTipe(t);
+    document.querySelectorAll('.row-beli').forEach(row => {
+      if(isBahan) { 
+        if(row.querySelector('.i-sel')) row.querySelector('.i-sel').classList.remove('d-none'); 
+        if(row.querySelector('.i-txt')) row.querySelector('.i-txt').classList.add('d-none'); 
+      } else { 
+        if(row.querySelector('.i-sel')) row.querySelector('.i-sel').classList.add('d-none'); 
+        if(row.querySelector('.i-txt')) row.querySelector('.i-txt').classList.remove('d-none'); 
+      }
+    });
+  }
+
+  function updTipeMaklun() { 
+    var el = document.getElementById('m-tipe');
+    if(!el) return;
+    var t = el.value;
+    document.querySelectorAll('.row-maklun').forEach(row => {
+      if(t === "Barang Jadi" || t === "Jasa Spesifik Varian") { 
+        if(row.querySelector('.i-sel')) row.querySelector('.i-sel').classList.remove('d-none'); 
+        if(row.querySelector('.i-txt')) row.querySelector('.i-txt').classList.add('d-none'); 
+      } else { 
+        if(row.querySelector('.i-sel')) row.querySelector('.i-sel').classList.add('d-none'); 
+        if(row.querySelector('.i-txt')) row.querySelector('.i-txt').classList.remove('d-none'); 
+      }
+    });
+    if(t === "Barang Jadi" || t === "Jasa Spesifik Varian") updItemMaklunForm();
+  }
+
+  function updItemMaklunForm() {
+    var spkEl = document.getElementById('m-spk');
+    if(!spkEl) return;
+    var spk = spkEl.value;
+    var opt = '<option value="">-- Item Sesuai SPK --</option>';
+    
+    // 💡 Tampilkan HANYA Output/Barang dari SPK tersebut
+    if (spk) {
+      opt += '<optgroup label="📦 Output SPK Produksi (' + spk + ')">';
+      if (master.spkItems && master.spkItems[spk] && master.spkItems[spk].length > 0) {
+        var uniqueItems = [...new Set(master.spkItems[spk])];
+        uniqueItems.forEach(i => {
+          var cleanName = i.replace('📦 ', '').replace('🧵 ', '').replace('🏷️ ', '');
+          opt += '<option value="'+cleanName+'">'+cleanName+'</option>';
+        });
+      } else {
+        opt += '<option value="" disabled>⚠️ SPK kosong / tidak ditemukan</option>';
+      }
+      opt += '</optgroup>';
+    }
+
+    // Update form Maklun tanpa mereset isian jika sedang mode Edit
+    document.querySelectorAll('.row-maklun .i-sel').forEach(sel => { 
+        if(!sel) return;
+        var valLama = sel.value; 
+        sel.innerHTML = opt; 
+        if(valLama) sel.value = valLama; 
+    });
+  }
+
+  function muatRiwayatTransaksi() {
+    var tblBeli = document.getElementById("tbl-riw-beli");
+    var tblMaklun = document.getElementById("tbl-riw-maklun");
+    var tblDist = document.getElementById("tbl-riw-dist");
+    if(tblBeli) tblBeli.innerHTML = "<tr><td colspan='6'>Loading...</td></tr>";
+    if(tblMaklun) tblMaklun.innerHTML = "<tr><td colspan='7'>Loading...</td></tr>";
+    if(tblDist) tblDist.innerHTML = "<tr><td colspan='9'>Loading...</td></tr>";
+    
+    runGasPurch('getRiwayatTransaksi', [], function(data) {
+      globalRiwayat = data || {beli:[], maklun:[], dist:[]}; 
+      terapkanFilter(); 
+    }, function(err){
+      if(tblBeli) tblBeli.innerHTML = "<tr><td colspan='6' class='text-danger'>Gagal load: " + ((err&&err.message)||err) + "</td></tr>";
+      if(tblMaklun) tblMaklun.innerHTML = "<tr><td colspan='7' class='text-danger'>Gagal load data.</td></tr>";
+      if(tblDist) tblDist.innerHTML = "<tr><td colspan='9' class='text-danger'>Gagal load data.</td></tr>";
+    });
+  }
+
+  function terapkanFilter() {
+    var start = document.getElementById('f-mulai') ? document.getElementById('f-mulai').value : "";
+    var end = document.getElementById('f-selesai') ? document.getElementById('f-selesai').value : "";
+    var fVendor = document.getElementById('f-vendor') ? document.getElementById('f-vendor').value : "";
+    
+    var isDalamPeriode = function(tglInput) {
+      if(!tglInput) return true;
+      var pTgl = tglInput.split("-");
+      var tgl = new Date(pTgl[0], pTgl[1]-1, pTgl[2], 12, 0, 0).getTime();
+      if(start) { 
+         var pStart = start.split('-');
+         var sDate = new Date(pStart[0], pStart[1]-1, pStart[2], 0, 0, 0).getTime(); 
+         if(tgl < sDate) return false;
+      }
+      if(end) { 
+         var pEnd = end.split('-');
+         var eDate = new Date(pEnd[0], pEnd[1]-1, pEnd[2], 23, 59, 59).getTime(); 
+         if(tgl > eDate) return false;
+      }
+      return true;
+    };
+    var isVendorCocok = function(namaVendor) { 
+      if(!fVendor) return true;
+      return namaVendor === fVendor; 
+    };
+
+    var fBeli = globalRiwayat.beli.filter(i => isDalamPeriode(i.tglInput) && isVendorCocok(i.vendor));
+    var fMaklun = globalRiwayat.maklun.filter(i => isDalamPeriode(i.tglInput) && isVendorCocok(i.vendor));
+    var fDist = globalRiwayat.dist.filter(i => isDalamPeriode(i.tglInput) && (fVendor === "" || i.maklun === fVendor));
+    
+    var totalFiltered = 0;
+    fBeli.forEach(i => totalFiltered += (parseFloat(i.grandTotal) || 0));
+    fMaklun.forEach(i => totalFiltered += (parseFloat(i.grandTotal) || 0));
+    var elTotal = document.getElementById('f-total-nilai');
+    if(elTotal) {
+      elTotal.innerText = '';
+      elTotal.classList.add('d-none');
+    }
+
+    var tBeli = document.getElementById("tbl-riw-beli");
+    if(tBeli) {
+      if(fBeli.length === 0) tBeli.innerHTML = "<tr><td colspan='6' class='text-muted'>Tidak ada data belanja.</td></tr>";
+      else tBeli.innerHTML = fBeli.map(i => `<tr><td>${i.tglStr}</td><td class="fw-bold">${i.nota}</td><td>${i.vendor}</td><td>${i.tipe}</td><td class="text-dark fw-bold">${formatRp(i.grandTotal)}</td><td><button class="btn btn-sm btn-outline-primary py-0" onclick="editBeli('${i.trxId}')">✏️</button> <button class="btn btn-sm btn-outline-danger py-0" onclick="hapusTransaksi('Data_Pembelian', '${i.trxId}')">🗑️</button></td></tr>`).join('');
+    }
+
+    var tMak = document.getElementById("tbl-riw-maklun");
+    if(tMak) {
+      if(fMaklun.length === 0) tMak.innerHTML = "<tr><td colspan='7' class='text-muted'>Tidak ada penerimaan maklun.</td></tr>";
+      else tMak.innerHTML = fMaklun.map(i => `<tr><td><small>${i.tglStr}</small></td><td class="fw-bold">${i.nota}</td><td><span class="badge bg-danger">${i.spk}</span></td><td><small>${i.vendor}</small></td><td><small>${i.tipe}</small></td><td class="text-danger fw-bold">${formatRp(i.grandTotal)}</td><td><button class="btn btn-sm btn-outline-success py-0" onclick="editMaklun('${i.trxId}')">✏️</button> <button class="btn btn-sm btn-outline-danger py-0" onclick="hapusTransaksi('Data_Maklun', '${i.trxId}')">🗑️</button></td></tr>`).join('');
+    }
+
+    var tDist = document.getElementById("tbl-riw-dist");
+    if(tDist) {
+      if(fDist.length === 0) tDist.innerHTML = "<tr><td colspan='9' class='text-muted'>Tidak ada distribusi bahan.</td></tr>";
+      else tDist.innerHTML = fDist.map(i => `<tr><td>${i.tglStr}</td><td><span class="badge bg-secondary">${i.spk}</span></td><td>${i.maklun}</td><td>${i.kategori}</td><td class="fw-bold">${i.item}</td><td>${i.qty}</td><td class="text-primary fw-bold">${formatRp(i.harga)}</td><td><small>${i.tipeDist}</small></td><td><button class="btn btn-sm btn-outline-secondary py-0" onclick="editDist('${i.trxId}')">✏️</button> <button class="btn btn-sm btn-outline-danger py-0" onclick="hapusTransaksi('Distribusi_Maklun', '${i.trxId}')">🗑️</button></td></tr>`).join('');
+    }
+  }
+
+  function resetFilter() {
+    if(document.getElementById('f-mulai')) document.getElementById('f-mulai').value = "";
+    if(document.getElementById('f-selesai')) document.getElementById('f-selesai').value = "";
+    if(document.getElementById('f-vendor')) document.getElementById('f-vendor').value = "";
+    terapkanFilter(); 
+  }
+
+  function formatRp(angka) { return "Rp " + Math.round(angka).toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+
+  // --- PEMBELIAN ---
+  function bukaModalBeli() {
+    var form = document.getElementById("form-beli"); if(form) form.reset();
+    if(document.getElementById('b-nota-lama')) document.getElementById('b-nota-lama').value = "";
+    if(document.getElementById('modal-beli-title')) document.getElementById('modal-beli-title').innerText = "➕ Catat Belanja Umum";
+    var btn = document.getElementById('btn-beli');
+    if(btn) {
+      btn.innerText = "💾 Simpan Belanja";
+      btn.setAttribute('onclick', "eksekusiSimpanBeli('baru')");
+    }
+    counter['row-beli'] = 1;
+    document.querySelectorAll('.row-beli').forEach((r, idx) => { if(idx > 0) r.classList.add("d-none"); });
+    updTipeBeli();
+    new bootstrap.Modal(document.getElementById('modalBeli')).show();
+  }
+
+  function editBeli(trxId) {
+    var data = globalRiwayat.beli.find(x => x.trxId === trxId);
+    if(!data) { showToast("❌ Data belanja tidak ditemukan", "error"); return; }
+    
+    var form = document.getElementById("form-beli"); if(form) form.reset();
+    document.getElementById('b-nota-lama').value = data.trxId; 
+    document.getElementById('b-tgl').value = data.tglInput;
+    document.getElementById('b-nota').value = data.nota;
+    document.getElementById('b-vendor').value = data.vendor;
+    document.getElementById('b-tipe').value = data.tipe;
+    updTipeBeli();
+    counter['row-beli'] = data.items.length;
+    
+    document.querySelectorAll('.row-beli').forEach((r, idx) => {
+      hapusBaris('row-beli', idx+1);
+      if(idx < data.items.length) {
+        r.classList.remove("d-none");
+        var item = data.items[idx];
+        if(isPurchStockTipe(data.tipe)) setSelectByText(`row-beli-sel-${idx+1}`, item.nama);
+        else document.getElementById(`row-beli-txt-${idx+1}`).value = item.nama;
+        document.getElementById(`row-beli-qty-${idx+1}`).value = item.qty;
+        document.getElementById(`row-beli-hrg-${idx+1}`).value = item.harga;
+      }
+    });
+    
+    document.getElementById('modal-beli-title').innerText = "✏️ Edit Belanja Umum";
+    var btn = document.getElementById('btn-beli');
+    if(btn) {
+       btn.innerText = "💾 Update Belanja";
+       btn.setAttribute('onclick', "eksekusiSimpanBeli('edit')");
+    }
+    new bootstrap.Modal(document.getElementById('modalBeli')).show();
+  }
+
+  function eksekusiSimpanBeli(mode) {
+    var tgl = document.getElementById('b-tgl').value, nota = document.getElementById('b-nota').value, tipe = document.getElementById('b-tipe').value, vendor = document.getElementById('b-vendor').value;
+    var arrItems = [];
+    document.querySelectorAll('.row-beli').forEach(row => {
+      if(!row.classList.contains("d-none")) {
+        var isSelect = isPurchStockTipe(tipe);
+        var namaRaw = isSelect ? row.querySelector('.i-sel').value : row.querySelector('.i-txt').value;
+        var nama = namaRaw.replace('📦 ', '').replace('🧵 ', '').replace('🏷️ ', '');
+        var qty = numInput(row.querySelector('.i-qty').value), harga = numInput(row.querySelector('.i-hrg').value);
+        if(nama && qty > 0) arrItems.push({ nama: nama, qty: qty, harga: harga });
+      }
+    });
+    if(!tgl || !nota || !tipe || !vendor || arrItems.length === 0) { showToast("❌ Lengkapi Form Belanja!", "error"); return; }
+    
+    var btn = document.getElementById("btn-beli"); if(btn) { btn.innerHTML = "⏳.."; btn.disabled = true; }
+    var payload = { mode: mode, trxIdLama: document.getElementById('b-nota-lama').value, tgl: tgl, nota: nota, tipe: tipe, vendor: vendor, spk: "", jenisHutang: "Hutang Usaha", items: arrItems };
+    
+    runGasPurch('updateAtauSimpanPembelian', [payload], function(m) {
+      purchModalHide('modalBeli');
+      showToast(m, (m && m.toString().includes("❌")) ? "error" : "success");
+      if(btn) btn.disabled = false; 
+      muatRiwayatTransaksi(); muatHutang();
+    }, function(){ if(btn) btn.disabled = false; });
+  }
+
+  // --- MAKLUN ---
+  function bukaModalMaklun() {
+    var form = document.getElementById("form-maklun"); if(form) form.reset();
+    document.getElementById('m-nota-lama').value = "";
+    document.getElementById('modal-maklun-title').innerText = "➕ Catat Penerimaan Maklun";
+    var btn = document.getElementById('btn-maklun');
+    if(btn) {
+       btn.innerText = "💾 Simpan Maklun";
+       btn.setAttribute('onclick', "eksekusiSimpanMaklun('baru')");
+    }
+    counter['row-maklun'] = 1;
+    document.querySelectorAll('.row-maklun').forEach((r, idx) => { if(idx > 0) r.classList.add("d-none"); });
+    updTipeMaklun();
+    new bootstrap.Modal(document.getElementById('modalMaklun')).show();
+  }
+
+  function editMaklun(trxId) {
+    var data = globalRiwayat.maklun.find(x => x.trxId === trxId);
+    if(!data) { showToast("❌ Data Maklun tidak ditemukan", "error"); return; }
+    
+    var form = document.getElementById("form-maklun"); if(form) form.reset();
+    document.getElementById('m-nota-lama').value = data.trxId; 
+    document.getElementById('m-tgl').value = data.tglInput;
+    document.getElementById('m-nota').value = data.nota;
+    document.getElementById('m-spk').value = data.spk;
+    document.getElementById('m-vendor').value = data.vendor;
+    document.getElementById('m-tipe').value = data.tipe;
+    updTipeMaklun(); 
+
+    counter['row-maklun'] = data.items.length;
+    document.querySelectorAll('.row-maklun').forEach((r, idx) => {
+      hapusBaris('row-maklun', idx+1);
+      if(idx < data.items.length) {
+        r.classList.remove("d-none");
+        var item = data.items[idx];
+        if(data.tipe === "Barang Jadi" || data.tipe === "Jasa Spesifik Varian") setSelectByText(`row-maklun-sel-${idx+1}`, item.nama);
+        else document.getElementById(`row-maklun-txt-${idx+1}`).value = item.nama;
+        document.getElementById(`row-maklun-qty-${idx+1}`).value = item.qty;
+        document.getElementById(`row-maklun-hrg-${idx+1}`).value = item.harga;
+      }
+    });
+    
+    document.getElementById('modal-maklun-title').innerText = "✏️ Edit Hasil Maklun";
+    var btn = document.getElementById('btn-maklun');
+    if(btn) {
+       btn.innerText = "💾 Update Maklun";
+       btn.setAttribute('onclick', "eksekusiSimpanMaklun('edit')");
+    }
+    new bootstrap.Modal(document.getElementById('modalMaklun')).show();
+  }
+
+  function eksekusiSimpanMaklun(mode) {
+    var tgl = document.getElementById('m-tgl').value, nota = document.getElementById('m-nota').value, tipe = document.getElementById('m-tipe').value, vendor = document.getElementById('m-vendor').value, spk = document.getElementById('m-spk').value;
+    var arrItems = [];
+    document.querySelectorAll('.row-maklun').forEach(row => {
+      if(!row.classList.contains("d-none")) {
+        var isSelect = (tipe === 'Barang Jadi' || tipe === 'Jasa Spesifik Varian');
+        var namaRaw = isSelect ? row.querySelector('.i-sel').value : row.querySelector('.i-txt').value;
+        var nama = namaRaw.replace('📦 ', '').replace('🧵 ', '').replace('🏷️ ', '');
+        var qty = numInput(row.querySelector('.i-qty').value), harga = numInput(row.querySelector('.i-hrg').value);
+        if(nama && qty > 0) arrItems.push({ nama: nama, qty: qty, harga: harga });
+      }
+    });
+    if(!tgl || !nota || !tipe || !vendor || !spk || arrItems.length === 0) { showToast("❌ Lengkapi Form Maklun!", "error"); return; }
+    
+    var btn = document.getElementById("btn-maklun"); if(btn) { btn.innerHTML = "⏳.."; btn.disabled = true; }
+    var payload = { mode: mode, trxIdLama: document.getElementById('m-nota-lama').value, tgl: tgl, nota: nota, tipe: tipe, vendor: vendor, spk: spk, jenisHutang: "Hutang Maklun", items: arrItems };
+    
+    runGasPurch('updateAtauSimpanPembelian', [payload], function(m) {
+      purchModalHide('modalMaklun');
+      showToast(m, (m && m.toString().includes("❌")) ? "error" : "success");
+      if(btn) btn.disabled = false; 
+      muatRiwayatTransaksi(); muatHutang(); muatRekapSPK();
+    }, function(){ if(btn) btn.disabled = false; });
+  }
+
+  // --- DISTRIBUSI ---
+  function bukaModalDist() {
+    var form = document.getElementById("form-distribusi"); if(form) form.reset();
+    document.getElementById('d-row-lama').value = "";
+    counter['row-dist'] = 1;
+    document.querySelectorAll('.row-dist').forEach((r, idx) => { if(idx > 0) hapusBarisDist(idx+1); });
+    var addBtn = document.getElementById('btn-add-dist');
+    if(addBtn) addBtn.classList.remove('d-none'); 
+
+    document.getElementById('modal-dist-title').innerText = "➕ Distribusi Bahan";
+    var btn = document.getElementById('btn-dist');
+    if(btn) {
+       btn.innerText = "💾 Simpan Distribusi";
+       btn.setAttribute('onclick', "eksekusiSimpanDist('baru')");
+    }
+    new bootstrap.Modal(document.getElementById('modalDist')).show();
+  }
+
+  function editDist(trxId) {
+    var data = globalRiwayat.dist.find(x => x.trxId === trxId);
+    if(!data) { showToast("❌ Data Distribusi tidak ditemukan", "error"); return; }
+    
+    var form = document.getElementById("form-distribusi"); if(form) form.reset();
+    document.getElementById('d-row-lama').value = data.trxId; 
+    document.getElementById('d-tgl').value = data.tglInput;
+    document.getElementById('d-tipe-dist').value = data.tipeDist;
+    document.getElementById('d-spk').value = data.spk;
+    document.getElementById('d-maklun').value = data.maklun;
+
+    document.querySelectorAll('.row-dist').forEach((r, idx) => { hapusBarisDist(idx+1); });
+    document.getElementById("row-dist-1").classList.remove("d-none");
+    var addBtn = document.getElementById('btn-add-dist');
+    if(addBtn) addBtn.classList.add('d-none');
+    
+    setSelectByText('d-item-sel-1', data.item);
+    document.getElementById('d-qty-1').value = data.qty;
+    document.getElementById('d-hrg-1').value = data.harga;
+    
+    document.getElementById('modal-dist-title').innerText = "✏️ Edit Item Distribusi";
+    var btn = document.getElementById('btn-dist');
+    if(btn) {
+      btn.innerText = "💾 Update Distribusi";
+      btn.setAttribute('onclick', "eksekusiSimpanDist('edit')");
+    }
+    new bootstrap.Modal(document.getElementById('modalDist')).show();
+  }
+
+  function eksekusiSimpanDist(mode) {
+    var d = { 
+      mode: mode,
+      rowIdxLama: document.getElementById('d-row-lama').value,
+      tgl: document.getElementById('d-tgl').value, 
+      spk: document.getElementById('d-spk').value, 
+      maklun: document.getElementById('d-maklun').value, 
+      tipeDist: document.getElementById('d-tipe-dist').value, 
+      items: [] 
+    };
+    
+    document.querySelectorAll('.row-dist').forEach((row, idx) => {
+      if(!row.classList.contains("d-none")) {
+        var i = idx + 1;
+        var selEl = document.getElementById(`d-item-sel-${i}`);
+        if(!selEl) return;
+        var cleanItem = selEl.value.replace('🧵 ', '').replace('🏷️ ', ''); 
+        
+        var kat = "Bahan Baku";
+        if(master.listBahan) {
+            var matchData = master.listBahan.find(b => b.nama === cleanItem);
+            if(matchData) kat = matchData.kat;
+        }
+        var qty = numInput(document.getElementById(`d-qty-${i}`).value);
+        var harga = numInput(document.getElementById(`d-hrg-${i}`).value);
+        
+        if(cleanItem && qty > 0) d.items.push({ kategori: kat, item: cleanItem, qty: qty, harga: harga });
+      }
+    });
+    
+    if(!d.tgl || !d.spk || !d.maklun || d.items.length === 0) { 
+      showToast("❌ Lengkapi Form & minimal 1 Bahan dikirim!", "error"); return; 
+    }
+
+    var btn = document.getElementById("btn-dist"); if(btn) { btn.innerHTML = "⏳.."; btn.disabled = true; }
+    runGasPurch('updateAtauSimpanDistribusi', [d], function(m) { 
+      purchModalHide('modalDist');
+      showToast(m, (m && m.toString().includes("❌")) ? "error" : "success");
+      if(btn) btn.disabled = false; 
+      muatRiwayatTransaksi(); muatHutang(); muatRekapSPK();
+    }, function(){ if(btn) btn.disabled = false; });
+  }
+
+  function tambahBarisDist() {
+    if(counter['row-dist'] < maxRows) { 
+      counter['row-dist']++;
+      var el = document.getElementById("row-dist-" + counter['row-dist']);
+      if(el) el.classList.remove("d-none"); 
+    }
+  }
+
+  function hapusBarisDist(id) {
+    var row = document.getElementById("row-dist-" + id);
+    if(!row) return;
+    row.classList.add("d-none");
+    var sel = document.getElementById(`d-item-sel-${id}`); if(sel) sel.value = "";
+    var qty = document.getElementById(`d-qty-${id}`); if(qty) qty.value = "0";
+    var hrg = document.getElementById(`d-hrg-${id}`); if(hrg) hrg.value = "0";
+  }
+
+  // --- SPK ---
+  function bukaModalSPK() {
+    var form = document.getElementById("form-spk"); if(form) form.reset();
+    purchHideLegacyBahanSpkRow_();
+    document.getElementById('s-no-lama').value = "";
+    if(document.getElementById('input-nopo')) document.getElementById('input-nopo').value = "";
+    
+    document.getElementById('modal-spk-title').innerText = "➕ Terbitkan SPK Baru";
+    var btn = document.getElementById('btn-spk');
+    if(btn) {
+       btn.innerText = "🚀 Terbitkan SPK Sekarang";
+       btn.classList.replace("btn-success", "btn-primary");
+       btn.setAttribute('onclick', "siapkanSimpanSPK('baru')");
+    }
+    aturJalurSPK();
+    
+    var html = "";
+    counter['row-spk'] = 1;
+    var optOutput = getOptProduk();
+    var optBahan = purchGetOptBahanSPK_();
+
+    for(var i=1; i<=maxRows; i++) {
+      var dNone = (i > 1) ? "d-none" : "";
+      html += purchBuildSpkRowHtml_(i, dNone, optOutput, optBahan, {});
+    }
+    
+    var areaSpk = document.getElementById("area-items-spk");
+    if(areaSpk) areaSpk.innerHTML = html;
+    new bootstrap.Modal(document.getElementById('modalSPK')).show();
+  }
+
+  function editSPK(spkNo) {
+    var btn = document.getElementById("btn-edit-" + spkNo);
+    var oldBtnText = btn ? btn.innerHTML : "✏️ Edit";
+    
+    if(btn) { btn.innerHTML = "⏳.."; btn.disabled = true; }
+    else showToast("⏳ Mengambil data...", "info");
+    
+    runGasPurch('getDetailPrintSPK', [spkNo], function(data) {
+      if(btn) { btn.innerHTML = oldBtnText; btn.disabled = false; }
+      
+      if(!data) { showToast("❌ Data SPK tidak ditemukan", "error"); return; }
+
+      var form = document.getElementById("form-spk"); if(form) form.reset();
+      purchHideLegacyBahanSpkRow_();
+
+      document.getElementById('s-no-lama').value = data.spk;
+      document.getElementById('s-no').value = data.spk;
+      document.getElementById('s-tgl').value = formatToInputDate(data.tglRaw); 
+      document.getElementById('s-deadline').value = formatToInputDate(data.deadlineRaw);
+      document.getElementById('s-jalur').value = data.jalur;
+      aturJalurSPK();
+      
+      if(data.vendor) document.getElementById('s-vendor-spk').value = data.vendor;
+      document.getElementById('s-pic').value = data.pembuat;
+      document.getElementById('s-catatan').value = data.catatan;
+
+      if(document.getElementById('input-nopo')) {
+          document.getElementById('input-nopo').value = data.refPOSales ? data.refPOSales : "";
+      }
+
+      var optOutput = getOptProduk();
+      var optBahan = purchGetOptBahanSPK_();
+      var html = "";
+      counter['row-spk'] = data.items.length || 1;
+
+      data.items.forEach(function(it, idx) {
+        if(!optOutput.includes('value="' + it.nama + '"')) { optOutput += '<option value="' + it.nama + '">📦 ' + it.nama + '</option>'; }
+        var i = idx + 1;
+        if(!it.bahan) it.bahan = data.bahan || '';
+        html += purchBuildSpkRowHtml_(i, '', optOutput, optBahan, it);
+      });
+
+      for(var j = data.items.length + 1; j <= maxRows; j++) {
+        html += purchBuildSpkRowHtml_(j, 'd-none', optOutput, optBahan, {});
+      }
+      
+      var areaSpk = document.getElementById("area-items-spk");
+      if(areaSpk) areaSpk.innerHTML = html;
+      data.items.forEach(function(it, idx) {
+        setSelectByText('i-prod-' + (idx+1), it.nama);
+        setSelectByText('i-bahan-' + (idx+1), it.bahan || data.bahan || '');
+      });
+
+      document.getElementById('modal-spk-title').innerText = "✏️ Edit SPK : " + data.spk;
+      var btnS = document.getElementById('btn-spk');
+      if(btnS) {
+         btnS.innerText = "💾 Update SPK";
+         btnS.classList.replace("btn-primary", "btn-success");
+         btnS.setAttribute('onclick', "siapkanSimpanSPK('edit')");
+      }
+
+      new bootstrap.Modal(document.getElementById('modalSPK')).show();
+    }, function(){ if(btn) { btn.innerHTML = oldBtnText; btn.disabled = false; } });
+  }
+
+  async function siapkanSimpanSPK(mode) {
+    var btn = document.getElementById("btn-spk");
+    var restoreBtn = function(){ if(btn) { btn.innerHTML = mode==='edit' ? "💾 Update SPK" : "🚀 Terbitkan SPK Sekarang"; btn.disabled = false; } };
+
+    var jalur = document.getElementById('s-jalur').value;
+    var vendor = document.getElementById('s-vendor-spk').value;
+    var spkNo = document.getElementById('s-no').value;
+    var refPO = document.getElementById('input-nopo') ? document.getElementById('input-nopo').value : "";
+    
+    if(!spkNo) { showToast("❌ Isi No SPK!", "error"); return; }
+    if(jalur !== "Produksi Internal" && !vendor) { showToast("❌ Untuk Maklun, wajib memilih Vendor Tujuan!", "error"); return; }
+
+    if(btn) { btn.innerHTML = "⏳ Memproses Data & Foto..."; btn.disabled = true; }
+    try {
+      var arrItems = [];
+      var rows = document.querySelectorAll('.row-spk');
+      for(let i=0; i < rows.length; i++) {
+        let row = rows[i];
+        if(!row.classList.contains("d-none")) { 
+          let prod = row.querySelector('.i-spk-prod') ? row.querySelector('.i-spk-prod').value : '';
+          let bahanEl = row.querySelector('.i-spk-bahan');
+          let bahan = purchCleanSpkSelectValue_(bahanEl ? bahanEl.value : '');
+          let qty = numInput(row.querySelector('.i-spk-qty').value);
+          let fileInput = row.querySelector('.i-spk-foto');
+          let oldFotoUrl = row.querySelector('.i-spk-foto-lama') ? row.querySelector('.i-spk-foto-lama').value : "";
+          
+          if(prod && !bahan) {
+            showToast("❌ Pilih bahan untuk output: " + prod, "error");
+            restoreBtn();
+            return;
+          }
+
+          let catObj = {
+            depan: row.querySelector('.i-spk-depan') ? row.querySelector('.i-spk-depan').value.trim() : "",
+            kiri: row.querySelector('.i-spk-kiri') ? row.querySelector('.i-spk-kiri').value.trim() : "",
+            kanan: row.querySelector('.i-spk-kanan') ? row.querySelector('.i-spk-kanan').value.trim() : "",
+            belakang: row.querySelector('.i-spk-belakang') ? row.querySelector('.i-spk-belakang').value.trim() : "",
+            sintong: row.querySelector('.i-spk-sintong') ? row.querySelector('.i-spk-sintong').value.trim() : "",
+            umum: row.querySelector('.i-spk-catatan') ? row.querySelector('.i-spk-catatan').value.trim() : ""
+          };
+          let finalCatatanItem = JSON.stringify(catObj);
+          
+          if(prod) { 
+            let fotoList = [];
+            if(fileInput && fileInput.files.length > 0) {
+              for(let j=0; j < fileInput.files.length; j++) {
+                let file = fileInput.files[j];
+                let base64Data = await new Promise((resolve) => {
+                  let reader = new FileReader();
+                  reader.onload = (e) => resolve(e.target.result.split(',')[1]);
+                  reader.readAsDataURL(file);
+                });
+                fotoList.push({ base64: base64Data, mime: file.type });
+              }
+            }
+            arrItems.push({ nama: prod, bahan: bahan, qty: qty, catatanItem: finalCatatanItem, fotoList: fotoList, oldFotoUrl: oldFotoUrl });
+          }
+        }
+      }
+
+      if(arrItems.length === 0) {
+        showToast("❌ Minimal harus ada 1 Target Output!", "error");
+        restoreBtn();
+        return;
+      }
+
+      var bahanMerge = Array.from(new Set(arrItems.map(function(it){ return it.bahan; }).filter(Boolean))).join(" + ");
+      var dataObj = { 
+        mode: mode,
+        noSpkLama: document.getElementById('s-no-lama').value,
+        tgl: document.getElementById('s-tgl').value, 
+        deadline: document.getElementById('s-deadline').value, 
+        noSpk: spkNo, 
+        pembuat: document.getElementById('s-pic').value, 
+        catatan: document.getElementById('s-catatan').value, 
+        vendor: vendor, 
+        bahan: bahanMerge, 
+        jalur: jalur, 
+        refPOSales: refPO, 
+        items: arrItems 
+      };
+      
+      runGasPurch('updateAtauSimpanSPK', [dataObj], function(m) { 
+        var form = document.getElementById("form-spk"); if(form) form.reset(); 
+        purchModalHide('modalSPK');
+        showToast(m, (m && m.toString().includes("❌")) ? "error" : "success");
+        if(btn) { btn.disabled = false; }
+        muatRekapSPK(); muatRiwayatTransaksi();
+      }, function(){ restoreBtn(); });
+      
+    } catch(err) {
+      showToast("❌ Error: " + err.message, "error");
+      restoreBtn();
+    }
+  }
+
+  // --- REKAP DAN LAINNYA ---
+  var globalDataHutang = []; 
+  function muatHutang() {
+    var area = document.getElementById("area-tagihan-hutang");
+    if(area) area.innerHTML = "<div class='text-center py-4'>⏳ Sedang menyusun rekap hutang usaha...</div>";
+    runGasPurch('getRekapHutangUsaha', [], function(data) {
+      globalDataHutang = data;
+      if(data.length === 0) { 
+        if(area) area.innerHTML = "<div class='alert alert-success fw-bold'>🎉 Bersih! Tidak ada hutang usaha yang tercatat.</div>"; 
+        return; 
+      }
+      
+      var html = '<div class="accordion" id="accHutang">';
+      var grandTotalSemuaHutang = 0;
+
+      data.forEach((v, vIdx) => {
+        grandTotalSemuaHutang += v.grandTotalSisa;
+        html += `<div class="accordion-item mb-2 border-secondary shadow-sm">
+                  <h2 class="accordion-header" id="head-hut-${vIdx}">
+                    <button class="accordion-button collapsed fw-bold fs-6 text-primary bg-light" type="button" data-bs-toggle="collapse" data-bs-target="#col-hut-${vIdx}">
+                      🛒 ${v.vendor} &nbsp;&nbsp;|&nbsp;&nbsp; Total Sisa Hutang: <span class="text-danger ms-2">${formatRp(v.grandTotalSisa)}</span>
+                    </button>
+                  </h2>
+                  <div id="col-hut-${vIdx}" class="accordion-collapse collapse" data-bs-parent="#accHutang">
+                    <div class="accordion-body p-2 bg-white">
+                      <div class="table-responsive">
+                        <table class="table table-sm table-bordered table-hover align-middle" style="font-size:0.85rem;">
+                          <thead class="table-secondary text-center">
+                            <tr><th>No Nota / PO</th><th>Tanggal</th><th>Nilai Belanja (Rp)</th><th>Telah Dibayar (Rp)</th><th>Sisa Hutang (Rp)</th><th>Aksi</th></tr>
+                          </thead>
+                          <tbody>`;
+        v.pos.forEach(po => {
+          html += `<tr>
+                    <td class="fw-bold">${po.nota}</td>
+                    <td class="text-center">${po.tglStr}</td>
+                    <td class="text-end text-dark">${formatRp(po.totalNota)}</td>
+                    <td class="text-end text-success">${formatRp(po.bayar)}</td>
+                    <td class="text-end text-danger fw-bold">${formatRp(po.sisa)}</td>
+                    <td class="text-center"><button class="btn btn-sm btn-outline-danger fw-bold py-0" onclick="bukaPreviewHutangUsaha('${v.vendor}', '${po.nota}')">📄 Detail / PDF</button></td>
+                   </tr>`;
+        });
+        html += `</tbody></table></div></div></div></div>`;
+      });
+      html += '</div>';
+
+      var bannerHtml = `<div class="alert alert-danger fw-bold fs-5 shadow-sm text-center mb-3 border-danger">TOTAL KESELURUHAN SISA HUTANG USAHA : ${formatRp(grandTotalSemuaHutang)}</div>`;
+      if(area) area.innerHTML = bannerHtml + html;
+    }, function(err){ if(area) area.innerHTML = "<div class='alert alert-danger'>Gagal memuat hutang: " + ((err&&err.message)||err) + "</div>"; });
+  }
+
+  var globalDataPO = [];
+  function muatTagihanMaklun() {
+    var area = document.getElementById("area-tagihan-maklun");
+    if(area) area.innerHTML = "<div class='text-center py-4'>⏳ Sedang menyusun rekap PO...</div>";
+    runGasPurch('getRekapMaklunPO', [], function(data) {
+      globalDataPO = data;
+      if(data.length === 0) { if(area) area.innerHTML = "<div class='alert alert-success'>🎉 Tidak ada tagihan maklun yang tercatat.</div>"; return; }
+      
+      var html = '<div class="accordion" id="accMaklun">';
+      data.forEach((v, vIdx) => {
+        html += `<div class="accordion-item mb-2 border-secondary shadow-sm">
+                  <h2 class="accordion-header" id="head-${vIdx}">
+                    <button class="accordion-button collapsed fw-bold fs-6 text-primary bg-light" type="button" data-bs-toggle="collapse" data-bs-target="#col-${vIdx}">
+                      🏢 ${v.vendor} &nbsp;&nbsp;|&nbsp;&nbsp; Total Sisa Hutang: <span class="text-danger ms-2">${formatRp(v.grandTotalSisa)}</span>
+                    </button>
+                  </h2>
+                  <div id="col-${vIdx}" class="accordion-collapse collapse" data-bs-parent="#accMaklun">
+                    <div class="accordion-body p-2 bg-white">
+                      <div class="table-responsive">
+                        <table class="table table-sm table-bordered table-hover align-middle" style="font-size:0.85rem;">
+                          <thead class="table-secondary text-center">
+                            <tr><th>No PO / Penerimaan</th><th>Tanggal</th><th>Nilai Tagihan (Rp)</th><th>Bahan/DP (Rp)</th><th>Telah Dibayar (Rp)</th><th>Sisa Hutang (Rp)</th><th>Aksi</th></tr>
+                          </thead>
+                          <tbody>`;
+        v.pos.forEach(po => {
+          html += `<tr>
+                    <td class="fw-bold">${po.nota}</td>
+                    <td class="text-center">${po.tglStr}</td>
+                    <td class="text-end text-dark">${formatRp(po.totalPO)}</td>
+                    <td class="text-end text-info">${formatRp(po.dp)}</td>
+                    <td class="text-end text-success">${formatRp(po.bayar)}</td>
+                    <td class="text-end text-danger fw-bold">${formatRp(po.sisa)}</td>
+                    <td class="text-center"><button class="btn btn-sm btn-outline-danger fw-bold py-0" onclick="bukaPreviewPO('${v.vendor}', '${po.nota}')">📄 Lihat / PDF</button></td>
+                  </tr>`;
+        });
+        html += `</tbody></table></div></div></div></div>`;
+      });
+      html += '</div>';
+      if(area) area.innerHTML = html;
+    }, function(err){ if(area) area.innerHTML = "<div class='alert alert-danger'>Gagal memuat hutang maklun: " + ((err&&err.message)||err) + "</div>"; });
+  }
+
+  function eksekusiUbahStatus(spk, selEl) {
+    var val = selEl.value;
+    selEl.disabled = true;
+    showToast("⏳ Mengubah status " + spk + "...", "info");
+    
+    runGasPurch('updateStatusSPK', [spk, val], function(m) {
+      showToast(m, (m && m.toString().includes("❌")) ? "error" : "success");
+      refreshMasterData(); 
+      selEl.disabled = false;
+    }, function(){ selEl.disabled = false; });
+  }
+
+  function muatRekapSPK() {
+    var tbl = document.getElementById("tbl-spk");
+    if(!tbl) return;
+    tbl.innerHTML = "<tr><td colspan='7'>Menghitung HPP Real...</td></tr>";
+    
+    runGasPurch('getRekapSPK', [], function(arr) {
+      if(!arr.length) { tbl.innerHTML = "<tr><td colspan='7'>Belum ada SPK.</td></tr>"; return; }
+      
+      tbl.innerHTML = arr.map(i => {
+        var selHtml = `
+          <select class="form-select form-select-sm fw-bold border-dark bg-light mb-1" onchange="eksekusiUbahStatus('${i.spk}', this)">
+            <option value="Aktif" ${i.dbStatus === 'Aktif' ? 'selected' : ''}>🟢 Aktif</option>
+            <option value="Pending" ${i.dbStatus === 'Pending' ? 'selected' : ''}>🟠 Pending</option>
+            <option value="Selesai" ${i.dbStatus === 'Selesai' ? 'selected' : ''}>🔴 Selesai</option>
+          </select>
+          <small class="text-muted d-block">📌 ${i.progress}</small>
+        `;
+
+        return `<tr>
+          <td class="text-start">
+            <span class="bg-dark text-white badge px-2 py-1 mb-2 d-block text-center" style="font-size:0.8rem;">${i.spk}</span>
+            <div class="d-flex justify-content-center gap-1">
+              <button class="btn btn-sm btn-outline-primary px-2" title="Edit SPK" onclick="editSPK('${i.spk}')">✏️</button>
+              <button class="btn btn-sm btn-outline-danger px-2" title="Hapus SPK" onclick="hapusTransaksi('Data_SPK', '${i.spk}')">🗑️</button>
+              <button class="btn btn-sm btn-outline-secondary px-2" title="Unduh PDF" id="btn-print-${i.spk}" onclick="cetakSPK('${i.spk}')">⬇️</button>
+            </div>
+          </td>
+          <td><small class="fw-bold d-block">${i.jalur}</small><small class="text-secondary">${i.vendorSpk || "Internal"}</small></td>
+          <td style="min-width: 140px;">${selHtml}</td><td>${i.qtyKirim}</td><td class="fw-bold text-success fs-6">${i.qtyJadi}</td><td>${i.totalBiaya}</td><td class="bg-info text-white">${i.hpp}</td>
+        </tr>`;
+      }).join('');
+    }, function(err){ tbl.innerHTML = "<tr><td colspan='7' class='text-danger'>Gagal memuat SPK: " + ((err&&err.message)||err) + "</td></tr>"; });
+  }
+
+  document.addEventListener('shown.bs.modal', function (event) {
+    var selectPo = document.getElementById("input-nopo");
+    if (selectPo && window.masterDataLocal && window.masterDataLocal.poSalesData) {
+      var currentVal = selectPo.value;
+      
+      selectPo.innerHTML = '<option value="">-- Tanpa No PO / Input SPK Manual --</option>';
+      var uniquePos = [...new Set(window.masterDataLocal.poSalesData.map(function(item) { return item.noPo; }))];
+      uniquePos.forEach(function(po) {
+        if(po && po.trim() !== "") {
+          selectPo.innerHTML += `<option value="${po}">${po}</option>`;
+        }
+      });
+      
+      if(currentVal) selectPo.value = currentVal;
+    }
+  });
+
+  function applyPoToSpk(btnObj) {
+    var noPo = document.getElementById("input-nopo").value;
+    if (!noPo) { showToast("❌ Pilih Nomor PO terlebih dahulu!", "error"); return; }
+
+    if (!window.masterDataLocal || !window.masterDataLocal.poSalesData) { showToast("❌ Data PO belum siap.", "error"); return; }
+
+    var itemsDariPo = window.masterDataLocal.poSalesData.filter(function(x) { return x.noPo === noPo; });
+    if (itemsDariPo.length === 0) { showToast("❌ Data pesanan tidak ditemukan.", "error"); return; }
+
+    var containerItems = document.getElementById("area-items-spk") || document.getElementById("container-item-spk");
+    if (containerItems) {
+      var barisLama = containerItems.querySelectorAll('.box-item-spk');
+      barisLama.forEach(function(baris) { baris.remove(); });
+    }
+
+    // 💡 PANGGIL HELPER BARU
+    var optOutputBase = getOptProduk();
+
+    itemsDariPo.forEach(function(dataRow, idx) {
+      var idUnik = new Date().getTime() + idx;
+      
+      var optHtml = optOutputBase;
+      if(!optHtml.includes(`value="${dataRow.item}"`)) {
+          optHtml += `<option value="${dataRow.item}">📦 ${dataRow.item}</option>`;
+      }
+      optHtml = optHtml.replace(`value="${dataRow.item}"`, `value="${dataRow.item}" selected`);
+
+      var barisHtml = '<div class="row align-items-center mb-3 row-spk p-3 box-item-spk rounded shadow-sm" id="row-spk-' + idUnik + '">' +
+        '<div class="col-12 d-flex justify-content-between border-bottom border-secondary pb-2 mb-2">' +
+          '<span class="fw-bold text-dark fs-6">📦 Item Output PO #' + (idx + 1) + '</span>' +
+          '<button type="button" class="btn btn-sm btn-danger fw-bold px-2 py-0" onclick="this.closest(\'.box-item-spk\').remove()">Hapus</button>' +
+        '</div>' +
+        '<div class="col-md-8 mb-2">' +
+          '<label class="text-muted fw-bold" style="font-size:0.75rem;">Pilih Item / Varian</label>' +
+          '<select class="form-select border-primary fw-bold i-spk-prod">' + optHtml + '</select>' +
+        '</div>' +
+        '<div class="col-md-4 mb-2">' +
+          '<label class="text-danger fw-bold" style="font-size:0.75rem;">Target QTY Item</label>' +
+          '<input type="number" class="form-control border-danger fw-bold i-spk-qty text-center" value="' + dataRow.qty + '">' +
+        '</div>' +
+        '<div class="col-md-12 mb-2">' +
+          '<label class="text-muted fw-bold" style="font-size:0.75rem;">📝 Detail Catatan Item / Posisi Bordir (Kosongkan yg tidak perlu)</label>' +
+          '<div class="row g-2">' +
+            '<div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-depan" placeholder="Depan"></div>' +
+            '<div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-kiri" placeholder="Kiri"></div>' +
+            '<div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-kanan" placeholder="Kanan"></div>' +
+            '<div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-belakang" placeholder="Belakang"></div>' +
+            '<div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-info i-spk-sintong" placeholder="Sintong"></div>' +
+            '<div class="col-4 col-md-2"><input type="text" class="form-control form-control-sm border-primary i-spk-catatan" placeholder="Cat. Umum"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="col-md-12 mb-2">' +
+          '<label class="text-muted fw-bold" style="font-size:0.75rem;">📸 Foto Referensi</label>' +
+          '<input type="file" class="form-control border-info i-spk-foto" accept="image/*" multiple>' +
+          '<input type="hidden" class="i-spk-foto-lama" value="">' +
+        '</div>' +
+      '</div>';
+      
+      if(containerItems) { containerItems.insertAdjacentHTML('beforeend', barisHtml); }
+    });
+  }
+
+  function hapusTransaksi(sheetName, idTrx) {
+    if(!confirm("Yakin ingin menghapus data ini secara permanen?")) return;
+    showToast("⏳ Sedang menghapus data...", "info");
+    
+    runGasPurch('hapusDataTransaksi', [sheetName, idTrx], function(res) {
+      if(res.success) { showToast("✅ " + res.msg, "success"); } 
+      else { showToast("❌ Gagal menghapus: " + res.msg, "error"); }
+      
+      muatRiwayatTransaksi();
+      muatHutang();
+      muatRekapSPK(); 
+    });
+  }
+
+  // --- BAHAN BARU ---
+  function bukaModalBahan() { 
+    if(document.getElementById("new-bahan-name")) document.getElementById("new-bahan-name").value = "";
+    if(document.getElementById("new-bahan-sub")) document.getElementById("new-bahan-sub").value = "";
+    if(document.getElementById("new-bahan-kat")) document.getElementById("new-bahan-kat").value = "Bahan Baku";
+    new bootstrap.Modal(document.getElementById('modalBahanBaru')).show();
+  }
+  
+  function simpanBahanBaru() {
+    var kat = document.getElementById("new-bahan-kat").value;
+    var sub = document.getElementById("new-bahan-sub").value;
+    var nm = document.getElementById("new-bahan-name").value;
+    var katKey = String(kat || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    var itemType = (katKey.indexOf("PACK") !== -1 || katKey.indexOf("AKSESORIS") !== -1) ? "PACKAGING" : "BAHAN";
+    var kategoriDb = itemType === "PACKAGING" ? "Packaging / Aksesoris" : "Bahan Baku"; 
+    
+    if(!sub || !nm) { showToast("❌ Isi Sub-Kategori & Nama!", "error"); return; }
+    
+    var btn = document.getElementById("btn-save-bahan"); 
+    if(btn) { btn.disabled = true; btn.innerHTML = "⏳ Menyimpan..."; }
+    
+    runGasPurch('tambahMasterBahan', [{nama: nm, kategori: kategoriDb, subKategori: sub, itemType: itemType}], function(res) { 
+      if(!res.success) {
+         showToast("❌ " + res.msg, "error");
+         if(btn) { btn.disabled = false; btn.innerHTML = "💾 Simpan Bahan"; }
+         return;
+      }
+      refreshMasterData(); 
+      purchModalHide('modalBahanBaru'); 
+      if(btn) { btn.disabled = false; btn.innerHTML = "💾 Simpan Bahan"; }
+      showToast("✅ Berhasil menambahkan " + nm, "success");
+    }, function(){ if(btn) { btn.disabled = false; btn.innerHTML = "💾 Simpan Bahan"; } });
+  }
+
+  // --- ITEM BARU ---
+  function bukaModalItem() {
+    if(document.getElementById("new-item-kat")) document.getElementById("new-item-kat").value = "";
+    if(document.getElementById("new-item-sub")) document.getElementById("new-item-sub").value = "";
+    if(document.getElementById("new-item-name")) document.getElementById("new-item-name").value = "";
+    new bootstrap.Modal(document.getElementById('modalItemBaru')).show();
+  }
+
+  function simpanItemBaru() {
+    var kat = document.getElementById("new-item-kat").value;
+    var sub = document.getElementById("new-item-sub").value;
+    var nm = document.getElementById("new-item-name").value;
+    
+    if(!kat || !sub || !nm) { showToast("❌ Lengkapi Kategori, Sub, dan Nama!", "error"); return; }
+    
+    var btn = document.getElementById("btn-save-item"); 
+    if(btn) { btn.disabled = true; btn.innerHTML = "⏳ Menyimpan..."; }
+    
+    var payload = { kategori: kat, subKategori: sub, nama: nm, itemType: "BARANG_JADI" };
+    runGasPurch('tambahMasterItem', [payload], function(res) { 
+      if(!res.success) {
+         showToast("❌ " + res.msg, "error");
+         if(btn) { btn.disabled = false; btn.innerHTML = "💾 Simpan Produk"; }
+         return;
+      }
+      
+      if(!master.produk) master.produk = [];
+      master.produk.push({sub: sub || "Umum", nama: nm});
+      master.produk.sort((a,b) => a.nama.localeCompare(b.nama));
+      
+      updateDropdownSPK();
+      
+      purchModalHide('modalItemBaru'); 
+      if(btn) { btn.disabled = false; btn.innerHTML = "💾 Simpan Produk"; }
+      showToast("✅ Berhasil menambahkan produk: " + nm, "success");
+    }, function(){ if(btn) { btn.disabled = false; btn.innerHTML = "💾 Simpan Produk"; } });
+  }
+
+
+  // ================= MICRO PATCH: TAMBAH SUPPLIER / VENDOR MAKLUN =================
+  function bukaModalSupplierBaru(tipe, targetSelectId) {
+    tipe = (tipe || 'SUPPLIER').toString().toUpperCase();
+    var isMaklun = tipe.indexOf('MAKLUN') !== -1;
+    var title = document.getElementById('modal-supplier-title');
+    if (title) title.textContent = isMaklun ? '🆕 Tambah Vendor Maklun' : '🆕 Tambah Supplier';
+
+    var elType = document.getElementById('new-supplier-type');
+    var elTarget = document.getElementById('new-supplier-target');
+    var elName = document.getElementById('new-supplier-name');
+    var elContact = document.getElementById('new-supplier-contact');
+    var elPhone = document.getElementById('new-supplier-phone');
+    var elAddress = document.getElementById('new-supplier-address');
+    var notif = document.getElementById('notif-supplier-baru');
+    var btn = document.getElementById('btn-save-supplier');
+
+    if (elType) elType.value = isMaklun ? 'MAKLUN' : 'SUPPLIER';
+    if (elTarget) elTarget.value = targetSelectId || '';
+    if (elName) elName.value = '';
+    if (elContact) elContact.value = '';
+    if (elPhone) elPhone.value = '';
+    if (elAddress) elAddress.value = '';
+    if (notif) notif.innerHTML = '';
+    if (btn) { btn.disabled = false; btn.innerHTML = '💾 Simpan'; }
+
+    purchModalShow('modalSupplierBaru');
+    setTimeout(function(){ if (elName) elName.focus(); }, 250);
+  }
+
+  function simpanSupplierBaru() {
+    var btn = document.getElementById('btn-save-supplier');
+    var notif = document.getElementById('notif-supplier-baru');
+    var nama = (document.getElementById('new-supplier-name') || {}).value || '';
+    nama = nama.trim();
+    if (!nama) {
+      if (notif) notif.innerHTML = '<div class="alert alert-warning py-2">Nama supplier/vendor wajib diisi.</div>';
+      return;
+    }
+
+    var payload = {
+      nama: nama,
+      type: ((document.getElementById('new-supplier-type') || {}).value || 'SUPPLIER').trim(),
+      contact: ((document.getElementById('new-supplier-contact') || {}).value || '').trim(),
+      phone: ((document.getElementById('new-supplier-phone') || {}).value || '').trim(),
+      address: ((document.getElementById('new-supplier-address') || {}).value || '').trim()
+    };
+    var targetSelectId = ((document.getElementById('new-supplier-target') || {}).value || '').trim();
+
+    if (btn) { btn.disabled = true; btn.innerHTML = 'Menyimpan...'; }
+    if (notif) notif.innerHTML = '';
+
+    runGasPurch('tambahMasterSupplier', [payload], function(res) {
+      if (!res || res.success === false) {
+        var msg = res && res.msg ? res.msg : 'Gagal menyimpan supplier/vendor.';
+        if (notif) notif.innerHTML = '<div class="alert alert-danger py-2">' + msg + '</div>';
+        if (btn) { btn.disabled = false; btn.innerHTML = '💾 Simpan'; }
+        return;
+      }
+
+      showToast('✅ ' + (res.msg || ('Berhasil menambahkan ' + nama)), 'success');
+      purchModalHide('modalSupplierBaru');
+
+      refreshMasterData(function(){
+        var pilihNama = (res.nama || nama);
+        ['b-vendor', 'm-vendor', 'd-maklun', 's-vendor-spk', 'f-vendor'].forEach(function(id){
+          var el = document.getElementById(id);
+          if (!el) return;
+          var exists = Array.from(el.options).some(function(o){ return o.value === pilihNama; });
+          if (!exists) el.add(new Option(pilihNama, pilihNama));
+        });
+        if (targetSelectId) {
+          var target = document.getElementById(targetSelectId);
+          if (target) target.value = pilihNama;
+        }
+        if (btn) { btn.disabled = false; btn.innerHTML = '💾 Simpan'; }
+      });
+    }, function(){
+      if (btn) { btn.disabled = false; btn.innerHTML = '💾 Simpan'; }
+    });
+  }
+
+  function modalSedangTerbukaPurch() {
+    return !!document.querySelector('.modal.show');
+  }
+  function reloadTabAktifPurch() {
+    if (modalSedangTerbukaPurch()) return;
+    loadTabDataPurch(PURCH_ACTIVE_TAB || 'dashboard', true);
+  }
+  function checkPurchHeartbeat() {
+    runGasPurch('PURCH_globalHeartbeat', [PURCH_LAST_HEARTBEAT], function(res){
+      if (!res || !res.ok) return;
+      if (res.serverVersion && PURCH_LAST_HEARTBEAT && String(res.serverVersion) !== String(PURCH_LAST_HEARTBEAT)) {
+        PURCH_LAST_HEARTBEAT = res.serverVersion;
+        reloadTabAktifPurch();
+      } else if (res.serverVersion) {
+        PURCH_LAST_HEARTBEAT = res.serverVersion;
+      }
+    }, function(){});
+  }
+  function startPurchHeartbeat() {
+    if (PURCH_HEARTBEAT_TIMER) clearInterval(PURCH_HEARTBEAT_TIMER);
+    PURCH_HEARTBEAT_TIMER = setInterval(checkPurchHeartbeat, 60000);
+  }
+
+</script>

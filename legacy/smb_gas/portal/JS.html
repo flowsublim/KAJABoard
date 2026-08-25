@@ -1,0 +1,40 @@
+<script>
+let BOOT = window.__BOOTSTRAP__ || {};
+const qsBoot = new URLSearchParams(location.search);
+if (BOOT.forceLogin || qsBoot.get('login') || qsBoot.get('logout') || qsBoot.get('relogin')) {
+  localStorage.removeItem('ERP_PASSPORT');
+  localStorage.removeItem('ERP_GLOBAL_VERSION');
+  BOOT.passport = '';
+  BOOT.modules = [];
+}
+let heartbeatVersion = (BOOT.heartbeat && BOOT.heartbeat.version) || '';
+const MODULE_META={SALES:{icon:'📦',color:'#1677ff',tint:'#dbeafe'},PURCH:{icon:'🧾',color:'#7c3aed',tint:'#ede9fe'},PROD:{icon:'🏭',color:'#ea580c',tint:'#ffedd5'},WH:{icon:'🏬',color:'#0f766e',tint:'#ccfbf1'},FIN:{icon:'💼',color:'#16a34a',tint:'#dcfce7'},OMNI:{icon:'🛒',color:'#db2777',tint:'#fce7f3'},RETUR_QC:{icon:'🔎',color:'#0891b2',tint:'#cffafe'},PORTAL:{icon:'🏠',color:'#111827',tint:'#e5e7eb'}};
+function el(id){return document.getElementById(id)}
+function key(s){return String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,'')}
+function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function meta(code){return MODULE_META[key(code)]||{icon:'📁',color:'#334155',tint:'#f1f5f9'}}
+function toast(msg,type){const box=el('toastBox');if(!box)return;const d=document.createElement('div');d.className='toast-item '+(type||'');d.textContent=msg;box.appendChild(d);setTimeout(()=>d.remove(),3600)}
+function renderLogin(){
+  const box=el('loginBox'),overlay=el('loginOverlay'); if(!box||!overlay)return;
+  if(BOOT.state==='FORBIDDEN'||BOOT.state==='EMAIL_EMPTY'){
+    box.className='login-card forbidden';
+    box.innerHTML=`<div class="login-icon">!</div><h2>Akses Ditolak</h2><p>Email Google ini tidak terdaftar atau tidak aktif.</p><div class="email-badge">${escapeHtml(BOOT.email||'(email kosong)')}</div><div class="login-actions"><button class="btn-light" onclick="location.reload()">Cek Ulang</button></div>`;
+    overlay.classList.remove('hide'); return;
+  }
+  if(BOOT.passport){overlay.classList.add('hide');return;}
+  box.className='login-card';
+  box.innerHTML=`<div class="login-icon">ERP</div><h2>Masuk Portal</h2><p>Login menggunakan email Google yang terdaftar.</p><div class="email-badge">${escapeHtml(BOOT.email||'-')}</div><div class="login-actions"><button class="btn-primary" id="btnLoginPortal" onclick="loginPortal()">Masuk</button></div>`;
+  overlay.classList.remove('hide');
+}
+function setLoginLoading(on){const b=el('btnLoginPortal'); if(!b)return; b.disabled=!!on; b.innerHTML=on?'<span class="spinner"></span>Memeriksa akses...':'Masuk';}
+function renderModules(){const grid=el('moduleGrid');if(!grid)return;const mods=BOOT.modules||[];grid.innerHTML='';el('moduleEmpty')?.classList.toggle('hide',mods.length>0);mods.forEach(m=>{const mm=meta(m.code);const div=document.createElement('article');div.className='module-card';div.style.setProperty('--moduleColor',mm.color);div.style.setProperty('--moduleTint',mm.tint);div.onclick=()=>openModule(m.url);div.innerHTML=`<div><div class="module-icon">${mm.icon}</div><h3>${escapeHtml(m.name||m.code||'Modul')}</h3></div><button class="open-link" onclick="event.stopPropagation(); openModule('${escapeHtml(m.url||'')}')">Buka</button>`;grid.appendChild(div)});}
+function render(){renderModules();renderLogin();}
+function openModule(url){if(url)window.top.location.href=url;}
+function loginPortal(){setLoginLoading(true);google.script.run.withSuccessHandler(res=>{setLoginLoading(false);if(!res||!res.ok){BOOT=Object.assign(BOOT,res||{});renderLogin();toast((res&&res.reason)||'Login ditolak','error');return;}BOOT=Object.assign(BOOT,res);heartbeatVersion=res.heartbeat?.version||heartbeatVersion;localStorage.setItem('ERP_PASSPORT',res.passport||'');localStorage.setItem('ERP_GLOBAL_VERSION',heartbeatVersion||'');render();}).withFailureHandler(e=>{setLoginLoading(false);toast(e.message||String(e),'error')}).PORTAL_login();}
+function refreshPortal(silent){const passport=BOOT.passport||localStorage.getItem('ERP_PASSPORT')||'';if(!passport){renderLogin();return;}google.script.run.withSuccessHandler(res=>{if(!res||!res.ok){localStorage.removeItem('ERP_PASSPORT');BOOT.passport='';BOOT.modules=[];renderLogin();if(!silent)toast('Session berakhir. Login ulang.','error');return;}BOOT=Object.assign(BOOT,res);heartbeatVersion=res.heartbeat?.version||heartbeatVersion;render();if(!silent)toast('Portal diperbarui','success');}).withFailureHandler(e=>toast(e.message||String(e),'error')).PORTAL_refreshBootstrap(passport);}
+function portalHeartbeat(){const passport=BOOT.passport||localStorage.getItem('ERP_PASSPORT')||'';if(!passport)return;google.script.run.withSuccessHandler(res=>{if(!res||!res.ok||res.shouldLogout){localStorage.removeItem('ERP_PASSPORT');BOOT.passport='';BOOT.modules=[];renderLogin();return;}if(heartbeatVersion&&res.shouldRefresh){heartbeatVersion=res.serverVersion||heartbeatVersion;refreshPortal(true);return;}heartbeatVersion=res.serverVersion||heartbeatVersion;}).withFailureHandler(()=>{}).PORTAL_globalHeartbeat(passport,heartbeatVersion);}
+function logoutPortal(){const passport=BOOT.passport||localStorage.getItem('ERP_PASSPORT')||'';google.script.run.withSuccessHandler(()=>{localStorage.removeItem('ERP_PASSPORT');localStorage.removeItem('ERP_GLOBAL_VERSION');BOOT.passport='';BOOT.modules=[];BOOT.forceLogin=true;renderLogin();}).withFailureHandler(e=>toast(e.message||String(e),'error')).PORTAL_logout(passport);}
+render();
+if(!BOOT.forceLogin && !BOOT.passport && localStorage.getItem('ERP_PASSPORT')) refreshPortal(true);
+setTimeout(portalHeartbeat,4000);setInterval(portalHeartbeat,60000);
+</script>

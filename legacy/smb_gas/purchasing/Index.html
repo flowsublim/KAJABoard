@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <base target="_top">
+  <title>ERP Pembelian & Maklun</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <?!= include('CSS'); ?>
+</head>
+<body class="bg-light">
+
+<div class="d-flex vh-100" style="background-color: #f1f5f9;">
+
+  <aside class="glass-sidebar d-none d-lg-flex flex-column p-4 shadow-lg justify-content-between">
+    <div>
+      <div class="mb-5 px-2">
+        <h4 class="fw-bold text-warning m-0" style="letter-spacing: 1px;">🏢 ERP<br><span class="text-white fs-5">CV KIRAL</span></h4>
+      </div>
+      <ul class="nav flex-column gap-1">
+        <li class="nav-item"><a href="javascript:void(0)" class="nav-link nav-dashboard active fw-bold px-3 py-2" onclick="pindah('dashboard'); return false;">📊 Dashboard SPK</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" class="nav-link nav-beli fw-bold px-3 py-2" onclick="pindah('beli'); return false;">🛒 Belanja Umum</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" class="nav-link nav-distribusi fw-bold px-3 py-2" onclick="pindah('distribusi'); return false;">🚚 Kirim Bahan</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" class="nav-link nav-maklun fw-bold px-3 py-2" onclick="pindah('maklun'); return false;">🏭 Terima Maklun</a></li>
+        <li class="nav-item mt-3"><a href="javascript:void(0)" class="nav-link nav-hutang fw-bold px-3 py-2 text-warning" onclick="pindah('hutang'); return false;">💸 Hutang Belanja</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" class="nav-link nav-rekap-maklun fw-bold px-3 py-2 text-warning" onclick="pindah('rekap-maklun'); return false;">🧾 Hutang Maklun</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <div class="flex-grow-1 d-flex flex-column main-content">
+    
+    <header class="glass-header d-flex justify-content-between align-items-center p-3 px-4 shadow-sm">
+      <div class="text-truncate pe-2">
+        <h4 class="m-0 fw-bolder text-primary text-truncate" style="letter-spacing: -0.5px;">🛒 Modul Pembelian</h4>
+        <small class="text-muted judul-subtitle text-truncate">Manajemen PO, SPK, Maklun & Hutang Usaha</small>
+      </div>
+      
+      <div class="d-flex align-items-center gap-2 gap-md-3">
+        <div class="text-end border-end border-secondary-subtle pe-3 d-none d-md-block">
+          <small class="text-muted d-block" style="font-size: 0.75rem;">Login sebagai:</small>
+          <span class="fw-bold text-dark" id="user-email">Memuat user...</span>
+        </div>
+
+        <div class="dropdown" id="menuPindahModul">
+          <button class="btn btn-light fw-bold border-0 shadow-sm dropdown-toggle d-flex align-items-center justify-content-center btn-pindah-modul px-lg-3 py-2" type="button" data-bs-toggle="dropdown" title="Pindah Modul" style="border-radius: 12px;">
+            <span class="fs-5" style="line-height: 1;">🔄</span> 
+            <span class="teks-pindah-modul d-none d-lg-inline ms-2">Pindah Modul</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2 rounded-3" id="menu-modul-list">
+            <li><h6 class="dropdown-header">⏳ Memuat link...</h6></li>
+          </ul>
+        </div>
+        <button class="btn btn-outline-danger fw-bold shadow-sm px-lg-3 py-2" id="erpGlobalLogoutBtn" type="button" onclick="if(window.PURCH_logout){window.PURCH_logout();}else{alert('JS belum siap. Tunggu sebentar lalu coba lagi.');}" style="border-radius: 12px;">
+          <span class="fs-5" style="line-height:1;">🚪</span>
+          <span class="d-none d-lg-inline ms-1">Logout</span>
+        </button>
+      </div> 
+    </header>
+
+    <main class="p-3 px-lg-4 pb-5">
+      <div id="notif-global"></div>
+      <div id="purch-boot-status" class="small text-muted mb-2"></div>
+      <div id="notif-dash"></div>
+
+      <div id="box-filter" class="card p-3 p-md-4 shadow-sm mb-4 d-none">
+        <div class="row g-3 align-items-end">
+          <div class="col-md-3">
+            <label class="fw-bold text-secondary mb-1" style="font-size:0.85rem;">Mulai Tanggal</label>
+            <input type="date" id="f-mulai" class="form-control">
+          </div>
+          <div class="col-md-3">
+            <label class="fw-bold text-secondary mb-1" style="font-size:0.85rem;">Sampai Tanggal</label>
+            <input type="date" id="f-selesai" class="form-control">
+          </div>
+          <div class="col-md-3">
+            <label class="fw-bold text-secondary mb-1" style="font-size:0.85rem;">Filter Vendor</label>
+            <select id="f-vendor" class="form-select">
+              <option value="">-- Semua Vendor --</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <div class="d-flex gap-2">
+              <button class="btn btn-primary fw-bold w-100" onclick="terapkanFilter()">🔍 Tampilkan</button>
+              <button class="btn btn-outline-secondary fw-bold px-3" onclick="resetFilter()" title="Reset Filter">🔄</button>
+            </div>
+          </div>
+        </div>
+        <!-- Total tampil dinonaktifkan agar filter tidak membawa ringkasan nilai ke tab non-belanja. -->
+      </div>
+
+      <section id="tab-dashboard" class="container-fluid p-0">
+        <div class="card p-4 shadow-sm border-top border-primary border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="fw-bold text-primary m-0">📊 Dashboard Pantauan SPK & HPP Produksi</h5>
+            <button class="btn btn-primary fw-bold px-3 py-2" onclick="bukaModalSPK()">➕ Terbitkan SPK</button>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle text-center">
+              <thead class="table-light">
+                <tr>
+                  <th class="text-start">No. SPK & Aksi</th>
+                  <th>Jalur & Vendor</th>
+                  <th style="min-width: 140px;">Progress & Status</th>
+                  <th>QTY Bahan Keluar</th>
+                  <th>QTY Jadi Masuk</th>
+                  <th>Total Biaya WIP</th>
+                  <th>HPP / Pcs (Real-Time)</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-spk"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB BELANJA UMUM -->
+      <section id="tab-beli" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-secondary border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="fw-bold text-secondary m-0">🛒 Riwayat Belanja Umum & Bahan Baku</h5>
+            <button class="btn btn-secondary text-white fw-bold px-3 py-2" onclick="bukaModalBeli()">➕ Catat Belanja</button>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle text-center">
+              <thead class="table-light">
+                <tr><th>Tanggal</th><th class="text-start">No Nota/PO</th><th class="text-start">Vendor / Supplier</th><th>Kategori</th><th class="text-end">Total Belanja (Rp)</th><th>Aksi</th></tr>
+              </thead>
+              <tbody id="tbl-riw-beli"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-distribusi" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-info border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="fw-bold text-info text-dark m-0">🚚 Riwayat Distribusi Bahan ke Maklun</h5>
+            <button class="btn btn-info fw-bold px-3 py-2 text-dark" onclick="bukaModalDist()">➕ Kirim Bahan Baru</button>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle text-center">
+              <thead class="table-light">
+                <tr><th>Tanggal</th><th>SPK Ref</th><th class="text-start">Vendor Maklun</th><th>Kategori</th><th class="text-start">Bahan / Item</th><th>QTY</th><th class="text-end">Nilai (Rp)</th><th>Akuntansi</th><th>Aksi</th></tr>
+              </thead>
+              <tbody id="tbl-riw-dist"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-maklun" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-success border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="fw-bold text-success m-0">🏭 Riwayat Penerimaan Hasil Maklun</h5>
+            <button class="btn btn-success fw-bold px-3 py-2" onclick="bukaModalMaklun()">➕ Catat Hasil Maklun</button>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle text-center">
+              <thead class="table-light">
+                <tr><th>Tanggal</th><th class="text-start">No Bukti/Nota</th><th>SPK Ref</th><th class="text-start">Vendor Maklun</th><th>Tipe Pekerjaan</th><th class="text-end">Total Biaya (Rp)</th><th>Aksi</th></tr>
+              </thead>
+              <tbody id="tbl-riw-maklun"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-hutang" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-dark border-4">
+          <h5 class="fw-bold text-dark mb-3">💸 Rekapitulasi Hutang Usaha (Belanja)</h5>
+          <div id="area-tagihan-hutang"></div>
+        </div>
+      </section>
+
+      <section id="tab-rekap-maklun" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-dark border-4">
+          <h5 class="fw-bold text-dark mb-3">🧾 Rekapitulasi Hutang Maklun & Sub-Assembly</h5>
+          <div id="area-tagihan-maklun"></div>
+        </div>
+      </section>
+
+      <div class="d-lg-none fixed-bottom bg-white border-top shadow-lg d-flex justify-content-around p-2" style="z-index: 1040; border-radius: 20px 20px 0 0; overflow-x: auto; white-space: nowrap;">
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('dashboard')">📊 SPK</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('beli')">🛒 Beli</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('distribusi')">🚚 Kirim</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('maklun')">🏭 Maklun</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('hutang')">💸 Hutang</button>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<div class="modal fade" id="modalBeli" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title fw-bold" id="modal-beli-title">➕ Catat Belanja Umum</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4 bg-light">
+        <div id="notif-belanja"></div>
+        <form id="form-beli">
+          <input type="hidden" id="b-nota-lama">
+          <div class="row g-3 mb-4">
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Tgl Belanja <span class="text-danger">*</span></label>
+              <input type="date" id="b-tgl" class="form-control" required>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">No Nota / Resi <span class="text-danger">*</span></label>
+              <input type="text" id="b-nota" class="form-control" placeholder="Contoh: INV-VEN-001" required>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Vendor / Supplier <span class="text-danger">*</span></label>
+              <div class="input-group">
+                <select id="b-vendor" class="form-select" required></select>
+                <button type="button" class="btn btn-outline-danger fw-bold" title="Tambah supplier" onclick="bukaModalSupplierBaru('SUPPLIER','b-vendor'); return false;">+</button>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Tipe / Kategori Beli <span class="text-danger">*</span></label>
+              <select id="b-tipe" class="form-select" onchange="updTipeBeli()"></select>
+            </div>
+          </div>
+
+          <div class="card p-3 shadow-sm border-0 mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h6 class="fw-bold m-0 text-danger">📦 Daftar Item Belanja</h6>
+              <button type="button" class="btn btn-sm btn-outline-danger fw-bold" onclick="tambahBaris('row-beli')">+ Tambah Baris</button>
+            </div>
+            <small class="text-muted d-block mb-3">Tidak menemukan bahan? <a href="javascript:void(0)" onclick="bukaModalBahan(); return false;" class="text-decoration-none fw-bold text-danger">+ Buat Master Bahan Baru</a></small>
+            <div id="area-items-beli"></div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer bg-white">
+        <button type="button" class="btn btn-outline-secondary fw-bold" data-bs-dismiss="modal">Batal</button>
+        <button type="button" class="btn btn-danger fw-bold px-4" id="btn-beli" onclick="eksekusiSimpanBeli('baru')">💾 Simpan Belanja</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="modalDist" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header bg-info text-dark">
+        <h5 class="modal-title fw-bold" id="modal-dist-title">➕ Kirim Bahan ke Maklun</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4 bg-light">
+        <div id="notif-distribusi"></div>
+        <form id="form-distribusi">
+          <input type="hidden" id="d-row-lama">
+          <div class="row g-3 mb-4">
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Tgl Pengiriman <span class="text-danger">*</span></label>
+              <input type="date" id="d-tgl" class="form-control" required>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Tujuan Vendor <span class="text-danger">*</span></label>
+              <div class="input-group">
+                <select id="d-maklun" class="form-select" required></select>
+                <button type="button" class="btn btn-outline-info fw-bold text-dark" title="Tambah vendor maklun" onclick="bukaModalSupplierBaru('MAKLUN','d-maklun'); return false;">+</button>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">SPK Terkait <span class="text-danger">*</span></label>
+              <select id="d-spk" class="form-select border-primary" required></select>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Status Akuntansi Bahan</label>
+              <select id="d-tipe-dist" class="form-select border-warning text-dark fw-bold">
+                <option value="Hitung HPP (Beban Produksi)">Hitung ke HPP Produksi</option>
+                <option value="DP Potong Tagihan">Hitung sebagai Uang Muka (DP)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card p-3 shadow-sm border-0 mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h6 class="fw-bold m-0 text-info text-dark">📦 Daftar Bahan yang Dikirim</h6>
+              <button type="button" class="btn btn-sm btn-outline-info text-dark fw-bold" id="btn-add-dist" onclick="tambahBarisDist()">+ Tambah Item</button>
+            </div>
+            <div id="area-items-dist"></div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer bg-white">
+        <button type="button" class="btn btn-outline-secondary fw-bold" data-bs-dismiss="modal">Batal</button>
+        <button type="button" class="btn btn-info fw-bold px-4 text-dark" id="btn-dist" onclick="eksekusiSimpanDist('baru')">💾 Simpan Distribusi</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="modalMaklun" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header bg-success text-white">
+        <h5 class="modal-title fw-bold" id="modal-maklun-title">➕ Catat Hasil Maklun</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4 bg-light">
+        <div id="notif-maklun"></div>
+        <form id="form-maklun">
+          <input type="hidden" id="m-nota-lama">
+          <div class="row g-3 mb-4">
+            <div class="col-md-2">
+              <label class="fw-bold mb-1">Tanggal <span class="text-danger">*</span></label>
+              <input type="date" id="m-tgl" class="form-control" required>
+            </div>
+            <div class="col-md-2">
+              <label class="fw-bold mb-1">Nota Tagihan <span class="text-danger">*</span></label>
+              <input type="text" id="m-nota" class="form-control" placeholder="No Tagihan" required>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Vendor / Pabrik <span class="text-danger">*</span></label>
+              <div class="input-group">
+                <select id="m-vendor" class="form-select" required></select>
+                <button type="button" class="btn btn-outline-success fw-bold" title="Tambah vendor maklun" onclick="bukaModalSupplierBaru('MAKLUN','m-vendor'); return false;">+</button>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <label class="fw-bold mb-1 text-primary">Untuk SPK <span class="text-danger">*</span></label>
+              <select id="m-spk" class="form-select border-primary" onchange="updItemMaklunForm()" required></select>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1 text-warning text-dark">Tipe Jasa <span class="text-danger">*</span></label>
+              <select id="m-tipe" class="form-select border-warning text-dark fw-bold" onchange="updTipeMaklun()" required>
+                <option value="Barang Jadi">Barang Jadi (QTY Selesai)</option>
+                <option value="Jasa Spesifik Varian">Jasa Spesifik Per Varian</option>
+                <option value="Jasa Umum (Pukul Rata)">Jasa Borongan (Pukul Rata)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card p-3 shadow-sm border-0 mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h6 class="fw-bold m-0 text-success">📦 Daftar Item / Jasa Masuk</h6>
+              <button type="button" class="btn btn-sm btn-outline-success fw-bold" onclick="tambahBaris('row-maklun')">+ Tambah Baris</button>
+            </div>
+            <div id="area-items-maklun"></div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer bg-white">
+        <button type="button" class="btn btn-outline-secondary fw-bold" data-bs-dismiss="modal">Batal</button>
+        <button type="button" class="btn btn-success fw-bold px-4" id="btn-maklun" onclick="eksekusiSimpanMaklun('baru')">💾 Simpan Maklun</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="modalSPK" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title fw-bold" id="modal-spk-title">➕ Terbitkan SPK Baru</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4 bg-light">
+        <div id="notif-spk"></div>
+        <form id="form-spk">
+          <input type="hidden" id="s-no-lama">
+          <div class="row g-3 mb-3 border-bottom pb-3">
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Tanggal SPK <span class="text-danger">*</span></label>
+              <input type="date" id="s-tgl" class="form-control" required>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Nomor SPK <span class="text-danger">*</span></label>
+              <input type="text" id="s-no" class="form-control fw-bold border-primary" placeholder="Cth: SPK-001" required>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1 text-danger">Target Deadline</label>
+              <input type="date" id="s-deadline" class="form-control border-danger">
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1 text-primary">Tarik dari PO Sales (Opsional)</label>
+              <select id="input-nopo" class="form-select border-primary" onchange="applyPoToSpk(this)"></select>
+            </div>
+          </div>
+
+          <div class="row g-3 mb-4">
+            <div class="col-md-4">
+              <label class="fw-bold mb-1">PIC / Admin Pembuat</label>
+              <input type="text" id="s-pic" class="form-control" placeholder="Nama PIC">
+            </div>
+            <div class="col-md-4">
+              <label class="fw-bold mb-1">Jalur Produksi / Rute <span class="text-danger">*</span></label>
+              <select id="s-jalur" class="form-select border-info" onchange="aturJalurSPK()" required>
+                <option value="Produksi Internal">Produksi Internal / In-House</option>
+                <option value="Maklun CMT">Maklun CMT (Jahit Saja)</option>
+                <option value="Maklun Full Order (FOB)">Maklun Full Order (FOB)</option>
+                <option value="Maklun Sub-Assembly">Maklun Sub-Assembly (Bordir/Sablon)</option>
+              </select>
+            </div>
+            <div class="col-md-4" id="area-vendor-spk">
+              <label class="fw-bold mb-1">Pilih Vendor Maklun</label>
+              <div class="input-group">
+                <select id="s-vendor-spk" class="form-select border-info"></select>
+                <button type="button" class="btn btn-outline-info fw-bold text-dark" title="Tambah vendor maklun" onclick="bukaModalSupplierBaru('MAKLUN','s-vendor-spk'); return false;">+</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="row g-3 mb-4">
+            <div class="col-12"><label class="fw-bold mb-1">Pilih Komposisi Bahan Utama (Max 3)</label></div>
+            <div class="col-md-4"><select id="s-bahan1" class="form-select"></select></div>
+            <div class="col-md-4"><select id="s-bahan2" class="form-select"></select></div>
+            <div class="col-md-4"><select id="s-bahan3" class="form-select"></select></div>
+          </div>
+
+          <div class="card p-3 shadow-sm border-0 mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h6 class="fw-bold m-0 text-primary">🎯 Daftar Output Produk yang Diharapkan</h6>
+              <div>
+                <button type="button" class="btn btn-sm btn-outline-success fw-bold me-2" onclick="bukaModalItem()">+ Buat Produk Baru</button>
+                <button type="button" class="btn btn-sm btn-outline-primary fw-bold" onclick="tambahBaris('row-spk')">+ Tambah Varian</button>
+              </div>
+            </div>
+            <div id="area-items-spk"></div>
+          </div>
+          
+          <div class="col-12 mt-3">
+            <label class="fw-bold mb-1">Catatan Keseluruhan SPK</label>
+            <textarea id="s-catatan" class="form-control" rows="3" placeholder="Instruksi spesifik yang berlaku untuk seluruh SPK ini..."></textarea>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer bg-white">
+        <button type="button" class="btn btn-outline-secondary fw-bold" data-bs-dismiss="modal">Batal</button>
+        <button type="button" class="btn btn-primary fw-bold px-4" id="btn-spk" onclick="siapkanSimpanSPK('baru')">🚀 Terbitkan SPK Sekarang</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="modalBahanBaru" tabindex="-1" style="z-index: 1060;">
+  <div class="modal-dialog">
+    <div class="modal-content border-secondary shadow-lg">
+      <div class="modal-header bg-secondary text-white">
+        <h5 class="modal-title fw-bold m-0">🆕 Tambah Master Bahan</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4 bg-light">
+        <div class="mb-3">
+          <label class="fw-bold mb-1">Kategori <span class="text-danger">*</span></label>
+          <select id="new-bahan-kat" class="form-select border-secondary fw-bold text-primary">
+            <option value="Bahan Baku">Bahan Baku</option>
+            <option value="Packaging / Aksesoris">Packaging / Aksesoris</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="fw-bold mb-1">Sub-Kategori <span class="text-danger">*</span></label>
+          <input type="text" id="new-bahan-sub" class="form-control border-secondary fw-bold" placeholder="Cth: Bahan Celana, Aksesoris Jadi Krl">
+        </div>
+        <div class="mb-3">
+          <label class="fw-bold mb-1">Nama Bahan / Aksesoris <span class="text-danger">*</span></label>
+          <input type="text" id="new-bahan-name" class="form-control border-secondary fw-bold text-dark" placeholder="Cth: Kain Cotton 30s Hitam">
+        </div>
+        <div id="notif-bahan-baru"></div>
+      </div>
+      <div class="modal-footer p-2 bg-white">
+        <button type="button" class="btn btn-outline-secondary fw-bold" data-bs-dismiss="modal">Batal</button>
+        <button type="button" class="btn btn-secondary fw-bold px-4 text-white" id="btn-save-bahan" onclick="simpanBahanBaru()">💾 Simpan Bahan</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="modalItemBaru" tabindex="-1" style="z-index: 1070;">
+  <div class="modal-dialog">
+    <div class="modal-content border-success shadow-lg">
+      <div class="modal-header bg-success text-white">
+        <h5 class="modal-title fw-bold m-0">🆕 Tambah Master Produk (Barang Jadi)</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4 bg-light">
+        <div class="alert alert-info py-2" style="font-size:0.85rem;">
+          <b>Info:</b> Gunakan form ini untuk mendaftarkan barang jadi baru (Cth: Topi, Celana) yang akan dijadikan target Output SPK ini.
+        </div>
+        <div class="mb-3">
+          <label class="fw-bold mb-1">Kategori <span class="text-danger">*</span></label>
+          <input type="text" id="new-item-kat" class="form-control border-success" placeholder="Contoh: Topi Kiral">
+        </div>
+        <div class="mb-3">
+          <label class="fw-bold mb-1">Sub-Kategori <span class="text-danger">*</span></label>
+          <input type="text" id="new-item-sub" class="form-control border-success" placeholder="Contoh: Topi Kiral Taktikal">
+        </div>
+        <div class="mb-3">
+          <label class="fw-bold mb-1">Nama Produk / Item <span class="text-danger">*</span></label>
+          <input type="text" id="new-item-name" class="form-control border-success fw-bold text-dark" placeholder="Contoh: Topi Kiral Taktikal Army">
+        </div>
+        <div id="notif-item-baru"></div>
+      </div>
+      <div class="modal-footer p-2 bg-white">
+        <button type="button" class="btn btn-outline-secondary fw-bold" data-bs-dismiss="modal">Batal</button>
+        <button type="button" class="btn btn-success fw-bold px-4" id="btn-save-item" onclick="simpanItemBaru()">💾 Simpan Produk</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<div class="modal fade" id="modalSupplierBaru" tabindex="-1" style="z-index: 1085;">
+  <div class="modal-dialog">
+    <div class="modal-content border-primary shadow-lg">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title fw-bold m-0" id="modal-supplier-title">🆕 Tambah Supplier / Maklun</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4 bg-light">
+        <input type="hidden" id="new-supplier-type" value="SUPPLIER">
+        <input type="hidden" id="new-supplier-target" value="">
+        <div class="mb-3">
+          <label class="fw-bold mb-1">Nama Supplier / Vendor <span class="text-danger">*</span></label>
+          <input type="text" id="new-supplier-name" class="form-control border-primary fw-bold" placeholder="Contoh: CV Maklun Jaya">
+        </div>
+        <div class="mb-3">
+          <label class="fw-bold mb-1">Kontak / PIC</label>
+          <input type="text" id="new-supplier-contact" class="form-control" placeholder="Opsional">
+        </div>
+        <div class="mb-3">
+          <label class="fw-bold mb-1">No HP / Telepon</label>
+          <input type="text" id="new-supplier-phone" class="form-control" placeholder="Opsional">
+        </div>
+        <div class="mb-3">
+          <label class="fw-bold mb-1">Alamat / Catatan</label>
+          <textarea id="new-supplier-address" class="form-control" rows="2" placeholder="Opsional"></textarea>
+        </div>
+        <div id="notif-supplier-baru"></div>
+      </div>
+      <div class="modal-footer p-2 bg-white">
+        <button type="button" class="btn btn-outline-secondary fw-bold" data-bs-dismiss="modal">Batal</button>
+        <button type="button" class="btn btn-primary fw-bold px-4" id="btn-save-supplier" onclick="simpanSupplierBaru()">💾 Simpan</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="modalPreviewCetak" tabindex="-1" style="z-index: 1060;">
+  <div class="modal-dialog modal-fullscreen print-reset p-4">
+    <div class="modal-content">
+      <div class="modal-header bg-dark text-white print-hide align-items-center">
+        <h5 class="modal-title fw-bold m-0" id="title-preview-cetak">📄 Preview Dokumen</h5>
+        
+        <div class="ms-auto me-4 d-flex align-items-center">
+          <label class="me-2 mb-0 fw-bold" style="font-size: 0.85rem; color: #cbd5e1;">Gunakan Kop:</label>
+          <select id="pilihan-kop" class="form-select form-select-sm fw-bold border-secondary text-dark" style="width: auto; cursor:pointer; background-color:#f8fafc;" onchange="renderUlangCetak()">
+            <option value="KAMPUNG_JAHIT">Kampung Jahit (B2B Biasa)</option>
+            <option value="CV_KIRAL">CV Kiral (Corporate Besar)</option>
+          </select>
+        </div>
+        
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body bg-white text-dark p-0" id="area-print-dokumen" style="min-height: 60vh;"></div>
+      <div class="modal-footer print-hide bg-light p-2">
+        <button type="button" class="btn btn-outline-secondary fw-bold" data-bs-dismiss="modal">✖️ Tutup</button>
+        <button type="button" class="btn btn-primary fw-bold px-4" onclick="eksekusiCetakLanjutan()">🖨️ Cetak / Save PDF</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="toast-container" class="position-fixed top-0 start-50 translate-middle-x p-3" style="z-index: 9999; margin-top: 10px; pointer-events: none;"></div>
+<script>
+  window.PURCH_BOOTSTRAP = <?!= PURCH_BOOTSTRAP_JSON ?>;
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<?!= include('JS'); ?>
+<?!= include('JS_PDF'); ?>
+</body>
+</html>

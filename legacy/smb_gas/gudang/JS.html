@@ -1,0 +1,900 @@
+<script>
+  var globalMutasiData = [];
+  var globalMasterBahan = [];
+  var globalMasterJadi = [];
+  var globalTarikanOmni = [];
+  var __tarikanOmniLoaded = false;
+  var __tarikanOmniLoading = false;
+  var __tarikanOmniEstimate = 0;
+  var __tarikanOmniRequestSeq = 0;
+  var mvState = { subKat: "", tgl: "", target: 0, items: [], toko: "" };
+  var __gudangLoading = false;
+  var __gudangLoadedOnce = false;
+  var __gudangActiveTab = "dash";
+  var __gudangRefreshQueued = false;
+  var __gudangQueuedHeartbeatVersion = "";
+  var GUDANG_AUTH = window.GUDANG_BOOTSTRAP || {};
+  var __gudangHeartbeatVersion = String(GUDANG_AUTH.serverVersion || GUDANG_AUTH.heartbeatVersion || "");
+
+  function gudangEmail() { return String(GUDANG_AUTH.email || GUDANG_AUTH.userEmail || "").trim().toLowerCase(); }
+  function gudangPaspor() { return String(GUDANG_AUTH.paspor || GUDANG_AUTH.passport || "").trim(); }
+
+  function runGasGudang(fnName, args, onSuccess, onFailure) {
+    args = Array.isArray(args) ? args.slice() : [];
+    args.push(gudangEmail(), gudangPaspor());
+    var runner = google.script.run
+      .withSuccessHandler(onSuccess || function(){})
+      .withFailureHandler(onFailure || function(err) {
+        showToast("❌ Gagal server: " + esc((err && err.message) || err), "error");
+      });
+    return runner[fnName].apply(runner, args);
+  }
+
+  function hydrateUserGudang(user) {
+    user = user || {};
+    var name = user.name || user.displayName || GUDANG_AUTH.displayName || GUDANG_AUTH.email || "";
+    var email = user.email || GUDANG_AUTH.email || "";
+    var el = document.getElementById("user-email");
+    if (el) el.innerText = name || email || "User";
+  }
+
+  function bukaLinkModul(url) {
+    if (!url || url === "#") return false;
+    try { window.top.location.href = url; }
+    catch(e) { window.location.href = url; }
+    return false;
+  }
+
+  function gudangModalTerbuka() {
+    return !!document.querySelector('.modal.show');
+  }
+
+  function prosesRefreshGudangTertunda() {
+    if (!__gudangRefreshQueued) return;
+    if (gudangModalTerbuka() || __gudangLoading) return;
+    __gudangRefreshQueued = false;
+    if (__gudangQueuedHeartbeatVersion) __gudangHeartbeatVersion = String(__gudangQueuedHeartbeatVersion);
+    __gudangQueuedHeartbeatVersion = "";
+    muatDataGudang({ silent: true, source: "heartbeat_queued" });
+  }
+
+  function cekHeartbeatGudang(silent) {
+    if (!gudangEmail() || !gudangPaspor()) return;
+    runGasGudang("ERP_globalHeartbeat", [__gudangHeartbeatVersion], function(res) {
+      if (!res || !res.ok) {
+        if (res && res.shouldLogout && res.portalUrl) {
+          showToast("⚠️ Sesi Gudang habis. Kembali ke Portal...", "warning");
+          setTimeout(function(){ bukaLinkModul(res.portalUrl); }, 800);
+        }
+        return;
+      }
+      GUDANG_AUTH.email = res.userEmail || GUDANG_AUTH.email;
+      GUDANG_AUTH.displayName = res.displayName || GUDANG_AUTH.displayName;
+      GUDANG_AUTH.paspor = res.paspor || res.passport || GUDANG_AUTH.paspor;
+      GUDANG_AUTH.passport = res.passport || res.paspor || GUDANG_AUTH.passport;
+      hydrateUserGudang(res.user || { name: res.displayName, email: res.userEmail });
+
+      var serverVersion = String(res.serverVersion || "");
+      if (res.shouldRefresh && __gudangLoadedOnce) {
+        if (gudangModalTerbuka() || __gudangLoading) {
+          __gudangRefreshQueued = true;
+          __gudangQueuedHeartbeatVersion = serverVersion;
+          if (!silent) showToast("⏳ Ada update data Gudang, refresh ditunda sampai modal ditutup.", "warning");
+          return;
+        }
+        if (serverVersion) __gudangHeartbeatVersion = serverVersion;
+        muatDataGudang({ silent: true, source: "heartbeat" });
+        return;
+      }
+      if (serverVersion) __gudangHeartbeatVersion = serverVersion;
+    }, function(err) {
+      if (!silent) showToast("⚠️ Heartbeat Gudang gagal: " + esc((err && err.message) || err), "warning");
+    });
+  }
+
+  function startHeartbeatGudang() {
+    cekHeartbeatGudang(true);
+    setInterval(function(){ cekHeartbeatGudang(true); }, 60000);
+    document.addEventListener('hidden.bs.modal', function(){
+      setTimeout(prosesRefreshGudangTertunda, 250);
+    });
+  }
+
+  function logoutGudang() {
+    var btn = document.getElementById("btn-logout-gudang");
+    if (btn) { btn.disabled = true; btn.innerText = "Logout..."; }
+    runGasGudang("ERP_globalLogout", [gudangPaspor()], function(res) {
+      var url = (res && res.portalUrl) || GUDANG_AUTH.portalUrl || "";
+      showToast("✅ Logout berhasil.", "success");
+      setTimeout(function(){ if (url) bukaLinkModul(url); }, 500);
+    }, function(err) {
+      if (btn) { btn.disabled = false; btn.innerText = "Logout"; }
+      showToast("❌ Logout gagal: " + esc((err && err.message) || err), "error");
+    });
+  }
+
+
+  function esc(v) {
+    return String(v === null || v === undefined ? "" : v)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function enc(v) {
+    return encodeURIComponent(String(v === null || v === undefined ? "" : v));
+  }
+
+  function dec(v) {
+    try { return decodeURIComponent(v || ""); } catch(e) { return v || ""; }
+  }
+
+  function num(v) {
+    var n = parseFloat(v);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function arr(v) {
+    return Array.isArray(v) ? v : [];
+  }
+
+  function showToast(message, type = "success") {
+    var container = document.getElementById("toast-container");
+    if(!container) return;
+    var toast = document.createElement("div");
+    toast.className = "custom-toast toast-" + type;
+    toast.innerHTML = message;
+    container.appendChild(toast);
+    setTimeout(function() {
+      toast.classList.add("fade-out");
+      setTimeout(function() { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+    }, 3000); 
+  }
+
+  function ensureStatusBox() {
+    var box = document.getElementById("gudang-status-box");
+    if (box) return box;
+    var main = document.querySelector("main");
+    if (!main) return null;
+    box = document.createElement("div");
+    box.id = "gudang-status-box";
+    box.className = "alert alert-light border shadow-sm py-2 px-3 mb-3";
+    box.style.fontSize = "0.86rem";
+    box.style.display = "none";
+    main.insertBefore(box, main.firstChild);
+    return box;
+  }
+
+  function setStatusBox(html, type) {
+    var box = ensureStatusBox();
+    if (!box) return;
+    box.style.display = "block";
+    box.className = "alert border shadow-sm py-2 px-3 mb-3 alert-" + (type || "light");
+    box.innerHTML = html;
+  }
+
+  if (typeof window.formatRp !== "function") {
+    window.formatRp = function(angka) { 
+      return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka || 0); 
+    };
+  }
+
+  function pindah(t) {
+    __gudangActiveTab = t || "dash";
+    ['dash','bahan','jadi','omni','qc'].forEach(function(x) {
+      var el = document.getElementById('tab-'+x);
+      if(el) el.classList.add('d-none');
+    });
+    var target = document.getElementById('tab-'+__gudangActiveTab);
+    if(target) target.classList.remove('d-none');
+
+    document.querySelectorAll('.nav-link, .fixed-bottom .btn').forEach(function(el) {
+      el.classList.remove('active');
+      if(el.classList.contains('text-primary')) el.classList.replace('text-primary', 'text-secondary');
+    });
+
+    document.querySelectorAll('.nav-'+__gudangActiveTab).forEach(function(el) {
+      el.classList.add('active');
+      if(el.classList.contains('text-secondary')) el.classList.replace('text-secondary', 'text-primary');
+    });
+
+    // v2.6: data inti dimuat sekali; detail Omni baru dibaca saat tab Tarikan dibuka.
+    if (!__gudangLoadedOnce && !__gudangLoading) {
+      muatDataGudang({ initial: true });
+    } else if (__gudangActiveTab === "omni") {
+      muatTarikanOmni({ silent: true });
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", function() {
+    ensureStatusBox();
+    pindah('dash');
+
+    hydrateUserGudang();
+    startHeartbeatGudang();
+
+    runGasGudang("getModulLinks", [], function(links) {
+        var htmlMenu = `<li><div class="dropdown-item fw-bold" style="background:#f8f9fa; color:#0d6efd; cursor:default;">📦 Modul Gudang (Aktif)</div></li>`;
+        var htmlPortal = "";
+        arr(links).forEach(function(m) {
+          var nama = String(m.nama || "");
+          var url = String(m.url || "#");
+          var safeUrl = esc(url);
+          if(nama.toLowerCase().includes("utama") || nama.toLowerCase().includes("portal")) {
+             htmlPortal = `<li><hr class="dropdown-divider"></li><li><a class="dropdown-item fw-bold text-center" href="${safeUrl}" style="color:#dc3545; background-color:#fee2e2; padding:8px;" target="_top" onclick="return bukaLinkModul(this.href)">🏠 Home / Portal Utama</a></li>`;
+          } else {
+             htmlMenu += `<li><a class="dropdown-item fw-bold text-dark" href="${safeUrl}" target="_top" onclick="return bukaLinkModul(this.href)">${esc(nama)}</a></li>`;
+          }
+        });
+        var menuList = document.getElementById('menu-modul-list');
+        if(menuList) menuList.innerHTML = htmlMenu + htmlPortal;
+      }, function(err) {
+        showToast("⚠️ Link pindah modul gagal dimuat: " + esc(err.message || err), "warning");
+      });
+  });
+
+  function muatDataGudang(opt) {
+    opt = opt || {};
+    var isSilent = !!opt.silent;
+    if (__gudangLoading) return;
+    __gudangLoading = true;
+
+    var btnRef = document.getElementById("btn-refresh");
+    if (btnRef && !isSilent) { btnRef.innerHTML = "⏳ Menarik Data..."; btnRef.disabled = true; }
+    if (!isSilent) setStatusBox("⏳ Menarik data Gudang, Stock_Movement, Master_Item, dan summary Omni...", "warning");
+
+    runGasGudang("getInitDataGudang", [], function(res) {
+        __gudangLoading = false;
+        if (btnRef && !isSilent) { btnRef.innerHTML = "🔄 Refresh"; btnRef.disabled = false; }
+
+        if (!res || !res.success) {
+          setStatusBox("❌ Gagal memuat database: " + esc((res && res.msg) || "Server Error"), "danger");
+          return showToast("❌ Gagal memuat database: " + esc((res && res.msg) || "Server Error"), "error");
+        }
+
+        res.bahan = arr(res.bahan);
+        res.jadi = arr(res.jadi);
+        res.pr = arr(res.pr);
+        res.tarikanOmni = arr(res.tarikanOmni);
+        res.mutasi = arr(res.mutasi);
+        res.dash = res.dash || {};
+        res.meta = res.meta || {};
+        __gudangLoadedOnce = true;
+        if (res.meta.heartbeat && res.meta.heartbeat.version) __gudangHeartbeatVersion = String(res.meta.heartbeat.version);
+
+        globalMutasiData = res.mutasi;
+        globalMasterBahan = res.bahan;
+        globalMasterJadi = res.jadi;
+        globalTarikanOmni = res.tarikanOmni;
+        __tarikanOmniEstimate = num(res.meta.tarikanCountEstimate || res.tarikanOmni.length);
+        __tarikanOmniRequestSeq++;
+        __tarikanOmniLoading = false;
+        __tarikanOmniLoaded = !res.meta.tarikanLazy;
+
+        var setTxt = function(id, val) { var el = document.getElementById(id); if (el) el.innerText = val; };
+        setTxt("dash-total-fisik", (res.dash.totalPcsStok || 0).toLocaleString('id-ID') + " Pcs");
+        setTxt("count-pr", (res.dash.totalPR || res.pr.length || 0) + " PR URGENT"); 
+        setTxt("dash-low-bahan", res.dash.lowBahan || 0);
+        setTxt("dash-low-jadi", res.dash.lowJadi || 0);
+
+        renderPR(res.pr, __tarikanOmniEstimate);
+        if (__tarikanOmniLoaded) renderTarikanOmni(res.tarikanOmni);
+        else renderTarikanOmniPlaceholder();
+        renderAccordionGrid("wadah-grid-bahan", res.bahan, "Bahan Baku");
+        renderAccordionGrid("wadah-grid-jadi", res.jadi, "Barang Jadi");
+
+        if (typeof jalankanMultiFilterMutasi === "function") jalankanMultiFilterMutasi();
+
+        var metaHtml = `✅ Data terbaca. ` +
+          `Master: <b>${res.bahan.length + res.jadi.length}</b> item | ` +
+          `Movement: <b>${res.meta.movementCount || res.mutasi.length}</b> | ` +
+          `Summary Omni: <b>${res.meta.omniSummaryRows || res.meta.omniCount || 0}</b> baris | ` +
+          `Grup PR/Tarikan: <b>${__tarikanOmniEstimate}</b> | ` +
+          `PR: <b>${res.pr.length}</b> | ` +
+          `Mode: <b>${esc(res.meta.omniMode || 'SUMMARY')}</b> | ` +
+          `Detail: <b>${res.meta.tarikanLazy ? 'lazy saat tab dibuka' : 'fallback raw'}</b> | ` +
+          `Source: <b>${esc(res.meta.omniSource || '-')}</b> | ` +
+          `Waktu awal: <b>${res.meta.elapsedMs || 0} ms</b>`;
+        if (res.meta.heartbeat && res.meta.heartbeat.updatedAt) metaHtml += ` | Heartbeat: <b>${esc(res.meta.heartbeat.updatedAt)}</b>`;
+        if (res.meta.omniError) metaHtml += `<br><b>Error Omni:</b> ${esc(res.meta.omniError)}`;
+        setStatusBox(metaHtml, (__tarikanOmniEstimate > 0 || res.pr.length > 0) ? "success" : "info");
+        if (__gudangActiveTab === "omni" && res.meta.tarikanLazy) {
+          muatTarikanOmni({ force: true, silent: true });
+        }
+        if (isSilent) showToast("✅ Data Gudang sudah auto-refresh halus.", "success");
+      }, function(err) {
+        __gudangLoading = false;
+        if (btnRef && !isSilent) { btnRef.innerHTML = "🔄 Refresh"; btnRef.disabled = false; }
+        setStatusBox("❌ Gagal terhubung ke server: " + esc(err.message || err), "danger");
+        showToast("❌ Gagal terhubung ke server: " + esc(err.message || err), "error");
+      });
+  }
+
+
+  function renderTarikanOmniPlaceholder() {
+    var tbl = document.getElementById("tbl-tarikan");
+    if (!tbl) return;
+    tbl.innerHTML = `<tr><td colspan="7" class="py-5 text-muted fw-bold">
+      Detail order belum dimuat. Buka tab Tarikan Omni untuk membaca data order lengkap.
+      ${__tarikanOmniEstimate > 0 ? `<br><small>Perkiraan grup aktif: ${__tarikanOmniEstimate.toLocaleString('id-ID')}</small>` : ''}
+    </td></tr>`;
+  }
+
+  function muatTarikanOmni(opt) {
+    opt = opt || {};
+    if (!__gudangLoadedOnce || __tarikanOmniLoading) return;
+    if (__tarikanOmniLoaded && !opt.force) return;
+    __tarikanOmniLoading = true;
+    var requestSeq = ++__tarikanOmniRequestSeq;
+
+    var tbl = document.getElementById("tbl-tarikan");
+    if (tbl) tbl.innerHTML = `<tr><td colspan="7" class="py-5 text-primary fw-bold">⏳ Memuat detail Omni_Order dan validasi Pack/Tidak Pack...</td></tr>`;
+
+    runGasGudang("getTarikanOmniGudang", [], function(res) {
+      if (requestSeq !== __tarikanOmniRequestSeq) return;
+      __tarikanOmniLoading = false;
+      if (!res || !res.success) {
+        __tarikanOmniLoaded = false;
+        renderTarikanOmniPlaceholder();
+        return showToast("❌ Detail Tarikan Omni gagal: " + esc((res && res.msg) || "Server Error"), "error");
+      }
+      globalTarikanOmni = arr(res.tarikanOmni);
+      __tarikanOmniLoaded = true;
+      __tarikanOmniEstimate = globalTarikanOmni.length;
+      renderTarikanOmni(globalTarikanOmni);
+      if (!opt.silent) showToast(`✅ ${globalTarikanOmni.length} grup Tarikan Omni dimuat.`, "success");
+    }, function(err) {
+      if (requestSeq !== __tarikanOmniRequestSeq) return;
+      __tarikanOmniLoading = false;
+      __tarikanOmniLoaded = false;
+      renderTarikanOmniPlaceholder();
+      showToast("❌ Gagal memuat detail Omni: " + esc((err && err.message) || err), "error");
+    });
+  }
+
+  function renderPR(list, tarikanCount) {
+    var htmlPR = "";
+    if (!list || list.length === 0) {
+      var msg = tarikanCount > 0
+        ? "✅ Semua tarikan punya stok cukup. Detail alokasi tetap ada di tab Tarikan Omni."
+        : "🎉 Bersih! Belum ada antrean Omni dari Omni_Order pada periode aktif.";
+      htmlPR = `<tr><td colspan="4" class="py-4 text-success fw-bold">${msg}</td></tr>`;
+    } else {
+      htmlPR = list.map(function(p) {
+        var meta = [];
+        if (num(p.alokasi) > 0) meta.push(num(p.alokasi).toLocaleString('id-ID') + " alokasi");
+        if (num(p.orderCount) > 0) meta.push(num(p.orderCount).toLocaleString('id-ID') + " order");
+        if (num(p.cancelLikeQty) > 0) meta.push("Batal/retur " + num(p.cancelLikeQty).toLocaleString('id-ID') + " pcs");
+        var metaText = meta.length ? `<br><small class="text-muted fw-bold">Detail: ${esc(meta.join(" / "))} di tab Tarikan Omni</small>` : "";
+        return `<tr class="bg-danger bg-opacity-10 align-middle">
+          <td class="text-start fw-bold text-dark">${esc(p.nama)}${metaText}</td>
+          <td class="fw-bold fs-6">${num(p.butuh).toLocaleString('id-ID')}</td>
+          <td class="text-success fw-bold fs-6">${num(p.fisik).toLocaleString('id-ID')}</td>
+          <td><span class="badge bg-danger fs-6 px-3 py-1 shadow-sm border border-light">🔴 -${num(p.pr).toLocaleString('id-ID')} Pcs</span></td>
+        </tr>`;
+      }).join('');
+    }
+    var el = document.getElementById("tbl-pr-omni");
+    if (el) el.innerHTML = htmlPR;
+  }
+
+  function renderTarikanOmni(list) {
+    var tblTarikanEl = document.getElementById("tbl-tarikan");
+    if (!tblTarikanEl) return;
+
+    var theadOmni = tblTarikanEl.closest("table").querySelector("thead");
+    if (theadOmni) {
+      theadOmni.innerHTML = `<tr class="table-dark align-middle"><th>Tgl Pesanan</th><th>Nama Toko</th><th class="text-start">Sub Kategori / Item</th><th>Sisa PR Tarikan</th><th>Stok Tersedia</th><th style="width:160px;">Aksi QTY</th><th style="width:170px;">Eksekusi</th></tr>`;
+    }
+
+    if (!list || list.length === 0) {
+      tblTarikanEl.innerHTML = "<tr><td colspan='7' class='py-5 text-muted fs-6 fw-bold'>Belum ada tarikan dari Omni_Order. Cek status mapping, tanggal, Qty Gudang, dan OMNI_LOOKBACK_DAYS.</td></tr>";
+      return;
+    }
+
+    var htmlOmni = list.map(function(t, idx) {
+      var butuh = num(t.butuh);
+      var fisik = num(t.fisik);
+      var cancelRemaining = num(t.cancelRemainingQty || 0);
+      var cancelCleared = num(t.cancelClearedQty || 0);
+      var maxPack = Math.min(butuh, fisik);
+      var btnParts = [];
+      var inputParts = [];
+
+      if (fisik <= 0) {
+        inputParts.push(`<span class="badge bg-danger fs-6 py-1 w-100 shadow-sm border border-white">Defisit: ${butuh.toLocaleString('id-ID')}</span>`);
+        if (!cancelRemaining) btnParts.push(`<button class="btn btn-sm btn-danger fw-bolder w-100 py-1 shadow-sm" disabled style="cursor:not-allowed;">🚨 PR Produksi</button>`);
+      } else if (t.isGroup) {
+        inputParts.push(`<span class="badge bg-warning bg-opacity-25 text-dark border border-warning w-100 py-1">Multi Varian</span>`);
+        btnParts.push(`<button class="btn btn-sm btn-warning fw-bolder text-dark w-100 shadow-sm py-1" onclick="bukaModalVarianByIndex(${idx})">🎨 Pilih Warna</button>`);
+      } else {
+        inputParts.push(`<input type="number" id="inp-pack-${idx}" class="form-control form-control-sm text-center border-primary fw-bold py-1" value="${maxPack}" max="${maxPack}" min="1">`);
+        btnParts.push(`<button id="btn-pack-${idx}" class="btn btn-sm btn-primary fw-bold w-100 shadow-sm py-1" onclick="eksekusiPackingOmniByIndex(${idx})">⚡ Pack</button>`);
+      }
+
+      if (cancelRemaining > 0) {
+        inputParts.push(`<div class="input-group input-group-sm mt-1"><span class="input-group-text bg-danger bg-opacity-10 text-danger fw-bold">Batal</span><input type="number" id="inp-cancel-${idx}" class="form-control text-center border-danger fw-bold" value="${cancelRemaining}" min="1" max="${cancelRemaining}"></div>`);
+        btnParts.push(`<button id="btn-cancel-${idx}" class="btn btn-sm btn-outline-danger fw-bold w-100 shadow-sm py-1 mt-1" onclick="eksekusiBatalOmniByIndex(${idx})">🚫 Tidak Pack</button>`);
+      }
+
+      var orderInfo = t.orderCount ? `<br><small class="text-muted">${num(t.orderCount).toLocaleString('id-ID')} order</small>` : "";
+      var statusInfo = cancelRemaining > 0 ? `<br><span class="badge bg-danger bg-opacity-10 text-danger border border-danger">Batal belum diputuskan: ${cancelRemaining.toLocaleString('id-ID')} pcs</span>` : "";
+      if (cancelCleared > 0) statusInfo += `<br><span class="badge bg-success bg-opacity-10 text-success border border-success">Batal tidak pack: ${cancelCleared.toLocaleString('id-ID')} pcs</span>`;
+      var summaryInfo = t.statusSummary ? `<br><small class="text-muted">${esc(t.statusSummary)}</small>` : "";
+      return `<tr class="align-middle ${cancelRemaining > 0 ? 'table-warning' : ''}">
+        <td><small>${esc(t.tgl)}</small></td>
+        <td><span class="badge bg-light text-dark border shadow-sm">${esc(t.toko)}</span></td>
+        <td class="text-start fw-bold text-dark"><small>${esc(t.nama)}</small>${orderInfo}${statusInfo}${summaryInfo}</td>
+        <td class="text-danger fw-bolder fs-6">${butuh.toLocaleString('id-ID')}</td>
+        <td class="text-success fw-bolder fs-6">${fisik.toLocaleString('id-ID')}</td>
+        <td>${inputParts.join('')}</td>
+        <td>${btnParts.join('')}</td>
+      </tr>`;
+    }).join('');
+
+    tblTarikanEl.innerHTML = htmlOmni;
+  }
+
+  function eksekusiPackingOmniByIndex(idx) {
+    var t = globalTarikanOmni[idx];
+    if (!t) return showToast("❌ Data tarikan tidak ditemukan. Refresh dulu.", "error");
+
+    var qty = num(document.getElementById("inp-pack-" + idx).value);
+    if (qty <= 0) return showToast("❌ Masukkan QTY yang valid!", "warning");
+    if (qty > num(t.fisik)) return showToast("❌ Qty melebihi stok tersedia!", "warning");
+    if (qty > num(t.butuh)) return showToast("❌ Qty melebihi sisa tarikan!", "warning");
+
+    var btn = document.getElementById("btn-pack-" + idx);
+    if (btn) { btn.innerHTML = "⏳.."; btn.disabled = true; }
+
+    runGasGudang("simpanPackingOmni", [t.nama, t.tgl, qty, t.toko], function(res) {
+        if(res && res.success) {
+          showToast(`✅ Packing ${qty} pcs ${esc(t.nama)} (${esc(t.toko)}) berhasil!`, "success");
+          muatDataGudang({ source: "after_write" });
+        } else {
+          showToast("❌ Gagal: " + esc((res && res.msg) || "Server Error"), "error");
+          if(btn) { btn.innerHTML = "⚡ Pack"; btn.disabled = false; }
+        }
+      }, function(err) {
+        showToast("❌ Gagal server: " + esc(err.message || err), "error");
+        if(btn) { btn.innerHTML = "⚡ Pack"; btn.disabled = false; }
+      });
+  }
+
+  function eksekusiBatalOmniByIndex(idx) {
+    var t = globalTarikanOmni[idx];
+    if (!t) return showToast("❌ Data tarikan tidak ditemukan. Refresh dulu.", "error");
+    var inp = document.getElementById("inp-cancel-" + idx);
+    var qty = num(inp ? inp.value : 0);
+    var maxCancel = num(t.cancelRemainingQty || 0);
+    if (qty <= 0) return showToast("❌ Masukkan QTY batal yang valid!", "warning");
+    if (qty > maxCancel) return showToast("❌ Qty melebihi sisa batal yang belum diputuskan!", "warning");
+
+    var msg = `Tandai ${qty.toLocaleString('id-ID')} pcs ${esc(t.nama)} dari ${esc(t.toko)} sebagai BATAL/TIDAK PACK? Stok fisik tidak akan berkurang, tapi sisa PR tarikan akan turun.`;
+    if (!confirm(msg)) return;
+
+    var btn = document.getElementById("btn-cancel-" + idx);
+    if (btn) { btn.innerHTML = "⏳.."; btn.disabled = true; }
+
+    runGasGudang("simpanBatalOmni", [t.nama, t.tgl, qty, t.toko, !!t.isGroup], function(res) {
+        if(res && res.success) {
+          showToast(`✅ ${qty} pcs batal/tidak pack sudah dicatat. PR tarikan dikurangi tanpa potong stok.`, "success");
+          muatDataGudang({ source: "after_cancel_action" });
+        } else {
+          showToast("❌ Gagal: " + esc((res && res.msg) || "Server Error"), "error");
+          if(btn) { btn.innerHTML = "🚫 Tidak Pack"; btn.disabled = false; }
+        }
+      }, function(err) {
+        showToast("❌ Gagal server: " + esc(err.message || err), "error");
+        if(btn) { btn.innerHTML = "🚫 Tidak Pack"; btn.disabled = false; }
+      });
+  }
+
+  // Kompatibilitas jika ada onclick lama tersisa.
+  function eksekusiPackingOmni(namaItem, tglTarikan, idx, namaToko) {
+    eksekusiPackingOmniByIndex(idx);
+  }
+
+  function renderDropdownGrouped(selectId, dataArray, placeholderText) {
+    var sel = document.getElementById(selectId);
+    if(!sel) return;
+    var html = `<option value="">-- ${esc(placeholderText)} --</option>`;
+    var mapGroup = {};
+    arr(dataArray).forEach(function(itm) {
+      var gName = (itm.sub && itm.sub !== "Umum") ? String(itm.sub).toUpperCase().trim() : (itm.kat ? String(itm.kat).toUpperCase().trim() : "UMUM / LAINNYA");
+      if(!mapGroup[gName]) mapGroup[gName] = [];
+      mapGroup[gName].push(itm);
+    });
+
+    Object.keys(mapGroup).sort().forEach(function(groupName) {
+      html += `<optgroup label="📁 KELOMPOK: ${esc(groupName)}">`;
+      mapGroup[groupName].sort(function(a,b) { return String(a.nama || "").localeCompare(String(b.nama || "")); }).forEach(function(i) {
+        html += `<option value="${esc(i.nama)}" data-stok="${num(i.stok)}" data-unit="${esc(i.unit || '')}">${esc(i.nama)} — (Stok Rak: ${num(i.stok).toLocaleString('id-ID')})</option>`;
+      });
+      html += `</optgroup>`;
+    });
+    sel.innerHTML = html;
+  }
+
+
+  function getSelectedOpnameSystemQty() {
+    var sel = document.getElementById("inp-opname-nama");
+    if (!sel || sel.selectedIndex < 0) return 0;
+    var opt = sel.options[sel.selectedIndex];
+    return num(opt && opt.getAttribute("data-stok"));
+  }
+
+  function updateOpnameSystemQtyPreview() {
+    var stok = getSelectedOpnameSystemQty();
+    var mode = (document.getElementById("inp-opname-mode") || {}).value || "OPNAME";
+    var qtyInput = document.getElementById("inp-opname-qty");
+    var preview = document.getElementById("opname-system-preview");
+    var diffBox = document.getElementById("opname-diff-preview");
+    if (preview) preview.innerHTML = `Stok sistem saat ini: <b>${stok.toLocaleString('id-ID')}</b>`;
+    if (diffBox) {
+      if (mode === "OPNAME") {
+        var fisik = num(qtyInput && qtyInput.value);
+        var diff = fisik - stok;
+        var label = diff === 0 ? "Tidak ada selisih" : (diff > 0 ? `Selisih +${diff.toLocaleString('id-ID')} akan masuk stok` : `Selisih ${diff.toLocaleString('id-ID')} akan keluar stok`);
+        diffBox.innerHTML = label;
+        diffBox.className = "small fw-bold mt-1 " + (diff === 0 ? "text-muted" : (diff > 0 ? "text-success" : "text-danger"));
+      } else {
+        diffBox.innerHTML = "Qty ini akan keluar sebagai pemakaian internal.";
+        diffBox.className = "small fw-bold mt-1 text-warning";
+      }
+    }
+  }
+
+  function bukaModalMutasi(tipeBarang) {
+    var modHead = document.getElementById("mod-header-box");
+    if(modHead) modHead.className = "modal-header bg-primary text-white p-3 px-4";
+    document.getElementById("mod-opname-sub").innerText = "Form Stock Opname Fisik";
+    document.getElementById("mod-opname-title").innerText = "Stock Opname " + tipeBarang;
+    var selArus = document.getElementById("inp-opname-jenis");
+    selArus.value = "IN"; 
+    selArus.disabled = true;
+    var wrapArus = document.getElementById("wrap-opname-jenis");
+    if(wrapArus) wrapArus.style.display = "none";
+    var qtyWrap = document.getElementById("wrap-opname-qty");
+    if(qtyWrap) qtyWrap.className = "col-12";
+    var qtyLabel = document.getElementById("label-opname-qty");
+    if(qtyLabel) qtyLabel.innerHTML = "STOK FISIK AKHIR DI RAK";
+    var qtyInput = document.getElementById("inp-opname-qty");
+    qtyInput.value = "";
+    qtyInput.placeholder = "Isi stok fisik akhir, bukan selisih";
+    document.getElementById("inp-opname-ket").value = "";
+    document.getElementById("inp-opname-mode").value = "OPNAME";
+    var targetList = (tipeBarang === 'Bahan Baku') ? globalMasterBahan : globalMasterJadi;
+    renderDropdownGrouped("inp-opname-nama", targetList, "Pilih SKU Aktual di Rak");
+    var selNama = document.getElementById("inp-opname-nama");
+    if(selNama) selNama.onchange = updateOpnameSystemQtyPreview;
+    qtyInput.oninput = updateOpnameSystemQtyPreview;
+    updateOpnameSystemQtyPreview();
+    new bootstrap.Modal(document.getElementById("modalOpname")).show();
+  }
+
+  function bukaModalPakaiInternal() {
+    var modHead = document.getElementById("mod-header-box");
+    if(modHead) modHead.className = "modal-header bg-warning text-dark p-3 px-4"; 
+    document.getElementById("mod-opname-sub").innerText = "Form Pemakaian Internal";
+    document.getElementById("mod-opname-title").innerText = "📤 Catat Pakai Box / Label";
+    var selArus = document.getElementById("inp-opname-jenis");
+    selArus.value = "OUT"; 
+    selArus.disabled = true; 
+    var wrapArus = document.getElementById("wrap-opname-jenis");
+    if(wrapArus) wrapArus.style.display = "block";
+    var qtyWrap = document.getElementById("wrap-opname-qty");
+    if(qtyWrap) qtyWrap.className = "col-6";
+    var qtyLabel = document.getElementById("label-opname-qty");
+    if(qtyLabel) qtyLabel.innerHTML = "QTY KELUAR";
+    var qtyInput = document.getElementById("inp-opname-qty");
+    qtyInput.value = "1";
+    qtyInput.placeholder = "Qty keluar";
+    document.getElementById("inp-opname-ket").value = "";
+    document.getElementById("inp-opname-mode").value = "PAKAI";
+    renderDropdownGrouped("inp-opname-nama", globalMasterBahan, "Pilih Box / Kartu / Sticker");
+    var selNama = document.getElementById("inp-opname-nama");
+    if(selNama) selNama.onchange = updateOpnameSystemQtyPreview;
+    qtyInput.oninput = updateOpnameSystemQtyPreview;
+    updateOpnameSystemQtyPreview();
+    new bootstrap.Modal(document.getElementById("modalOpname")).show();
+  }
+
+  function submitOpnameManual() {
+    var nmEl = document.getElementById("inp-opname-nama");
+    var nm = nmEl ? nmEl.value : "";
+    var jns = document.getElementById("inp-opname-jenis").value;
+    var qty = num(document.getElementById("inp-opname-qty").value);
+    var ketRaw = document.getElementById("inp-opname-ket").value.trim();
+    var mode = document.getElementById("inp-opname-mode").value;
+    if(!nm) return showToast("❌ Pilih dulu nama produknya dari dropdown!", "warning");
+    if(mode === "OPNAME" && qty < 0) return showToast("❌ Stok fisik tidak boleh minus!", "warning");
+    if(mode !== "OPNAME" && qty <= 0) return showToast("❌ Masukkan QTY yang valid!", "warning");
+    var btn = document.getElementById("btn-submit-opname");
+    btn.innerText = "⏳ Menyimpan..."; btn.disabled = true;
+
+    if(mode === "OPNAME") {
+      runGasGudang("simpanStockOpnameFisik", [nm, qty, ketRaw || "Koreksi fisik"], function(res) {
+          btn.innerText = "Simpan Transaksi"; btn.disabled = false;
+          if(res && res.success) {
+            var diff = num(res.diffQty);
+            var msg = diff === 0 ? "✅ Opname tersimpan. Stok fisik sama dengan sistem." : `✅ Opname tersimpan. Selisih ${diff.toLocaleString('id-ID')} sudah disesuaikan.`;
+            showToast(msg, "success");
+            bootstrap.Modal.getInstance(document.getElementById("modalOpname")).hide();
+            muatDataGudang({ source: "after_write" });
+          } else showToast("❌ Gagal: " + esc((res && res.msg) || "Server Error"), "error");
+        }, function(err) {
+          btn.innerText = "Simpan Transaksi"; btn.disabled = false;
+          showToast("❌ Gagal server: " + esc(err.message || err), "error");
+        });
+      return;
+    }
+
+    var ketFinal = "Pemakaian Internal | " + (ketRaw || "Keperluan Packing");
+    runGasGudang("simpanMutasiManual", [nm, jns, qty, ketFinal], function(res) {
+        btn.innerText = "Simpan Transaksi"; btn.disabled = false;
+        if(res && res.success) {
+          showToast("✅ Transaksi rak berhasil dicatat!", "success");
+          bootstrap.Modal.getInstance(document.getElementById("modalOpname")).hide();
+          muatDataGudang({ source: "after_write" });
+        } else showToast("❌ Gagal: " + esc((res && res.msg) || "Server Error"), "error");
+      }, function(err) {
+        btn.innerText = "Simpan Transaksi"; btn.disabled = false;
+        showToast("❌ Gagal server: " + esc(err.message || err), "error");
+      });
+  }
+
+  function sinkronReturAppSheet() { showToast("⏳ Menarik data Retur QC dari AppSheet...", "warning"); }
+
+  function getBadgeAuditFisik(m, idx) {
+    if (m.stAudit === "AUTO_OK") {
+      var ket = String(m.ket || "");
+      var lbl = ket.includes("Omni") ? "⚡ Omni Pack" : (ket.includes("Retur") ? "🛡️ QC Passed" : (ket.includes("Pemakaian") ? "📤 Consumable" : "📝 Opname Rak"));
+      return `<span class="badge bg-success bg-opacity-25 text-success border border-success px-2 py-1"><small>${lbl}</small></span>`;
+    } else if (m.stAudit === "MANUAL_OK") {
+      return `<span class="badge bg-success px-3 py-1 shadow-sm">✅ Sesuai Fisik</span>`;
+    }
+    return `<button id="btn-adt-${idx}" class="btn btn-sm btn-warning text-dark fw-bolder px-2 py-0 shadow-sm" onclick="kunciAuditFisikEncoded('${enc(m.txKey)}', ${idx})"><small>⚠️ Cek Fisik</small></button>`;
+  }
+
+  function kunciAuditFisikEncoded(txKeyEncoded, idx) {
+    kunciAuditFisik(dec(txKeyEncoded), idx);
+  }
+
+  function kunciAuditFisik(txKey, idx) {
+    var btn = document.getElementById("btn-adt-" + idx);
+    if(btn) { btn.innerText = "⏳.."; btn.disabled = true; }
+    runGasGudang("simpanAuditFisikGudang", [txKey], function(res) {
+        if(res && res.success) { showToast("✅ Verifikasi fisik rak berhasil dikunci!", "success"); muatDataGudang({ source: "after_write" }); }
+        else { showToast("❌ Gagal mengunci verifikasi: " + esc((res && res.msg) || "Server Error"), "error"); if(btn) { btn.innerText = "⚠️ Cek Fisik"; btn.disabled = false; } }
+      }, function(err) {
+        showToast("❌ Gagal server: " + esc(err.message || err), "error");
+        if(btn) { btn.innerText = "⚠️ Cek Fisik"; btn.disabled = false; }
+      });
+  }
+
+  function jalankanMultiFilterMutasi() {
+    var mulaiEl = document.getElementById("fl-tgl-mulai");
+    var akhirEl = document.getElementById("fl-tgl-akhir");
+    var jenisEl = document.getElementById("fl-jenis");
+    var sumberEl = document.getElementById("fl-sumber");
+    var tbl = document.getElementById("tbl-mutasi");
+    if (!tbl || !jenisEl) return;
+
+    var tglMulai = mulaiEl ? mulaiEl.value : "";
+    var tglAkhir = akhirEl ? akhirEl.value : "";
+    var jenis = String(jenisEl.value || "SEMUA").toUpperCase();
+    var cariSumber = sumberEl ? sumberEl.value.toLowerCase().trim() : "";
+    var tableHead = tbl.closest("table").querySelector("thead");
+
+    var filtered = arr(globalMutasiData).filter(function(m) {
+      if (tglMulai && m.tglRawStr < tglMulai) return false;
+      if (tglAkhir && m.tglRawStr > tglAkhir) return false;
+      if (jenis !== "SEMUA" && String(m.jenis || "").toUpperCase() !== jenis) return false;
+      if (cariSumber && String(m.ket || "").toLowerCase().indexOf(cariSumber) === -1) return false;
+      return true;
+    });
+
+    var htmlMut = "";
+    if (jenis === 'IN') {
+      tableHead.innerHTML = `<tr class="table-success align-middle"><th>Tanggal</th><th class="text-start">Nama Barang</th><th>QTY Masuk</th><th>HPP Terupdate</th><th>Nilai Rupiah Masuk</th><th class="text-start">Sumber Pasokan (Dari Mana)</th><th>Sistem PIC</th><th>Audit Fisik</th></tr>`;
+      htmlMut = filtered.map(function(m, idx) {
+        var totalNilai = num(m.qty) * num(m.hpp);
+        return `<tr class="align-middle">
+          <td><small>${esc(m.tgl)}</small></td>
+          <td class="text-start fw-bold text-dark"><small>${esc(m.nama)}</small></td>
+          <td class="fw-bold fs-6 text-success">+${num(m.qty).toLocaleString('id-ID')}</td>
+          <td class="text-end text-muted">${formatRp(num(m.hpp))}</td>
+          <td class="text-end fw-bold text-success">${formatRp(totalNilai)}</td>
+          <td class="text-start fw-bold"><small>${esc(m.ket)}</small></td>
+          <td><span class="badge bg-light text-secondary border">${esc(m.pic)}</span></td>
+          <td>${getBadgeAuditFisik(m, idx)}</td>
+        </tr>`;
+      }).join('');
+    } else {
+      tableHead.innerHTML = `<tr class="table-secondary align-middle"><th>Tanggal</th><th class="text-start">Nama Barang</th><th>Arus</th><th>QTY Pcs</th><th class="text-start">Alokasi / Tujuan (Ke Mana)</th><th>Sistem PIC</th><th>Audit Fisik</th></tr>`;
+      htmlMut = filtered.map(function(m, idx) {
+        var isIN = String(m.jenis || "").toUpperCase() === "IN";
+        var bClr = isIN ? "success" : "danger";
+        var sign = isIN ? "+" : "-";
+        return `<tr class="align-middle">
+          <td><small>${esc(m.tgl)}</small></td>
+          <td class="text-start fw-bold text-dark"><small>${esc(m.nama)}</small></td>
+          <td><span class="badge bg-${bClr}">${esc(m.jenis)}</span></td>
+          <td class="fw-bold fs-6 text-${bClr}">${sign}${num(m.qty).toLocaleString('id-ID')}</td>
+          <td class="text-start fw-bold"><small>${esc(m.ket)}</small></td>
+          <td><span class="badge bg-light text-secondary border">${esc(m.pic)}</span></td>
+          <td>${getBadgeAuditFisik(m, idx)}</td>
+        </tr>`;
+      }).join('');
+    }
+    tbl.innerHTML = htmlMut || `<tr><td colspan='8' class='py-4 text-muted'>Tidak ada mutasi yang cocok dengan kombinasi filter tersebut.</td></tr>`;
+  }
+
+  function bukaModalVarianByIndex(idx) {
+    var t = globalTarikanOmni[idx];
+    if (!t) return showToast("❌ Data tarikan tidak ditemukan. Refresh dulu.", "error");
+    var anakList = arr(t.anak);
+    if (anakList.length === 0) return showToast("❌ Daftar varian kosong. Cek Subcategory di Master_Item.", "error");
+
+    mvState = { subKat: t.nama, tgl: t.tgl, target: num(t.butuh), items: anakList, toko: t.toko };
+    document.getElementById("mv-judul").innerText = `${t.nama} (${t.toko})`; 
+    document.getElementById("mv-target").innerText = `${num(t.butuh).toLocaleString('id-ID')} Pcs`;
+
+    document.getElementById("mv-list-varian").innerHTML = anakList.map(function(a, i) {
+      var stok = num(a.stok);
+      return `<div class="card border-0 shadow-sm p-2 mb-1 bg-white"><div class="d-flex justify-content-between align-items-center"><div class="text-start"><span class="fw-bolder text-dark d-block" style="font-size:0.9rem;">${esc(a.nama)}</span><small class="text-muted">Stok rak: <b class="text-${stok>0?"success":"danger"}">${stok.toLocaleString('id-ID')}</b></small></div><div style="width: 110px;"><input type="number" class="form-control text-center fw-bolder border-primary inp-mv-qty" data-idx="${i}" value="0" min="0" max="${stok}" oninput="hitungSumVarian()" placeholder="0"></div></div></div>`;
+    }).join('');
+    hitungSumVarian(); 
+    new bootstrap.Modal(document.getElementById('modalPecahVarian')).show();
+  }
+
+  function bukaModalVarian(subKat, tgl, targetQty, anakJsonEncoded, namaToko) {
+    var anakList = JSON.parse(decodeURIComponent(anakJsonEncoded || "%5B%5D"));
+    mvState = { subKat: subKat, tgl: tgl, target: num(targetQty), items: anakList, toko: namaToko };
+    document.getElementById("mv-judul").innerText = `${subKat} (${namaToko})`; 
+    document.getElementById("mv-target").innerText = `${num(targetQty).toLocaleString('id-ID')} Pcs`;
+    document.getElementById("mv-list-varian").innerHTML = anakList.map(function(a, i) {
+      var stok = num(a.stok);
+      return `<div class="card border-0 shadow-sm p-2 mb-1 bg-white"><div class="d-flex justify-content-between align-items-center"><div class="text-start"><span class="fw-bolder text-dark d-block" style="font-size:0.9rem;">${esc(a.nama)}</span><small class="text-muted">Stok rak: <b class="text-${stok>0?"success":"danger"}">${stok}</b></small></div><div style="width: 110px;"><input type="number" class="form-control text-center fw-bolder border-primary inp-mv-qty" data-idx="${i}" value="0" min="0" max="${stok}" oninput="hitungSumVarian()" placeholder="0"></div></div></div>`;
+    }).join('');
+    hitungSumVarian();
+    new bootstrap.Modal(document.getElementById('modalPecahVarian')).show();
+  }
+
+  function hitungSumVarian() {
+    var total = 0;
+    var adaPelanggaranStok = false;
+    document.querySelectorAll(".inp-mv-qty").forEach(function(inp) { 
+      var val = parseInt(inp.value) || 0;
+      var maxStok = parseInt(inp.getAttribute("max")) || 0;
+      if (val > maxStok) { inp.value = maxStok; val = maxStok; adaPelanggaranStok = true; }
+      if (val < 0) { inp.value = 0; val = 0; }
+      total += val; 
+    });
+
+    var sumEl = document.getElementById("mv-sum");
+    var btnSub = document.getElementById("btn-submit-varian");
+    if (!sumEl || !btnSub) return;
+    sumEl.innerText = `${total.toLocaleString('id-ID')} / ${num(mvState.target).toLocaleString('id-ID')} Pcs`;
+
+    if (adaPelanggaranStok) showToast("⚠️ Input otomatis diturunkan sesuai batas stok rak fisik!", "warning");
+
+    if (total === 0) {
+      sumEl.className = "fs-4 fw-bold text-secondary";
+      btnSub.className = "btn btn-secondary fw-bolder px-4 py-2 rounded-3 shadow";
+      btnSub.disabled = true; btnSub.innerText = "⚠️ Masukkan QTY";
+    } else if (total === num(mvState.target)) {
+      sumEl.className = "fs-4 fw-bolder text-success";
+      btnSub.className = "btn btn-success fw-bolder px-4 py-2 rounded-3 shadow";
+      btnSub.disabled = false; btnSub.innerText = "✅ Pack Selesai (Lunas)";
+    } else if (total > num(mvState.target)) {
+      sumEl.className = "fs-4 fw-bolder text-danger";
+      btnSub.className = "btn btn-danger fw-bolder px-4 py-2 rounded-3 shadow";
+      btnSub.disabled = true; btnSub.innerText = `⚠️ Kelebihan ${total - num(mvState.target)} Pcs`;
+    } else {
+      var sisaPR = num(mvState.target) - total;
+      sumEl.className = "fs-4 fw-bolder text-warning";
+      btnSub.className = "btn btn-warning text-dark fw-bolder px-4 py-2 rounded-3 shadow";
+      btnSub.disabled = false; btnSub.innerText = `⚡ Pack Sebagian (PR: ${sisaPR} Pcs)`;
+    }
+  }
+
+  function submitPecahVarian() {
+    var payload = [];
+    document.querySelectorAll(".inp-mv-qty").forEach(function(inp) {
+      var qty = parseInt(inp.value) || 0;
+      var item = mvState.items[parseInt(inp.getAttribute("data-idx"))];
+      if(qty > 0 && item) payload.push({ nama: item.nama, qty: qty });
+    });
+    if (!payload.length) return showToast("❌ Belum ada qty varian yang diinput.", "warning");
+
+    var btn = document.getElementById("btn-submit-varian");
+    btn.innerText = "⏳ Memotong Stok..."; btn.disabled = true;
+
+    runGasGudang("simpanPecahVarianBatch", [mvState.subKat, mvState.tgl, payload, mvState.toko], function(res) {
+        if(res && res.success) {
+          showToast("🎉 Konfirmasi packing varian berhasil!", "success");
+          bootstrap.Modal.getInstance(document.getElementById('modalPecahVarian')).hide();
+          muatDataGudang({ source: "after_write" }); 
+        } else {
+          showToast("❌ Gagal: " + esc((res && res.msg) || "Server Error"), "error");
+          hitungSumVarian();
+        }
+      }, function(err) {
+        showToast("❌ Gagal server: " + esc(err.message || err), "error");
+        hitungSumVarian();
+      }); 
+  }
+
+  function renderAccordionGrid(wadahId, dataArray, labelTipe) {
+    var wadah = document.getElementById(wadahId);
+    if (!wadah) return;
+    if (!dataArray || dataArray.length === 0) {
+      wadah.innerHTML = `<div class="card p-4 text-center text-muted border-0 shadow-sm rounded-4">Belum ada data ${esc(labelTipe)}</div>`;
+      return;
+    }
+
+    var mapKategori = {};
+    dataArray.forEach(function(item) {
+      var kat = item.kat ? String(item.kat).toUpperCase().trim() : "TANPA KATEGORI";
+      if (!mapKategori[kat]) mapKategori[kat] = [];
+      mapKategori[kat].push(item);
+    });
+
+    var html = `<div class="accordion shadow-sm" id="acc-${esc(wadahId)}" style="border-radius: 16px; overflow: hidden;">`;
+    var urutanKat = 0;
+    Object.keys(mapKategori).sort().forEach(function(kat) {
+      urutanKat++;
+      var listItems = mapKategori[kat];
+      var collapseId = `col-${wadahId}-${urutanKat}`;
+      var countLow = listItems.filter(function(x) { return x.status === "LOW"; }).length;
+      var badgeLow = countLow > 0 ? `<span class="badge bg-danger ms-2 shadow-sm">${countLow} LOW</span>` : '';
+      var barisTabel = listItems.map(function(itm) {
+        var isLow = itm.status === "LOW";
+        var clr = isLow ? "danger" : "success";
+        return `<tr class="align-middle">
+          <td class="text-start fw-bold" style="width: 22%;"><span class="badge bg-light text-dark border px-2 py-1">${esc(itm.sub || '-')}</span></td>
+          <td class="text-start fw-bolder text-dark">${esc(itm.nama)}</td>
+          <td class="fw-bolder fs-6 text-${clr}">${num(itm.stok).toLocaleString('id-ID')}</td>
+          <td class="text-muted fw-bold">${num(itm.min).toLocaleString('id-ID')}</td>
+          <td><span class="badge bg-${clr} px-3 py-1 shadow-sm">${esc(itm.status)}</span></td>
+        </tr>`;
+      }).join('');
+
+      html += `<div class="accordion-item border-0 border-bottom">
+        <h2 class="accordion-header" id="head-${collapseId}">
+          <button class="accordion-button ${urutanKat === 1 ? '' : 'collapsed'} fw-bolder bg-light bg-opacity-75 text-dark py-3" type="button" data-bs-toggle="collapse" data-bs-target="#${collapseId}">
+             <span class="fs-5 me-2">📁</span> 
+             <span class="text-secondary fw-bold me-1">KATEGORI:</span> 
+             <span class="text-primary fw-bolder me-2">${esc(kat)}</span> 
+             <span class="badge bg-secondary ms-1">${listItems.length} Item</span>
+             ${badgeLow}
+          </button>
+        </h2>
+        <div id="${collapseId}" class="accordion-collapse collapse ${urutanKat === 1 ? 'show' : ''}">
+          <div class="accordion-body p-0 bg-white">
+             <div class="table-responsive m-0" style="max-height: none;">
+               <table class="table table-hover align-middle text-center m-0" style="font-size:0.85rem;">
+                 <thead class="table-dark bg-opacity-10 text-dark" style="font-size:11px;">
+                   <tr>
+                     <th class="text-start" style="width: 22%;">Sub Kategori</th>
+                     <th class="text-start">Nama ${esc(labelTipe)}</th>
+                     <th>Stok Fisik</th>
+                     <th>Batas Min</th>
+                     <th>Status</th>
+                   </tr>
+                 </thead>
+                 <tbody>${barisTabel}</tbody>
+               </table>
+             </div>
+          </div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+    wadah.innerHTML = html;
+  }
+</script>

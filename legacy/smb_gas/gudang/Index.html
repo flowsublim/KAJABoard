@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ERP Gudang & Inventory - CV KIRAL</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <?!= include('CSS'); ?>
+</head>
+<body>
+
+<div class="d-flex vh-100">
+  <!-- SIDEBAR GLASSMORPHISM -->
+  <aside class="glass-sidebar d-none d-lg-flex flex-column p-4 shadow-lg justify-content-between">
+    <div>
+      <div class="mb-5 px-2">
+        <h4 class="fw-bold text-warning m-0" style="letter-spacing: 1px;">🏢 ERP<br><span class="text-white fs-5">CV KIRAL</span></h4>
+      </div>
+      <ul class="nav flex-column gap-1">
+        <li class="nav-item"><a class="nav-link active nav-dash" href="javascript:void(0)" onclick="pindah('dash')">📊 Dashboard & PR</a></li>
+        <li class="nav-item"><a class="nav-link nav-bahan" href="javascript:void(0)" onclick="pindah('bahan')">🧵 Stok Bahan Baku</a></li>
+        <li class="nav-item"><a class="nav-link nav-jadi" href="javascript:void(0)" onclick="pindah('jadi')">📦 Stok Barang Jadi</a></li>
+        <li class="nav-item"><a class="nav-link nav-omni" href="javascript:void(0)" onclick="pindah('omni')">🛒 Tarikan Omni</a></li>
+        <li class="nav-item mt-3"><a class="nav-link nav-qc" href="javascript:void(0)" onclick="pindah('qc')">♻️ Mutasi & Retur QC</a></li>
+      </ul>
+    </div>
+    <div class="text-center text-muted" style="font-size: 0.75rem;">
+      &copy; 2026 CV KIRAL<br>Inventory Module
+    </div>
+  </aside>
+
+  <div class="flex-grow-1 d-flex flex-column main-content position-relative">
+    
+    <!-- HEADER GLASSMORPHISM -->
+    <header class="glass-header d-flex justify-content-between align-items-center p-3 px-4 shadow-sm">
+      <div class="text-truncate pe-2">
+        <h4 class="m-0 fw-bolder text-primary text-truncate" style="letter-spacing: -0.5px;">📦 Modul Gudang</h4>
+        <small class="text-muted judul-subtitle text-truncate">Inventory, Backorder PR, & QC Retur</small>
+      </div>
+      <div class="d-flex align-items-center gap-2 gap-md-3">
+        <div class="text-end border-end border-secondary-subtle pe-3 d-none d-md-block">
+          <small class="text-muted d-block" style="font-size: 0.75rem;">Login sebagai:</small>
+          <span class="fw-bold text-dark" id="user-email"><?!= ERP_DISPLAY_NAME || ERP_USER_EMAIL || ""; ?></span>
+        </div>
+        <div class="dropdown" id="menuPindahModul">
+          <button class="btn btn-light fw-bold border-0 shadow-sm dropdown-toggle d-flex align-items-center justify-content-center btn-pindah-modul px-lg-3 py-2" type="button" data-bs-toggle="dropdown" style="border-radius: 12px;">
+            <span class="fs-5" style="line-height: 1;">🔄</span> <span class="teks-pindah-modul d-none d-lg-inline ms-2">Pindah Modul</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2 rounded-3" id="menu-modul-list">
+            <li><h6 class="dropdown-header">⏳ Memuat link...</h6></li>
+          </ul>
+        </div>
+        <button type="button" id="btn-logout-gudang" class="btn btn-outline-danger fw-bold shadow-sm px-3 py-2" style="border-radius: 12px;" onclick="logoutGudang()">Logout</button>
+      </div> 
+    </header>
+
+    <main class="flex-grow-1 p-3 p-lg-4 pt-1">
+      
+      <!-- TAB 1: DASHBOARD -->
+      <section id="tab-dash" class="">
+        <div class="row g-3 mb-4">
+          <div class="col-md-6 col-lg-4">
+            <div class="card p-3 shadow-sm border-0 border-start border-4 border-warning h-100 bg-warning bg-opacity-10">
+              <small class="text-warning fw-bold text-uppercase">⚠️ Low Stock Alert (Bahan)</small>
+              <h3 class="fw-bolder text-dark m-0 mt-1" id="dash-low-bahan">0 <span class="fs-6 text-muted fw-normal">Item</span></h3>
+            </div>
+          </div>
+          <div class="col-md-6 col-lg-4">
+            <div class="card p-3 shadow-sm border-0 border-start border-4 border-danger h-100 bg-danger bg-opacity-10">
+              <small class="text-danger fw-bold text-uppercase">🔴 Low Stock Alert (Jadi)</small>
+              <h3 class="fw-bolder text-dark m-0 mt-1" id="dash-low-jadi">0 <span class="fs-6 text-muted fw-normal">Item</span></h3>
+            </div>
+          </div>
+          <div class="col-md-12 col-lg-4">
+            <div class="card p-3 shadow-sm border-0 border-start border-4 border-primary h-100">
+              <small class="text-muted fw-bold text-uppercase">Total Fisik Gudang</small>
+              <h3 class="fw-bolder text-primary m-0 mt-1" id="dash-total-fisik">0 Pcs</h3>
+            </div>
+          </div>
+        </div>
+
+        <div class="card shadow-sm border-danger mb-4">
+          <div class="card-header bg-danger text-white fw-bold d-flex justify-content-between align-items-center">
+            <span>🔴 LIVE PR OMNICHANNEL (BACKORDER)</span>
+            <span class="badge bg-light text-danger" id="count-pr">0 PR URGENT</span>
+          </div>
+          <div class="card-body p-0">
+            <div class="table-responsive">
+              <table class="table table-hover align-middle text-center m-0">
+                <thead class="table-light">
+                  <tr><th class="text-start">Nama Produk (Sub-Kategori)</th><th>Kebutuhan Tarikan Omni</th><th>Stok Fisik Gudang</th><th>Defisit PR (Urgent)</th></tr>
+                </thead>
+                <tbody id="tbl-pr-omni">
+                  <tr><td colspan="4" class="py-4 text-muted">⏳ Sinkronisasi data...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: BAHAN BAKU (DENGAN TOMBOL PEMAKAIAN BOX/LABEL) -->
+      <section id="tab-bahan" class="d-none">
+        <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+          <h5 class="fw-bold m-0 text-primary">🧵 Gudang Bahan Baku & Aksesoris</h5>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-warning fw-bold shadow-sm px-3 text-dark" onclick="bukaModalPakaiInternal()">📤 Pemakaian Box/Label</button>
+            <button class="btn btn-sm btn-primary fw-bold shadow-sm px-3" onclick="bukaModalMutasi('Bahan Baku')">➕ Stock Opname</button>
+          </div>
+        </div>
+        <div id="wadah-grid-bahan"></div>
+      </section>
+
+      <!-- TAB 3: BARANG JADI -->
+      <section id="tab-jadi" class="d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="fw-bold m-0 text-primary">📦 Gudang Barang Jadi</h5>
+          <button class="btn btn-sm btn-primary fw-bold shadow-sm px-3" onclick="bukaModalMutasi('Barang Jadi')">➕ Stock Opname</button>
+        </div>
+        <div id="wadah-grid-jadi"></div>
+      </section>
+
+      <!-- TAB 4: TARIKAN OMNI -->
+      <section id="tab-omni" class="d-none">
+        <div class="alert alert-info fw-bold shadow-sm mb-3">
+          💡 Fitur ini digunakan Admin Gudang untuk melihat rekap barang yang harus disiapkan untuk dikirim ke Ekspedisi hari ini.
+        </div>
+        <div class="card shadow-sm">
+          <div class="card-header bg-dark text-white fw-bold">Daftar Tarikan Resi BigSeller Hari Ini</div>
+          <div class="table-responsive">
+            <table class="table table-hover align-middle text-center m-0">
+              <thead></thead>
+              <tbody id="tbl-tarikan">
+                 <tr><td colspan="7" class="py-4 text-muted">Belum ada tarikan / Sedang memuat...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: BUKU MUTASI & RETUR -->
+      <section id="tab-qc" class="d-none">
+        <h5 class="fw-bold mb-3 text-primary">♻️ Buku Mutasi Gudang & Histori Aset</h5>
+        
+        <div class="card border-0 shadow-sm p-3 mb-3 bg-white" style="border-radius: 15px;">
+          <div class="row g-2 align-items-center">
+            <div class="col-6 col-md-3">
+              <label class="text-muted fw-bold mb-1" style="font-size:11px;">DARI TANGGAL</label>
+              <input type="date" id="fl-tgl-mulai" class="form-control form-control-sm border-secondary fw-bold" onchange="jalankanMultiFilterMutasi()">
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="text-muted fw-bold mb-1" style="font-size:11px;">SAMPAI TANGGAL</label>
+              <input type="date" id="fl-tgl-akhir" class="form-control form-control-sm border-secondary fw-bold" onchange="jalankanMultiFilterMutasi()">
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="text-muted fw-bold mb-1" style="font-size:11px;">ARUS BARANG</label>
+              <select id="fl-jenis" class="form-select form-select-sm border-secondary fw-bold text-dark" onchange="jalankanMultiFilterMutasi()">
+                <option value="SEMUA">🔄 Semua Arus</option>
+                <option value="IN" class="text-success fw-bold">📥 Masuk (IN)</option>
+                <option value="OUT" class="text-danger fw-bold">📤 Keluar (OUT)</option>
+              </select>
+            </div>
+            <div class="col-6 col-md-4">
+              <label class="text-muted fw-bold mb-1" style="font-size:11px;">CARI SUMBER / TUJUAN (DARI / KE)</label>
+              <div class="input-group input-group-sm">
+                <span class="input-group-text bg-light text-muted border-secondary">🔍</span>
+                <input type="text" id="fl-sumber" class="form-control form-control-sm border-secondary fw-bold" placeholder="Ketik Toko, Supplier, Maklun..." oninput="jalankanMultiFilterMutasi()">
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card shadow-sm" style="border-radius:15px; overflow:hidden;">
+          <div class="table-responsive">
+            <table class="table table-hover align-middle text-center m-0" style="font-size:0.85rem;">
+              <thead class="table-secondary"></thead>
+              <tbody id="tbl-mutasi"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- MOBILE BOTTOM NAV -->
+    <nav class="d-lg-none fixed-bottom bg-white border-top shadow-lg d-flex justify-content-between p-2 px-1" style="z-index: 1040; border-radius: 20px 20px 0 0;">
+      <button class="btn btn-light flex-fill mx-1 p-2 rounded-3 text-primary nav-dash active" onclick="pindah('dash')">📊<br><small style="font-size:9px; font-weight:700;">Dash</small></button>
+      <button class="btn btn-light flex-fill mx-1 p-2 rounded-3 text-secondary nav-bahan" onclick="pindah('bahan')">🧵<br><small style="font-size:9px; font-weight:700;">Bahan</small></button>
+      <button class="btn btn-light flex-fill mx-1 p-2 rounded-3 text-secondary nav-jadi" onclick="pindah('jadi')">📦<br><small style="font-size:9px; font-weight:700;">Jadi</small></button>
+      <button class="btn btn-light flex-fill mx-1 p-2 rounded-3 text-secondary nav-omni" onclick="pindah('omni')">🛒<br><small style="font-size:9px; font-weight:700;">Omni</small></button>
+      <button class="btn btn-light flex-fill mx-1 p-2 rounded-3 text-secondary nav-qc" onclick="pindah('qc')">♻️<br><small style="font-size:9px; font-weight:700;">Mutasi</small></button>
+    </nav>
+
+  </div>
+</div>
+
+<!-- MODAL 1: PECAH VARIAN BUNDLING -->
+<div class="modal fade" id="modalPecahVarian" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content border-0 shadow-lg" style="border-radius: 20px; overflow: hidden;">
+      <div class="modal-header bg-dark text-white border-0 p-3 px-4">
+        <div>
+          <small class="text-warning fw-bold text-uppercase" style="font-size: 10px;">Declare Fisik Varian</small>
+          <h5 class="modal-title fw-bolder m-0" id="mv-judul">Sub Kategori</h5>
+        </div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4 bg-light">
+        <div class="alert alert-primary py-2 mb-3 fw-bold shadow-sm d-flex justify-content-between align-items-center" style="font-size: 0.9rem; border-radius: 10px;">
+          <span>Total Pcs Harus Keluar:</span>
+          <span id="mv-target" class="fs-4 text-primary fw-bolder">0 Pcs</span>
+        </div>
+        <small class="text-muted fw-bold d-block mb-2">DISTRIBUSI PENGAMBILAN RAK FISIK:</small>
+        <div id="mv-list-varian" class="d-flex flex-column gap-2 mb-3 max-h-50 overflow-y-auto"></div>
+        <div class="card border-0 shadow-sm p-3 bg-white">
+          <div class="d-flex justify-content-between align-items-center fw-bold">
+            <span class="text-secondary">Total Diinput Anak Gudang:</span>
+            <span id="mv-sum" class="fs-4 text-secondary fw-bolder">0 / 0 Pcs</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer border-0 bg-white p-3 justify-content-between">
+        <button type="button" class="btn btn-light fw-bold text-secondary px-4 rounded-3" data-bs-dismiss="modal">Batal</button>
+        <button type="button" id="btn-submit-varian" class="btn btn-success fw-bolder px-4 py-2 rounded-3 shadow" onclick="submitPecahVarian()" disabled>✅ Simpan & Potong Stok</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 💡 MODAL 2: FORM MUTASI / OPNAME / PEMAKAIAN (Telah Disulap Menggunakan Dropdown Select) -->
+<div class="modal fade" id="modalOpname" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content border-0 shadow" style="border-radius: 20px;">
+      <div class="modal-header bg-primary text-white p-3 px-4" id="mod-header-box">
+        <div><small class="text-warning fw-bold text-uppercase" style="font-size:10px;" id="mod-opname-sub">Form Koreksi Rak</small><h5 class="modal-title fw-bold m-0" id="mod-opname-title">Penyesuaian Stok</h5></div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <div class="mb-3">
+          <label class="form-label fw-bold text-muted mb-1"><small>PILIH BARANG AKTUAL (MASTER)</small></label>
+          <!-- 💡 RUBAH DARI INPUT TEXT MENJADI DROPDOWN SELECT -->
+          <select id="inp-opname-nama" class="form-select fw-bold border-primary text-dark" style="font-size:0.9rem;">
+             <option value="">-- Memuat Produk... --</option>
+          </select>
+        </div>
+        <div id="opname-system-preview" class="alert alert-light border small fw-bold mb-2">Stok sistem saat ini: <b>0</b></div>
+        <div class="row g-2 mb-2">
+          <div class="col-6" id="wrap-opname-jenis">
+            <label class="form-label fw-bold text-muted mb-1"><small>ARUS TRANSAKSI</small></label>
+            <select id="inp-opname-jenis" class="form-select fw-bold">
+              <option value="IN" class="text-success fw-bold">📥 MASUK (Koreksi Naik +)</option>
+              <option value="OUT" class="text-danger fw-bold">📤 KELUAR (Pakai / Rusak -)</option>
+            </select>
+          </div>
+          <div class="col-6" id="wrap-opname-qty">
+            <label class="form-label fw-bold text-muted mb-1"><small id="label-opname-qty">QTY PCS / BOX</small></label>
+            <input type="number" id="inp-opname-qty" class="form-control fw-bold text-center border-primary" value="1" min="0" step="any">
+            <div id="opname-diff-preview" class="small fw-bold mt-1 text-muted">Isi stok fisik akhir.</div>
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label fw-bold text-muted mb-1"><small>KETERANGAN / TUJUAN</small></label>
+          <input type="text" id="inp-opname-ket" class="form-control" placeholder="Misal: Selisih opname / rusak basah...">
+        </div>
+        <!-- Hidden flag pembeda mode opname vs pemakaian internal -->
+        <input type="hidden" id="inp-opname-mode" value="OPNAME">
+      </div>
+      <div class="modal-footer border-0 p-3">
+        <button type="button" id="btn-submit-opname" class="btn btn-primary fw-bolder px-4 w-100 py-2 shadow-sm" onclick="submitOpnameManual()">Simpan Transaksi</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container" class="position-fixed top-0 start-50 translate-middle-x p-3" style="z-index: 9999; margin-top: 10px; pointer-events: none;"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  window.GUDANG_BOOTSTRAP = <?!= JSON.stringify(GUDANG_BOOTSTRAP || {}) ?>;
+</script>
+<?!= include('JS'); ?>
+</body>
+</html>

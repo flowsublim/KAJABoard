@@ -1,0 +1,744 @@
+<script>
+
+  function toNumberInput(value) {
+    if (typeof value === "number") return isFinite(value) ? value : 0;
+    if (value === null || value === undefined || value === "") return 0;
+    var s = String(value).trim().replace(/Rp|IDR|\s/gi, "");
+    var hasComma = s.indexOf(",") !== -1;
+    var hasDot = s.indexOf(".") !== -1;
+    if (hasComma && hasDot) {
+      if (s.lastIndexOf(",") > s.lastIndexOf(".")) s = s.replace(/\./g, "").replace(",", ".");
+      else s = s.replace(/,/g, "");
+    } else if (hasComma) {
+      var parts = s.split(",");
+      if (parts.length === 2 && parts[1].length <= 3) s = parts[0].replace(/\./g, "") + "." + parts[1];
+      else s = s.replace(/,/g, "");
+    }
+    var n = Number(s);
+    return isFinite(n) ? n : 0;
+  }
+
+
+  function escapeHtml(str) {
+    return String(str == null ? "" : str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  // ================= FUNGSI TOAST NOTIFIKASI OTOMATIS =================
+  function showToast(message, type = "success") {
+    var container = document.getElementById("toast-container");
+    if(!container) return;
+    
+    var toast = document.createElement("div");
+    toast.className = "custom-toast toast-" + type;
+    toast.innerHTML = message;
+    container.appendChild(toast);
+    
+    setTimeout(function() {
+        toast.classList.add("fade-out");
+        setTimeout(function() { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+    }, 2500); 
+  }
+
+  var myModalApp = null;
+  var globalDataPenjualan = { po: [], sj: [], inv: [] };
+  var globalDataPiutang = [];
+  var mapCustDetailGlobal = {};
+  var allSjCustomerMap = {};
+  var masterItemsGlobal = [], masterCustGlobal = [], masterEksGlobal = []; 
+  var companyProfilesGlobal = [];
+  var poAktifCustomerMap = {}; 
+  var allDocCustomerMap = {}; 
+
+
+  // ================= FLOW STYLE SESSION + SAFE GAS RUNNER =================
+  var SALES_SESSION = window.SALES_BOOTSTRAP || {};
+  SALES_SESSION.email = SALES_SESSION.email || window.ERP_USER_EMAIL || '';
+  SALES_SESSION.displayName = SALES_SESSION.displayName || window.ERP_DISPLAY_NAME || SALES_SESSION.email || 'User';
+  SALES_SESSION.passport = SALES_SESSION.passport || SALES_SESSION.paspor || window.ERP_SERVER_PASSPORT || sessionStorage.getItem('ERP_PASSPORT') || '';
+  SALES_SESSION.paspor = SALES_SESSION.paspor || SALES_SESSION.passport || '';
+  SALES_SESSION.portalUrl = SALES_SESSION.portalUrl || window.ERP_SERVER_PORTAL_URL || '';
+
+  function salesSessionArgs() {
+    var email = SALES_SESSION.email || window.ERP_USER_EMAIL || '';
+    var paspor = SALES_SESSION.paspor || SALES_SESSION.passport || window.ERP_SERVER_PASSPORT || sessionStorage.getItem('ERP_PASSPORT') || '';
+    if (!email || !paspor) throw new Error('Sesi Penjualan tidak lengkap. Masuk ulang dari Portal.');
+    return [email, paspor];
+  }
+
+  function runGasSales(functionName, args, onSuccess, onFailure) {
+    args = Array.isArray(args) ? args.slice() : [];
+    var finalArgs;
+    try { finalArgs = args.concat(salesSessionArgs()); }
+    catch (sessionErr) {
+      showToast('❌ ' + sessionErr.message, 'error');
+      if (typeof onFailure === 'function') onFailure(sessionErr);
+      return;
+    }
+    var fail = function(err) {
+      var msg = (err && err.message) ? err.message : String(err || 'Server error');
+      console.error('GAS Error [' + functionName + ']:', err);
+      showToast('❌ ' + msg, 'error');
+      if (typeof onFailure === 'function') onFailure(err);
+    };
+    try {
+      var runner = google.script.run
+        .withFailureHandler(fail)
+        .withSuccessHandler(function(res){ if (typeof onSuccess === 'function') onSuccess(res); });
+      if (!runner[functionName]) throw new Error('Fungsi server tidak ditemukan: ' + functionName);
+      runner[functionName](...finalArgs);
+    } catch (err) { fail(err); }
+  }
+
+  function setSalesUserName(name) {
+    var display = name || SALES_SESSION.displayName || SALES_SESSION.email || 'User';
+    ['user-email','login-email','erp-user-name'].forEach(function(id){
+      var el = document.getElementById(id); if (el) el.textContent = display;
+    });
+  }
+  setTimeout(function(){ setSalesUserName(); }, 0);
+
+
+  function renderDropdownKopPerusahaan() {
+    var sel = document.getElementById('pilihan-kop');
+    if (!sel) return;
+    var current = sel.value;
+    var list = companyProfilesGlobal || [];
+    if (!list.length) return;
+    sel.innerHTML = list.map(function(c) {
+      return `<option value="${escapeHtml(c.id)}">${escapeHtml(c.nama)}</option>`;
+    }).join('');
+    if (current && list.some(function(c) { return c.id === current; })) sel.value = current;
+  }
+
+  function pindah(t) { 
+    ['po','sj','inv','piutang'].forEach(x => {
+      var el = document.getElementById('tab-'+x);
+      if(el) el.classList.add('d-none');
+    }); 
+    document.getElementById('tab-'+t).classList.remove('d-none'); 
+    
+    document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.nav-' + t).forEach(el => el.classList.add('active'));
+    
+    var boxFilter = document.getElementById('box-filter-penjualan');
+    if(boxFilter) {
+      if(t === 'po' || t === 'sj' || t === 'inv') boxFilter.classList.remove('d-none'); 
+      else boxFilter.classList.add('d-none');    
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => { 
+    setSalesUserName();
+    // 💡 Hapus filter otomatis 30 hari, tampilkan semua secara default
+    if(document.getElementById('f-mulai')) document.getElementById('f-mulai').value = "";
+    if(document.getElementById('f-selesai')) document.getElementById('f-selesai').value = "";
+    muatData(); 
+  });
+
+  function muatData() {
+    var start = document.getElementById('f-mulai') ? document.getElementById('f-mulai').value : "";
+    var end = document.getElementById('f-selesai') ? document.getElementById('f-selesai').value : "";
+    var custFilter = document.getElementById('f-cust') ? document.getElementById('f-cust').value : "";
+
+    document.getElementById("tbl-po").innerHTML = "<tr><td colspan='7'>⏳ Menarik data dari server...</td></tr>";
+    document.getElementById("tbl-sj").innerHTML = "<tr><td colspan='7'>⏳ Menarik data dari server...</td></tr>";
+    document.getElementById("tbl-inv").innerHTML = "<tr><td colspan='7'>⏳ Menarik data dari server...</td></tr>";
+    document.getElementById("tbl-piutang").innerHTML = "<tr><td colspan='5'>⏳ Memuat rekap piutang...</td></tr>";
+    
+    runGasSales('getInitData', [start, end, custFilter], res => {
+      if(res.error) return showToast("⚠️ SERVER ERROR: " + res.error, "error");
+
+      window.setupPerusahaan = res.setup || {};
+      companyProfilesGlobal = res.companyProfiles || [];
+      window.companyProfiles = companyProfilesGlobal;
+      renderDropdownKopPerusahaan();
+      masterItemsGlobal = res.masterItems; 
+      masterCustGlobal = res.customers; 
+      masterEksGlobal = res.ekspedisi;
+      poAktifCustomerMap = res.poAktifCustomerMap; 
+      allDocCustomerMap = res.allDocCustomerMap;
+      allSjCustomerMap = res.allSjCustomerMap; 
+
+      updateDropdownCustomer();
+ 
+      var fCustEl = document.getElementById('f-cust');
+      if(fCustEl) {
+         var currentVal = fCustEl.value;
+         var optFilterCust = '<option value="">-- Semua Konsumen --</option>';
+         masterCustGlobal.forEach(c => optFilterCust += `<option value="${c.nama}">${c.nama}</option>`);
+         fCustEl.innerHTML = optFilterCust;
+         fCustEl.value = currentVal;
+      }
+
+      var optEks = '<option value="">-- Pilih Ekspedisi --</option>'; 
+      masterEksGlobal.forEach(e => optEks += `<option value="${e}">${e}</option>`);
+      if(document.getElementById('sj-eks')) document.getElementById('sj-eks').innerHTML = optEks;
+
+      var namaModulAktif = "Penjualan";
+      var htmlMenu = `<li><div class="dropdown-item fw-bold" style="background:#f8f9fa; color:#0d6efd; cursor:default;">📦 ${namaModulAktif} (Modul Aktif)</div></li>`;
+      var htmlPortal = "";
+      res.modulLinks.forEach(m => {
+        var nmLower = m.nama.toLowerCase();
+        if(nmLower.includes("utama") || nmLower.includes("portal")) {
+          htmlPortal = `<li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item fw-bold text-center" href="${m.url}" target="_top" onclick="window.top.location.href=this.href; return false;" style="color: #dc3545; background-color: #fee2e2; padding-top: 8px; padding-bottom: 8px;">🏠 Home / Portal Utama</a></li>`;
+        } else {
+          htmlMenu += `<li><a class="dropdown-item fw-bold text-dark" href="${m.url}" target="_top" onclick="window.top.location.href=this.href; return false;">${m.nama}</a></li>`;
+        }
+      });
+      htmlMenu += htmlPortal;
+      
+      var containerMenu = document.getElementById("menu-modul-list");
+      if(containerMenu) containerMenu.innerHTML = htmlMenu;
+
+      globalDataPenjualan.po = res.dataPO;
+      globalDataPenjualan.sj = res.dataSJ;
+      globalDataPenjualan.inv = res.dataINV;
+      globalDataPiutang = res.dataPiutang;
+      mapCustDetailGlobal = res.mapCustDetail;
+      
+      renderSemuaTabel();
+    });
+  }
+
+  function resetFilter() {
+    if(document.getElementById('f-mulai')) document.getElementById('f-mulai').value = "";
+    if(document.getElementById('f-selesai')) document.getElementById('f-selesai').value = "";
+    if(document.getElementById('f-cust')) document.getElementById('f-cust').value = "";
+    muatData();
+  }
+
+  function terapkanFilter() { muatData(); }
+
+  function renderSemuaTabel() {
+    if(globalDataPenjualan.po.length === 0) {
+        document.getElementById("tbl-po").innerHTML = "<tr><td colspan='7' class='text-center text-muted'>Tidak ada data Pre-Order (PO) pada periode ini.</td></tr>";
+    } else {
+        document.getElementById("tbl-po").innerHTML = globalDataPenjualan.po.map(i => `
+          <tr class="align-middle text-center">
+            <td class="fw-bold text-primary text-start">${i.no}</td>
+            <td>${i.tgl}</td>
+            <td>${i.deadline}</td>
+            <td class="text-start">${i.cust}</td>
+            <td class="fw-bold text-dark text-end">${i.totalRp}</td>
+            <td>${i.status === 'Selesai' ? '<span class="badge bg-success">Selesai</span>' : '<span class="badge bg-warning text-dark">Aktif</span>'}</td>
+            <td>
+              <div class="d-flex justify-content-center gap-1">
+                <button class="btn btn-sm btn-outline-success py-0 px-2" title="Edit PO" onclick="editDokumen('PO', '${i.no}')">✏️</button> 
+                <button class="btn btn-sm btn-outline-danger py-0 px-2" title="Hapus PO" onclick="hapusDokumen('PO', '${i.no}')">🗑️</button>
+                <button class="btn btn-sm btn-primary py-0 px-2" title="Cetak PO" onclick="cetakPDF('PO', '${i.no}')">🖨️</button>
+              </div>
+            </td>
+          </tr>`).join('');
+    }
+
+    if(globalDataPenjualan.sj.length === 0) {
+        document.getElementById("tbl-sj").innerHTML = "<tr><td colspan='7' class='text-center text-muted'>Tidak ada data Surat Jalan pada periode ini.</td></tr>";
+    } else {
+        document.getElementById("tbl-sj").innerHTML = globalDataPenjualan.sj.map(i => `
+          <tr class="align-middle text-center">
+            <td>${i.tgl}</td>
+            <td class="fw-bold text-primary text-start">${i.no}</td>
+            <td>${i.ref}</td>
+            <td class="text-start">${i.cust}</td>
+            <td>${i.eks}</td>
+            <td>${i.badgeTagih || '-'}</td>
+            <td>
+              <div class="d-flex justify-content-center gap-1">
+                <button class="btn btn-sm btn-outline-success py-0 px-2" title="Edit SJ" onclick="editDokumen('SJ', '${i.no}')">✏️</button> 
+                <button class="btn btn-sm btn-outline-danger py-0 px-2" title="Hapus SJ" onclick="hapusDokumen('SJ', '${i.no}')">🗑️</button>
+                <button class="btn btn-sm btn-primary py-0 px-2" title="Cetak Surat Jalan" onclick="cetakPDF('SJ', '${i.no}')">🖨️</button>
+                <button class="btn btn-sm btn-dark py-0 px-2" title="Cetak Label 4x6" onclick="cetakPDF('LABEL', '${i.no}')">🏷️</button>
+              </div>
+            </td>
+          </tr>`).join('');
+    }
+
+    if(globalDataPenjualan.inv.length === 0) {
+        document.getElementById("tbl-inv").innerHTML = "<tr><td colspan='7' class='text-center text-muted'>Tidak ada data Invoice pada periode ini.</td></tr>";
+    } else {
+        document.getElementById("tbl-inv").innerHTML = globalDataPenjualan.inv.map(i => `
+          <tr class="align-middle text-center">
+            <td class="fw-bold text-success text-start">${i.no}</td>
+            <td>${i.tgl}</td>
+            <td>${i.ref}</td>
+            <td class="text-start">${i.cust}</td>
+            <td class="fw-bold text-end">${i.totalRp}</td>
+            <td>${i.badgeHtml || '-'}</td>
+            <td>
+              <div class="d-flex justify-content-center gap-1">
+                <button class="btn btn-sm btn-outline-primary py-0 px-2" title="Edit Invoice" onclick="editDokumen('INV', '${i.no}')">✏️</button> 
+                <button class="btn btn-sm btn-outline-danger py-0 px-2" title="Hapus Invoice" onclick="hapusDokumen('INV', '${i.no}')">🗑️</button>
+                <button class="btn btn-sm btn-success py-0 px-2" title="Cetak Invoice" onclick="cetakPDF('INV', '${i.no}')">🖨️</button>
+              </div>
+            </td>
+          </tr>`).join('');
+    }
+
+    if(globalDataPiutang.length === 0) {
+        document.getElementById("tbl-piutang").innerHTML = "<tr><td colspan='5' class='text-success fw-bold'>Bersih! Tidak ada Rekap Berjalan.</td></tr>";
+    } else {
+        document.getElementById("tbl-piutang").innerHTML = globalDataPiutang.map((v, idx) => `
+            <tr data-bs-toggle="collapse" data-bs-target="#c-detail-${idx}" style="cursor:pointer;" class="box-item">
+              <td class="text-start fw-bold text-warning text-dark">🔽 ${v.cust}</td><td>${v.tagihanStr}</td><td class="text-success">${v.bayarStr}</td><td class="text-danger fw-bold fs-5">${v.sisaStr}</td>
+              <td><button class="btn btn-sm btn-outline-dark fw-bold" onclick="event.stopPropagation(); cetakPDF('REKAP', '${v.cust}')">🖨️ Statement</button></td>
+            </tr>
+            <tr><td colspan="5" class="p-0 border-0"><div id="c-detail-${idx}" class="collapse px-3 py-2 bg-white border-bottom shadow-sm">
+              <table class="table table-sm table-bordered m-0 text-center"><thead class="table-secondary"><tr><th>Tanggal</th><th>Dokumen</th><th>Keterangan</th><th>Tagihan</th><th>Dibayar/DP</th><th>Aksi Edit</th></tr></thead>
+              <tbody>${v.details.map(d => {
+                var tglPrint = d.tglStr;
+                if(!tglPrint || tglPrint === "-") {
+                    if(d.ket === "Invoice") { var fn = globalDataPenjualan.inv.find(x => x.no === d.no); if(fn) tglPrint = fn.tgl; }
+                    else if(d.ket.includes("PO")) { var fp = globalDataPenjualan.po.find(x => x.no === d.no); if(fp) tglPrint = fp.tgl; }
+                    else if(d.ket.includes("Pembayaran") && d.tglRaw) {
+                        var dtPay = new Date(d.tglRaw);
+                        tglPrint = !isNaN(dtPay.getTime()) ? ("0" + dtPay.getDate()).slice(-2) + "/" + ("0" + (dtPay.getMonth()+1)).slice(-2) + "/" + dtPay.getFullYear() : d.tglRaw.toString().substring(0,10);
+                    }
+                }
+                return `<tr><td>${tglPrint}</td><td class="fw-bold">${d.no}</td><td><small>${d.ket}</small></td><td class="text-danger">${d.tagihan}</td><td class="text-success">${d.bayar}</td><td>${d.ket==='Invoice' ?
+                `<button class="btn btn-sm btn-primary py-0 px-1" onclick="editDokumen('INV', '${d.no}')">✏️ Edit INV</button> <button class="btn btn-sm btn-danger py-0 px-1" onclick="hapusDokumen('INV', '${d.no}')">🗑️</button>` : `<span class="badge bg-light text-muted border">${d.ket}</span>`}</td></tr>`;
+              }).join('')}</tbody></table>
+            </div></td></tr>
+        `).join('');
+    }
+  }
+
+  function updateDropdownCustomer() {
+    var optCust = '<option value="">-- Pilih Customer --</option>';
+    masterCustGlobal.forEach(c => optCust += `<option value="${c.nama}">${c.nama}</option>`);
+    document.querySelectorAll('#po-cust, #inv-cust, #sj-cust').forEach(sel => { var cVal = sel.value; sel.innerHTML = optCust; sel.value = cVal; });
+  }
+
+  function updateDropdownRefSJ() {
+    var cust = document.getElementById('sj-cust').value; var selRef = document.getElementById('sj-ref');
+    selRef.innerHTML = '<option value="">-- Kosongkan Jika SJ Tanpa PO --</option>';
+    if(cust && poAktifCustomerMap[cust]) { poAktifCustomerMap[cust].forEach(po => selRef.innerHTML += `<option value="${po}">${po}</option>`); }
+  }
+
+  function updateDropdownRefINV() {
+    var cust = document.getElementById('inv-cust').value; 
+    var selRef = document.getElementById('inv-ref');
+    var selPullSj = document.getElementById('inv-pull-sj');
+    
+    selRef.innerHTML = '<option value="">-- Kosongkan Jika Tanpa PO --</option>';
+    if(cust && allDocCustomerMap[cust]) { allDocCustomerMap[cust].forEach(po => selRef.innerHTML += `<option value="${po}">${po}</option>`); }
+    
+    if(selPullSj) {
+       selPullSj.innerHTML = '<option value="">-- Pilih SJ Ready Stock --</option>';
+       if(cust && allSjCustomerMap[cust]) { allSjCustomerMap[cust].forEach(sj => selPullSj.innerHTML += `<option value="${sj}">${sj}</option>`); }
+    }
+  }
+
+  function ubahStatusPO(no, val) { runGasSales('updateStatusPO', [no, val], function(){ muatData(); }); }
+
+  function bukaModal(tipe) {
+    var t = tipe.toLowerCase();
+    document.getElementById("form-"+t).reset();
+    document.getElementById(t+'-no-lama').value = ""; 
+    document.getElementById("title-"+tipe).innerText = "Form Baru";
+    document.getElementById("btn-"+t).innerText = "💾 Simpan";
+    
+    document.getElementById("area-items-"+t).innerHTML = ""; 
+    if(document.getElementById(t+'-ongkir')) document.getElementById(t+'-ongkir').value = "";
+    tambahBaris(t); 
+    
+    if(tipe === 'SJ') updateDropdownRefSJ();
+    if(tipe === 'INV') updateDropdownRefINV();
+    
+    myModalApp = new bootstrap.Modal(document.getElementById('modal'+tipe)); 
+    myModalApp.show();
+  }
+
+  function tambahBaris(tipe, nm='', qt='', hg='') {
+    var id = Date.now() + Math.floor(Math.random()*100);
+    
+    // 💡 RENDER DROPDOWN DENGAN OPTGROUP BERDASARKAN SUB-KATEGORI
+    var optItems = '<option value="">-- Pilih Produk/Item --</option>';
+    var grouped = {};
+    masterItemsGlobal.forEach(b => {
+       var s = b.sub || "Umum";
+       if(!grouped[s]) grouped[s] = [];
+       grouped[s].push(b);
+    });
+    for(var s in grouped) {
+       optItems += `<optgroup label="📦 ${s}">`;
+       grouped[s].forEach(b => {
+           var isSel = (nm === b.nama) ? "selected" : "";
+           optItems += `<option value="${b.nama}" ${isSel}>${b.nama}</option>`;
+       });
+       optItems += `</optgroup>`;
+    }
+    
+    var html = `
+      <div class="row align-items-center mb-2 box-item p-2 rounded shadow-sm" id="row-${id}" style="animation: fadeIn 0.3s;">
+        <div class="col-md-5 mb-1"><select class="form-select border-dark i-nama">${optItems}</select></div>
+        <div class="col-md-2 col-4 mb-1"><input type="number" class="form-control fw-bold i-qty text-center" placeholder="QTY" value="${qt}"></div>
+        ${tipe !== 'sj' ? `<div class="col-md-3 col-6 mb-1"><input type="number" class="form-control i-hrg" placeholder="Harga (Rp)" value="${hg}"></div>` : ''}
+        <div class="col-md-2 col-2 d-flex justify-content-end"><button type="button" class="btn btn-outline-danger fw-bold w-100" onclick="document.getElementById('row-${id}').remove()">X</button></div>
+      </div>`;
+    
+    var targetArea = document.getElementById("area-items-"+tipe);
+    targetArea.insertAdjacentHTML('beforeend', html);
+    
+    var newRow = document.getElementById('row-'+id);
+    if(newRow) newRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function editDokumen(tipe, noRef) {
+    showToast("⏳ Mengambil data...", "info");
+    runGasSales('getDetailTransaksi', [tipe, noRef], data => {
+      if(data.error) { showToast(data.error, "error"); return; }
+      
+      var t = tipe.toLowerCase();
+      document.getElementById("form-"+t).reset();
+      document.getElementById(t+'-no-lama').value = noRef;
+      document.getElementById("title-"+tipe).innerText = "✏️ Edit " + tipe + " : " + noRef;
+      document.getElementById("btn-"+t).innerText = "💾 Update Data";
+      
+      document.getElementById(t+'-tgl').value = data.tgl; document.getElementById(t+'-no').value = data.no; document.getElementById(t+'-cust').value = data.cust;
+      if(document.getElementById(t+'-catatan')) document.getElementById(t+'-catatan').value = data.catatan || "";
+      if(tipe === 'PO') document.getElementById('po-deadline').value = data.deadline || "";
+      if(tipe === 'SJ' || tipe === 'INV') {
+        if(tipe==='SJ') { updateDropdownRefSJ(); document.getElementById('sj-eks').value = data.eks; }
+        if(tipe==='INV') { 
+            updateDropdownRefINV();
+            document.getElementById(t+'-ref').value = data.ref; 
+            if(document.getElementById(t+'-ref-sj')) document.getElementById(t+'-ref-sj').value = data.refSJ || "";
+        }
+      }
+      
+      var finalItems = [];
+      var ongkirVal = "", diskonVal = "", ppnVal = "";
+      data.items.forEach(it => { 
+        var nm = it.nama.toString().trim();
+        if(nm === "Biaya Ongkos Kirim") ongkirVal = it.harga;
+        else if(nm === "Potongan Diskon") diskonVal = Math.abs(it.harga);
+        else if(nm.startsWith("Pajak PPN")) {
+            var match = nm.match(/\d+/);
+            if(match) ppnVal = match[0];
+        } else { 
+            finalItems.push(it); 
+        } 
+      });
+      if(document.getElementById(t+'-ongkir')) document.getElementById(t+'-ongkir').value = ongkirVal;
+      if(document.getElementById(t+'-diskon')) document.getElementById(t+'-diskon').value = diskonVal;
+      if(document.getElementById(t+'-ppn')) document.getElementById(t+'-ppn').value = ppnVal;
+      
+      document.getElementById("area-items-"+t).innerHTML = "";
+      finalItems.forEach(it => tambahBaris(t, it.nama, it.qty, it.harga));
+      
+      myModalApp = new bootstrap.Modal(document.getElementById('modal'+tipe)); myModalApp.show();
+    });
+  }
+
+  function hapusDokumen(tipe, noRef) {
+    if(!confirm("Yakin ingin menghapus data ini?")) return;
+    showToast("⏳ Menghapus...", "warning");
+    runGasSales('hapusDataMaster', [tipe, noRef, false], function(){ showToast("✅ Berhasil dihapus!", "success"); muatData(); });
+  }
+
+  function bukaModalCust() { document.getElementById("new-cust-nama").value = ""; new bootstrap.Modal(document.getElementById('modalCustBaru')).show(); }
+  function simpanCustBaru() {
+    var d = { nama: document.getElementById("new-cust-nama").value.trim(), kontak: document.getElementById("new-cust-kontak").value.trim(), alamat: document.getElementById("new-cust-alamat").value.trim() };
+    if(!d.nama) return showToast("Nama Customer wajib diisi", "error");
+    
+    var btnSave = document.getElementById("btn-save-cust");
+    btnSave.innerHTML = "⏳ Menyimpan..."; btnSave.disabled = true;
+
+    runGasSales('tambahMasterCustomer', [d], m => {
+        btnSave.innerHTML = "💾 Simpan Customer"; btnSave.disabled = false;
+        if(m !== "OK") return showToast("❌ Gagal simpan customer: " + (m || "Unknown error"), "error");
+        if(!masterCustGlobal.some(c => c.nama === d.nama)) masterCustGlobal.push({nama: d.nama});
+        updateDropdownCustomer(); 
+        document.querySelectorAll('#po-cust, #inv-cust, #sj-cust').forEach(sel => { sel.value = d.nama; });
+        if(document.getElementById('inv-cust').value === d.nama) updateDropdownRefINV();
+        if(document.getElementById('sj-cust').value === d.nama) updateDropdownRefSJ();
+
+        var modal = bootstrap.Modal.getInstance(document.getElementById('modalCustBaru'));
+        if(modal) modal.hide();
+        showToast("✅ Customer tersimpan", "success");
+    }, err => {
+        btnSave.innerHTML = "💾 Simpan Customer"; btnSave.disabled = false;
+      });
+  }
+
+  function bukaModalItem() { 
+    document.getElementById("new-item-kat").value = ""; 
+    document.getElementById("new-item-sub").value = ""; 
+    document.getElementById("new-item-name").value = ""; 
+    new bootstrap.Modal(document.getElementById('modalItemBaru')).show();
+  }
+
+  function simpanItemBaru() {
+    var kat = document.getElementById("new-item-kat").value.trim();
+    var sub = document.getElementById("new-item-sub").value.trim();
+    var nm = document.getElementById("new-item-name").value.trim();
+    if(!kat || !nm) return showToast("❌ Kategori dan Nama Item wajib diisi!", "error");
+
+    var btnSave = document.getElementById("btn-save-item");
+    btnSave.innerHTML = "⏳ Menyimpan..."; btnSave.disabled = true;
+
+    var payload = { kategori: kat, subKategori: sub, nama: nm };
+    runGasSales('tambahMasterItem', [payload], m => {
+        btnSave.innerHTML = "💾 Simpan Item"; btnSave.disabled = false;
+        if(m !== "OK") return showToast("❌ Gagal simpan item: " + (m || "Unknown error"), "error");
+
+        if(!masterItemsGlobal.some(x => x.nama === nm)) masterItemsGlobal.push({sub: sub || "Umum", nama: nm});
+        masterItemsGlobal.sort((a,b) => a.nama.localeCompare(b.nama)); 
+        
+        var opt = '<option value="">-- Pilih Produk/Item --</option>'; 
+        var grouped = {};
+        masterItemsGlobal.forEach(b => {
+           var s = b.sub || "Umum";
+           if(!grouped[s]) grouped[s] = [];
+           grouped[s].push(b);
+        });
+        Object.keys(grouped).sort().forEach(s => {
+           opt += `<optgroup label="📦 ${s}">`;
+           grouped[s].forEach(b => { opt += `<option value="${escapeHtml(b.nama)}">${escapeHtml(b.nama)}</option>`; });
+           opt += `</optgroup>`;
+        });
+
+        document.querySelectorAll('.i-nama').forEach(sel => { var c = sel.value; sel.innerHTML = opt; sel.value = c; });
+        
+        var modal = bootstrap.Modal.getInstance(document.getElementById('modalItemBaru'));
+        if(modal) modal.hide();
+        showToast(`✅ Item Gudang Baru (${nm}) berhasil ditambahkan!`, "success");
+    }, err => {
+        btnSave.innerHTML = "💾 Simpan Item"; btnSave.disabled = false;
+      });
+  }
+
+  function tarikReferensi(target) { 
+    var ref = document.getElementById(target.toLowerCase()+'-ref').value;
+    if(!ref) return;
+    
+    var btnTarik = event.target; btnTarik.disabled = true;
+    showToast("⏳ Menarik data PO...", "info");
+    
+    runGasSales('getItemsByRef', [ref], data => {
+      btnTarik.disabled = false; 
+      document.getElementById("area-items-"+target.toLowerCase()).innerHTML = "";
+      
+      if(data.items.length === 0) { showToast("Data kosong atau tidak ditemukan!", "error"); return; }
+      
+      var isAdaPengiriman = false;
+
+      data.items.forEach(it => { 
+        if(!masterItemsGlobal.some(x => x.nama === it.nama)) masterItemsGlobal.push({sub: "Dari Riwayat", nama: it.nama}); 
+        var sugQty = it.qty;
+        if(target === 'INV' && it.qtyKirim !== undefined) { 
+            sugQty = it.qtyKirim > 0 ? it.qtyKirim : it.qty; 
+            if(it.qtyKirim > 0) isAdaPengiriman = true;
+        }
+        tambahBaris(target.toLowerCase(), it.nama, sugQty, it.harga||0); 
+      });
+
+      var tgt = target.toLowerCase();
+      if(document.getElementById(tgt+'-ongkir') && data.ongkir > 0) document.getElementById(tgt+'-ongkir').value = data.ongkir;
+      if(document.getElementById(tgt+'-diskon') && data.diskon > 0) document.getElementById(tgt+'-diskon').value = data.diskon;
+      if(document.getElementById(tgt+'-ppn') && data.ppn > 0) document.getElementById(tgt+'-ppn').value = data.ppn;
+      
+      if(target === 'INV') {
+          var notifHtml = `<div class='alert alert-info py-2 mb-3 shadow-sm border-info' style='font-size:0.9rem;'>
+            ${isAdaPengiriman ? '✅ <b>QTY disesuaikan dengan realisasi Surat Jalan.</b><br>' : '⚠️ <b>Belum ada Surat Jalan (Menggunakan QTY PO).</b><br>'}
+            💰 Info Finance: Ada DP masuk sebesar <b class="text-success">${formatRp(data.dp)}</b>
+          </div>`;
+          document.getElementById("area-items-inv").insertAdjacentHTML('afterbegin', notifHtml);
+          
+          if(data.sjList && data.sjList.length > 0) {
+             document.getElementById('inv-ref-sj').value = data.sjList.join(", ");
+          }
+      }
+    });
+  }
+
+  function tarikReferensiSJ() {
+    var refSJ = document.getElementById('inv-pull-sj').value;
+    if(!refSJ) return;
+    
+    var btnTarik = event.target; btnTarik.disabled = true;
+    showToast("⏳ Menarik data Surat Jalan...", "info");
+    
+    runGasSales('getItemsFromSJ', [refSJ], data => {
+      btnTarik.disabled = false;
+      if(data.length === 0) return showToast("Data SJ Kosong!", "warning");
+      
+      data.forEach(it => { 
+        if(!masterItemsGlobal.some(x => x.nama === it.nama)) masterItemsGlobal.push({sub: "Dari Riwayat", nama: it.nama}); 
+        tambahBaris('inv', it.nama, it.qty, 0); 
+      });
+      
+      var currentSj = document.getElementById('inv-ref-sj').value;
+      if(currentSj && !currentSj.includes(refSJ)) { document.getElementById('inv-ref-sj').value = currentSj + ", " + refSJ; } 
+      else if (!currentSj) { document.getElementById('inv-ref-sj').value = refSJ; }
+      
+    });
+  }
+
+  function tarikSisaSJ() { 
+    var ref = document.getElementById('sj-ref').value; if(!ref) return;
+    showToast("⏳ Menghitung sisa PO...", "info");
+    runGasSales('getSisaItemKirim', [ref], items => {
+      document.getElementById("area-items-sj").innerHTML = "";
+      if(items.length === 0) return showToast("✅ Semua PO sudah terkirim penuh!", "success");
+      items.forEach(it => { if(!masterItemsGlobal.some(x => x.nama === it.nama)) masterItemsGlobal.push({sub: "Dari Riwayat", nama: it.nama}); tambahBaris('sj', it.nama, it.sisa); });
+    });
+  }
+
+  function simpanDokumen(tipe) {
+    var t = tipe.toLowerCase();
+    var tglField = document.getElementById(t+'-tgl');
+    var noField = document.getElementById(t+'-no');
+    var custField = document.getElementById(t+'-cust');
+
+    if (tglField && !tglField.value) return showToast("❌ Tanggal dokumen tidak boleh kosong!", "error");
+    if (noField && !noField.value.trim()) return showToast("❌ Nomor dokumen wajib diisi!", "error");
+    if (custField && !custField.value) return showToast("❌ Silakan pilih Customer terlebih dahulu!", "error");
+    
+    var d = {
+      tipe: tipe, mode: document.getElementById(t+'-no-lama').value ? "edit" : "baru", noLama: document.getElementById(t+'-no-lama').value,
+      tgl: tglField.value, no: noField ? noField.value : '',
+      deadline: document.getElementById('po-deadline') ? document.getElementById('po-deadline').value : '',
+      cust: custField ? custField.value : '',
+      catatan: document.getElementById(t+'-catatan') ? document.getElementById(t+'-catatan').value : '',
+      ref: document.getElementById(t+'-ref') ? document.getElementById(t+'-ref').value : '',
+      refSJ: document.getElementById(t+'-ref-sj') ? document.getElementById(t+'-ref-sj').value : '',
+      eks: document.getElementById(t+'-eks') ? document.getElementById(t+'-eks').value : '',
+      items: []
+    };
+    
+    document.querySelectorAll(`#area-items-${t} .row`).forEach(r => {
+      var n = r.querySelector('.i-nama').value;
+      var q = toNumberInput(r.querySelector('.i-qty').value);
+      var h = r.querySelector('.i-hrg') ? toNumberInput(r.querySelector('.i-hrg').value) : 0;
+      if(n && q > 0) d.items.push({nama: n, qty: q, harga: h});
+    });
+    
+    var diskon = toNumberInput(document.getElementById(t+'-diskon') ? document.getElementById(t+'-diskon').value : 0);
+    var ppn = toNumberInput(document.getElementById(t+'-ppn') ? document.getElementById(t+'-ppn').value : 0);
+    var ongkir = toNumberInput(document.getElementById(t+'-ongkir') ? document.getElementById(t+'-ongkir').value : 0);
+
+    var subtotal = 0;
+    d.items.forEach(x => subtotal += (x.qty * x.harga));
+
+    if(diskon > 0) d.items.push({nama: "Potongan Diskon", qty: 1, harga: -Math.abs(diskon)});
+    var subAfterDiskon = subtotal - Math.abs(diskon);
+    
+    if(ppn > 0) {
+        var valPpn = Math.round(subAfterDiskon * (ppn / 100));
+        d.items.push({nama: "Pajak PPN " + ppn + "%", qty: 1, harga: valPpn});
+    }
+    if(ongkir > 0) d.items.push({nama: "Biaya Ongkos Kirim", qty: 1, harga: Math.abs(ongkir)});
+    
+    if(d.items.length === 0) return showToast("❌ Masukkan minimal 1 barang dengan QTY!", "error");
+    
+    var btn = document.getElementById("btn-"+t);
+    btn.innerHTML = "⏳ Sedang Menyimpan..."; btn.disabled = true;
+    
+    runGasSales('simpanDataMaster', [d], m => {
+        if(m.startsWith("ERROR")) { 
+            showToast("❌ " + m, "error"); 
+            btn.innerHTML = "💾 Simpan"; btn.disabled = false; return; 
+        }
+        if(myModalApp) myModalApp.hide(); 
+        btn.innerHTML = "💾 Simpan"; btn.disabled = false; 
+        showToast("✅ Dokumen berhasil disimpan!", "success");
+        muatData();
+    }, err => { 
+        btn.innerHTML = "💾 Simpan"; btn.disabled = false; 
+    });
+  }
+</script>
+
+<!-- ERP GLOBAL HEARTBEAT CLIENT v1.5 FLOW STYLE -->
+<script>
+(function(){
+  if (window.__SALES_HEARTBEAT_V13_FLOW__) return;
+  window.__SALES_HEARTBEAT_V13_FLOW__ = true;
+
+  var HEARTBEAT_MS = 60000;
+  var version = sessionStorage.getItem('SALES_GLOBAL_VERSION') || '';
+
+  function modalSedangTerbukaSales() {
+    return !!document.querySelector('.modal.show');
+  }
+
+  function softRefreshSales(){
+    if (modalSedangTerbukaSales()) return;
+    try {
+      if (typeof muatData === 'function') muatData();
+    } catch(e) {
+      console.warn('Sales soft refresh gagal', e);
+    }
+  }
+
+  function goPortalSales(res){
+    sessionStorage.removeItem('ERP_PASSPORT');
+    sessionStorage.removeItem('SALES_GLOBAL_VERSION');
+    var url = (res && res.portalUrl) || SALES_SESSION.portalUrl || window.ERP_SERVER_PORTAL_URL || '';
+    try { showToast('Session berakhir. Mengarahkan ke Portal...', 'warning'); } catch(e) {}
+    setTimeout(function(){ if (url) window.top.location.href = url; }, 700);
+  }
+
+  function beatSales(){
+    runGasSales('ERP_globalHeartbeat', [SALES_SESSION.passport || SALES_SESSION.paspor || '', version], function(res){
+      if (!res || !res.ok || res.shouldLogout) return goPortalSales(res);
+      if (res.passport) {
+        SALES_SESSION.passport = res.passport;
+        SALES_SESSION.paspor = res.passport;
+        sessionStorage.setItem('ERP_PASSPORT', res.passport);
+      }
+      var displayName = (res.user && res.user.name) || res.displayName || SALES_SESSION.displayName || SALES_SESSION.email || '';
+      SALES_SESSION.displayName = displayName;
+      SALES_SESSION.email = res.userEmail || SALES_SESSION.email || '';
+      setSalesUserName(displayName);
+      if (!version) {
+        version = String(res.serverVersion || '');
+        sessionStorage.setItem('SALES_GLOBAL_VERSION', version);
+        return;
+      }
+      if (res.serverVersion && String(res.serverVersion) !== String(version)) {
+        version = String(res.serverVersion || '');
+        sessionStorage.setItem('SALES_GLOBAL_VERSION', version);
+        softRefreshSales();
+      }
+    }, function(){});
+  }
+
+  window.ERP_logoutAllModules = function(){
+    if(!confirm('Logout dari ERP dan semua modul?')) return;
+    runGasSales('ERP_globalLogout', [SALES_SESSION.passport || SALES_SESSION.paspor || ''], function(res){ goPortalSales(res); }, function(e){
+      try { showToast((e && e.message) || String(e), 'error'); } catch(_) {}
+    });
+  };
+
+  window.ERP_touchGlobalChangeClient = function(reason){
+    runGasSales('ERP_touchGlobalChange', [reason || 'Client mutation'], function(){}, function(){});
+  };
+
+  function injectLogoutButton(){
+    if(document.getElementById('erpGlobalLogoutBtn')) return;
+    var b = document.createElement('button');
+    b.id = 'erpGlobalLogoutBtn';
+    b.type = 'button';
+    b.title = 'Logout ERP';
+    b.textContent = '⏻';
+    b.onclick = window.ERP_logoutAllModules;
+    b.style.cssText = 'border:0;border-radius:12px;background:#ef4444;color:white;font-weight:900;width:42px;height:42px;box-shadow:0 6px 16px rgba(239,68,68,.22);cursor:pointer;font-size:18px;line-height:1';
+    var menu = document.getElementById('menuPindahModul');
+    if (menu && menu.parentElement) { menu.parentElement.appendChild(b); return; }
+    b.style.position='fixed'; b.style.right='18px'; b.style.bottom='18px'; b.style.zIndex='9999';
+    document.body.appendChild(b);
+  }
+
+  setTimeout(injectLogoutButton, 500);
+  setTimeout(beatSales, 1800);
+  setInterval(beatSales, HEARTBEAT_MS);
+})();
+</script>

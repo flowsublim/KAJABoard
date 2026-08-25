@@ -1,0 +1,939 @@
+<script>
+  var mapSPK = {};
+  var maxRows = 10;
+  var currentRows = 1;
+  var PROD_TAB_LOADED = {};
+  var PROD_TAB_LOADING = {};
+  var PROD_ACTIVE_TAB_KEY = 'wip';
+  var globalRiwayatGaji = [];
+  var globalRekapGaji = []; 
+
+  // ================= FUNGSI TOAST NOTIFIKASI OTOMATIS =================
+  function showToast(message, type = "success") {
+    var container = document.getElementById("toast-container");
+    if(!container) return;
+    
+    var toast = document.createElement("div");
+    toast.className = "custom-toast toast-" + type;
+    toast.innerHTML = message;
+    container.appendChild(toast);
+    
+    // Hilang otomatis setelah 2.5 detik
+    setTimeout(function() {
+        toast.classList.add("fade-out");
+        setTimeout(function() { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+    }, 2500); 
+  }
+
+  // ================= 1. FUNGSI NAVIGASI TAB =================
+  function PROD_loadTabData(t, force) {
+    t = t || 'wip';
+    if (!force && (PROD_TAB_LOADED[t] || PROD_TAB_LOADING[t])) return;
+
+    PROD_TAB_LOADING[t] = true;
+    try {
+      if(t === 'wip' && typeof muatWIP === 'function') muatWIP();
+      if(t === 'laporan' && typeof muatGaji === 'function') muatGaji();
+      if(t === 'hpp' && typeof muatHPP === 'function') muatHPP();
+      if(t === 'pengaturan' && typeof muatPengaturan === 'function') muatPengaturan();
+      if(t === 'reject' && typeof muatReject === 'function') muatReject();
+      PROD_TAB_LOADED[t] = true;
+    } catch(e) {
+      console.warn('Gagal load tab Produksi:', t, e);
+      try { showToast('❌ Gagal load tab ' + t + ': ' + (e.message || e), 'error'); } catch(_) {}
+    } finally {
+      PROD_TAB_LOADING[t] = false;
+    }
+  }
+
+  // ================= 1. FUNGSI NAVIGASI TAB =================
+  function pindah(t) { 
+    t = t || 'wip';
+    PROD_ACTIVE_TAB_KEY = t;
+    ['wip','laporan','hpp','pengaturan', 'reject'].forEach(x => {
+      var el = document.getElementById('tab-'+x);
+      if(el) el.classList.add('d-none');
+    });
+    var activeTab = document.getElementById('tab-'+t);
+    if(activeTab) activeTab.classList.remove('d-none');
+    
+    document.querySelectorAll('.glass-sidebar .nav-link').forEach(el => {
+        el.classList.remove('active');
+    });
+    
+    var navEl = document.getElementById('nav-'+t);
+    if(navEl) { navEl.classList.add('active'); }
+    
+    // Tab switch dibuat ringan: data hanya dimuat saat tab pertama kali dibuka.
+    // Refresh berikutnya ditangani heartbeat/interval 60 detik atau tombol filter/manual.
+    PROD_loadTabData(t, false);
+  }
+
+  // ================= 2. AWAL DIMUAT (ONLOAD) =================
+  document.addEventListener("DOMContentLoaded", () => {
+    if (window.ERP_DISPLAY_NAME && document.getElementById("user-email")) document.getElementById("user-email").textContent = window.ERP_DISPLAY_NAME;
+    var today = new Date();
+    var currentDay = today.getDay(); 
+    var startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - currentDay); 
+    var endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6); 
+    
+    var formatStart = startOfWeek.getFullYear() + "-" + ("0" + (startOfWeek.getMonth() + 1)).slice(-2) + "-" + ("0" + startOfWeek.getDate()).slice(-2);
+    var formatEnd = endOfWeek.getFullYear() + "-" + ("0" + (endOfWeek.getMonth() + 1)).slice(-2) + "-" + ("0" + endOfWeek.getDate()).slice(-2);
+    
+    if(document.getElementById('filter-start')) document.getElementById('filter-start').value = formatStart;
+    if(document.getElementById('filter-end')) document.getElementById('filter-end').value = formatEnd;
+    if(document.getElementById('filter-start-reject')) document.getElementById('filter-start-reject').value = formatStart;
+    if(document.getElementById('filter-end-reject')) document.getElementById('filter-end-reject').value = formatEnd;
+
+    try { pindah('wip'); } catch(e) { console.log(e); }
+    renderBarisItem();
+    
+    google.script.run.withSuccessHandler(arr => { 
+        var s = document.getElementById("pic"); 
+        if(s) arr.forEach(i => s.innerHTML += '<option value="'+i+'">'+i+'</option>'); 
+    }).getDaftarPIC();
+    
+    google.script.run
+      .withSuccessHandler(res => { 
+        mapSPK = res || {}; 
+        var s = document.getElementById("spk"); 
+        if(s) {
+          s.innerHTML = '<option value="">-- Pilih SPK --</option>';
+          Object.keys(mapSPK).forEach(k => s.innerHTML += '<option value="'+k+'">'+k+'</option>'); 
+        }
+      })
+      .withFailureHandler(err => { try { showToast('❌ Gagal memuat Data SPK: ' + ((err && err.message) || err), 'error'); } catch(e) {} })
+      .getDataSPK();
+    
+    // 💡 TAMBAHAN: Tarik Master Bahan dengan Grouping (OptGroup) ala Modul Pembelian
+    var globalOptBahan = '<option value="">-- Pilih Bahan Baku / Aksesoris --</option>';
+    google.script.run.withSuccessHandler(res => {
+        var grouped = {};
+        res.forEach(b => {
+            if(!grouped[b.sub]) grouped[b.sub] = [];
+            grouped[b.sub].push(b);
+        });
+        for(var subKat in grouped) {
+            globalOptBahan += `<optgroup label="📁 ${subKat}">`;
+            grouped[subKat].forEach(b => {
+                var ikon = b.kat === "Bahan Baku" ? "🧵" : "🏷️";
+                globalOptBahan += `<option value="${b.nama}">${ikon} ${b.nama}</option>`;
+            });
+            globalOptBahan += `</optgroup>`;
+        }
+        var selBahan = document.getElementById("bahan");
+        if(selBahan) selBahan.innerHTML = globalOptBahan;
+    }).getMasterBahanList();
+
+    google.script.run.withSuccessHandler(links => {
+      var namaModulAktif = "Produksi";
+      var htmlMenu = `<li><div class="dropdown-item fw-bold" style="background:#f8f9fa; color:#198754; cursor:default;">🏭 ${namaModulAktif} (Modul Aktif)</div></li>`;
+      var htmlPortal = "";
+      
+      if(links && links.length > 0) {
+        links.forEach(m => {
+          var nmLower = m.nama.toLowerCase();
+          if(nmLower.includes("utama") || nmLower.includes("portal")) {
+            htmlPortal = `<li><hr class="dropdown-divider"></li>
+                          <li><a class="dropdown-item fw-bold text-center" href="${m.url}" style="color: #dc3545; background-color: #fee2e2; padding-top: 8px; padding-bottom: 8px;" target="_top">🏠 Home / Portal Utama</a></li>`;
+          } else {
+            htmlMenu += `<li><a class="dropdown-item fw-bold text-dark" href="${m.url}" target="_top">${m.nama}</a></li>`;
+          }
+        });
+      } else {
+         htmlMenu += '<li><span class="dropdown-item text-muted" style="font-size:0.85rem;">(Belum ada data modul)</span></li>';
+      }
+      
+      htmlMenu += htmlPortal;
+      if(document.getElementById('menu-modul-list')) document.getElementById('menu-modul-list').innerHTML = htmlMenu;
+    }).getModulLinks((window.ERP_USER_EMAIL || '') || sessionStorage.getItem('ERP_VOUCH') || '', (window.ERP_SERVER_PASSPORT || '') || sessionStorage.getItem('ERP_PASPOR') || sessionStorage.getItem('ERP_PASSPORT') || '');
+  });
+
+  // ================= 3. FUNGSI FORM INPUT & MODAL =================
+  function bukaModalInput() {
+    var form = document.getElementById("form-produksi");
+    if(form) form.reset();
+    var rowLama = document.getElementById("prod-row-lama");
+    if(rowLama) rowLama.value = ""; 
+    var btn = document.getElementById("btn-simpan");
+    if(btn) {
+        btn.innerText = "💾 Simpan Setoran";
+        btn.classList.remove("btn-warning");
+        btn.classList.add("btn-primary");
+    }
+    aturFormProses();
+    currentRows = 1; 
+    document.querySelectorAll('.row-item').forEach((r, idx) => { if(idx > 0) r.classList.add("d-none"); });
+    var notif = document.getElementById("notif-modal");
+    if(notif) notif.innerHTML = ""; 
+    
+    var modalEl = document.getElementById('modalInputKerja');
+    if(modalEl) new bootstrap.Modal(modalEl).show();
+  }
+
+  function renderBarisItem() {
+    var html = "";
+    for(var i=1; i<=maxRows; i++) {
+      var dNone = (i > 1) ? "d-none" : "";
+      html += `<div class="row align-items-center mb-2 row-item ${dNone}" id="row-item-${i}">
+        <div class="col-8 col-md-8 mb-1 mb-md-0"><select class="form-select border-primary i-prod"><option value="">-- SPK Dulu --</option></select><input type="text" class="form-control border-primary i-txt d-none" placeholder="Tugas Umum..."></div>
+        <div class="col-3 col-md-3"><input type="number" class="form-control fw-bold i-qty" placeholder="QTY" value="0"></div>
+        <div class="col-1 col-md-1 d-flex justify-content-end"><button type="button" class="btn btn-outline-danger fw-bold px-2 py-1" onclick="hapusBaris(${i})">X</button></div></div>`;
+    }
+    var area = document.getElementById("area-items");
+    if(area) area.innerHTML = html;
+  }
+
+  function tambahBaris() { if(currentRows < maxRows) { currentRows++; document.getElementById("row-item-"+currentRows).classList.remove("d-none"); } }
+  
+  function hapusBaris(id) {
+    var row = document.getElementById("row-item-"+id);
+    if(row) {
+        row.classList.add("d-none");
+        if(row.querySelector('.i-prod')) row.querySelector('.i-prod').value = "";
+        if(row.querySelector('.i-txt')) row.querySelector('.i-txt').value = "";
+        if(row.querySelector('.i-qty')) row.querySelector('.i-qty').value = "0";
+    }
+  }
+
+  function aturFormProses() {
+    var pEl = document.getElementById("proses");
+    if(!pEl) return;
+    var p = pEl.value;
+    if(p === "Tugas Umum (Non-SPK)") {
+      document.getElementById("area-spk").classList.add("d-none"); document.getElementById("area-bahan").classList.add("d-none");
+      document.querySelectorAll('.row-item').forEach(r => { r.querySelector('.i-prod').classList.add('d-none'); r.querySelector('.i-txt').classList.remove('d-none'); });
+    } else {
+      document.getElementById("area-spk").classList.remove("d-none"); document.getElementById("area-bahan").classList.toggle("d-none", p !== "Potong");
+      document.querySelectorAll('.row-item').forEach(r => { r.querySelector('.i-prod').classList.remove('d-none'); r.querySelector('.i-txt').classList.add('d-none'); });
+      upDropdownBahan();
+    }
+  }
+
+  function PROD_escapeOpt(v) {
+    return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  function PROD_produkOptionsBySpkBahan(spk, bahan, proses) {
+    var optProduk = '<option value="">-- Pilih Produk --</option>';
+    var seen = {};
+    if(!spk || !mapSPK[spk]) return optProduk;
+
+    var bahanKeys = Object.keys(mapSPK[spk]);
+    var sourceKeys = bahanKeys;
+    if(proses === "Potong") {
+      if(!bahan) return '<option value="">-- Pilih bahan dulu --</option>';
+      sourceKeys = mapSPK[spk][bahan] ? [bahan] : [];
+    }
+
+    sourceKeys.forEach(function(b) {
+      (mapSPK[spk][b] || []).forEach(function(namaProduk) {
+        var k = String(namaProduk || '').trim().toUpperCase();
+        if(!k || seen[k]) return;
+        seen[k] = true;
+        optProduk += '<option value="'+PROD_escapeOpt(namaProduk)+'">'+PROD_escapeOpt(namaProduk)+'</option>';
+      });
+    });
+    return optProduk;
+  }
+
+  function PROD_renderProdukDropdownBySpk() {
+    var spkEl = document.getElementById("spk");
+    var bahanEl = document.getElementById("bahan");
+    var prosesEl = document.getElementById("proses");
+    var spk = spkEl ? spkEl.value : "";
+    var proses = prosesEl ? prosesEl.value : "";
+    var bahan = bahanEl ? bahanEl.value : "";
+    var optProduk = PROD_produkOptionsBySpkBahan(spk, bahan, proses);
+
+    document.querySelectorAll('.row-item .i-prod').forEach(function(sel) {
+      var current = sel.value;
+      sel.innerHTML = optProduk;
+      if(current && Array.from(sel.options).some(function(o){ return o.value === current; })) sel.value = current;
+    });
+  }
+
+  function upDropdownBahan() {
+    var spkEl = document.getElementById("spk");
+    if(!spkEl) return;
+    var spk = spkEl.value;
+    var prosesEl = document.getElementById("proses");
+    var proses = prosesEl ? prosesEl.value : "";
+    var selBahan = document.getElementById("bahan");
+
+    if(selBahan && !selBahan.dataset.prodBahanBound) {
+      selBahan.addEventListener('change', PROD_renderProdukDropdownBySpk);
+      selBahan.dataset.prodBahanBound = '1';
+    }
+
+    if(selBahan) {
+      var oldBahan = selBahan.value;
+      selBahan.innerHTML = '<option value="">-- Sesuai Instruksi SPK --</option>';
+      if(spk && mapSPK[spk]) {
+        Object.keys(mapSPK[spk]).forEach(function(b) {
+          selBahan.innerHTML += '<option value="'+PROD_escapeOpt(b)+'">'+PROD_escapeOpt(b)+'</option>';
+        });
+      }
+      if(oldBahan && Array.from(selBahan.options).some(function(o){ return o.value === oldBahan; })) selBahan.value = oldBahan;
+      if(proses === "Potong" && !selBahan.value && spk && mapSPK[spk] && Object.keys(mapSPK[spk]).length === 1) {
+        selBahan.value = Object.keys(mapSPK[spk])[0];
+      }
+    }
+
+    var infoBahan = document.getElementById("info-bahan-spk");
+    if(infoBahan) {
+      if(proses === "Potong") infoBahan.innerHTML = '<small class="text-muted">Produk difilter berdasarkan SPK dan bahan yang dipilih.</small>';
+      else infoBahan.innerHTML = '';
+    }
+
+    PROD_renderProdukDropdownBySpk();
+  }
+
+
+  function simpan() {
+    var btn = document.getElementById("btn-simpan"), p = document.getElementById("proses").value, arrItems = [];
+    document.querySelectorAll('.row-item').forEach(row => {
+      if(!row.classList.contains("d-none")) {
+        var prod = p === "Tugas Umum (Non-SPK)" ? row.querySelector('.i-txt').value : row.querySelector('.i-prod').value;
+        var qty = parseFloat(row.querySelector('.i-qty').value) || 0;
+        if(prod && qty > 0) arrItems.push({ produk: prod, qty: qty });
+      }
+    });
+    
+    var d = { 
+      rowLama: document.getElementById("prod-row-lama") ? document.getElementById("prod-row-lama").value : "",
+      tanggal: document.getElementById("tgl").value, 
+      spk: p==="Tugas Umum (Non-SPK)"?"-":document.getElementById("spk").value, 
+      proses: p, pic: document.getElementById("pic").value, bahan: document.getElementById("bahan") ? document.getElementById("bahan").value : "", 
+      qtyBahan: document.getElementById("qtyBahan") ? document.getElementById("qtyBahan").value : 0, 
+      items: arrItems, sistemUpah: document.getElementById("sistemUpah").value, 
+      biayaTambahan: document.getElementById("biayaTambahan").value, catatan: document.getElementById("catatan").value
+    };
+    
+    if(!d.tanggal || !d.pic || !d.proses || arrItems.length === 0 || (p!=="Tugas Umum (Non-SPK)" && !d.spk)) { 
+      showToast("❌ Lengkapi Form (Min. 1 Item ber-QTY)!", "error"); return; 
+    }
+    if(p.includes("Reject") && d.catatan.trim() === "") {
+      showToast("❌ Alasan Reject WAJIB diisi!", "error"); return;
+    }
+
+    btn.innerHTML = "⏳ Memproses..."; btn.disabled = true; 
+    
+    google.script.run.withSuccessHandler(m => {
+      if(m.includes("✅")) {
+        var modalIns = bootstrap.Modal.getInstance(document.getElementById('modalInputKerja'));
+        if(modalIns) modalIns.hide();
+
+        showToast(m, "success"); // 💡 TAMPILKAN TOAST MENGAMBANG
+        
+        var tabWip = document.getElementById("tab-wip"); if(tabWip && !tabWip.classList.contains("d-none")) muatWIP();
+        var tabLap = document.getElementById("tab-laporan"); if(tabLap && !tabLap.classList.contains("d-none")) muatGaji();
+        var tabHpp = document.getElementById("tab-hpp"); if(tabHpp && !tabHpp.classList.contains("d-none")) muatHPP();
+        var tabRjc = document.getElementById("tab-reject"); if(tabRjc && !tabRjc.classList.contains("d-none")) muatReject();
+      } else { 
+         showToast(m, "error"); 
+      }
+      btn.innerHTML = document.getElementById("prod-row-lama").value ? "💾 Update Setoran" : "💾 Simpan Setoran";
+      btn.disabled = false;
+    }).simpanDataProduksi(d);
+  }
+
+  // Definisikan memori global tambahan di paling atas luar fungsi (atau biarkan di dalam jika sudah ada)
+  var globalRiwayatReject = [];
+
+  function editProduksi(rowIndex) {
+    // 💡 PERBAIKAN: Cari data dari 2 laci memori sekaligus (Gaji & Reject)
+    var data = globalRiwayatGaji.find(x => x.rowIndex === rowIndex);
+    if(!data && typeof globalRiwayatReject !== 'undefined') {
+        data = globalRiwayatReject.find(x => x.rowIndex === rowIndex);
+    }
+    
+    if(!data) return alert("❌ Data tidak ditemukan! Pastikan Anda sudah memfilter tanggal yang memuat data ini di layar.");
+    
+    var modalDet = bootstrap.Modal.getInstance(document.getElementById('modalDetail'));
+    if(modalDet) modalDet.hide();
+
+    bukaModalInput();
+    document.getElementById("prod-row-lama").value = rowIndex;
+    var btn = document.getElementById("btn-simpan");
+    btn.innerText = "💾 Update Setoran"; btn.classList.replace("btn-primary", "btn-warning");
+
+    document.getElementById("tgl").value = data.tglStr;
+    document.getElementById("pic").value = data.pic;
+    document.getElementById("proses").value = data.proses;
+    document.getElementById("catatan").value = data.catatan || ""; 
+    aturFormProses(); 
+
+    if(data.proses !== "Tugas Umum (Non-SPK)") {
+      document.getElementById("spk").value = data.spk;
+      upDropdownBahan(); 
+      if(data.bahan) document.getElementById("bahan").value = data.bahan;
+      if(typeof PROD_renderProdukDropdownBySpk === "function") PROD_renderProdukDropdownBySpk();
+      document.getElementById("qtyBahan").value = data.qtyBahan;
+    }
+    document.getElementById("sistemUpah").value = data.sistemUpah || "borongan";
+    document.getElementById("biayaTambahan").value = data.biayaEkstra || 0;
+
+    var firstRow = document.getElementById("row-item-1");
+    if(data.proses === "Tugas Umum (Non-SPK)") firstRow.querySelector('.i-txt').value = data.item;
+    else firstRow.querySelector('.i-prod').value = data.item;
+    firstRow.querySelector('.i-qty').value = data.qty;
+  }
+
+  // ================= 4. TAB: DASHBOARD WIP =================
+  function muatWIP() {
+    var t = document.getElementById("tbl-wip");
+    var filterEl = document.getElementById("filter-spk-wip");
+    var spkFilter = filterEl ? filterEl.value : "";
+    
+    if(!t) return;
+    t.innerHTML = "<tr><td colspan='6' class='text-center py-3'>⏳ Memuat Status Produksi...</td></tr>";
+    
+    google.script.run
+      .withFailureHandler(err => {
+        var msg = (err && err.message) ? err.message : String(err || 'Server error');
+        t.innerHTML = "<tr><td colspan='6' class='text-center text-danger py-3'>❌ Gagal memuat WIP: "+msg+"</td></tr>";
+      })
+      .withSuccessHandler(res => {
+      if(filterEl && filterEl.options.length <= 1) {
+          var currentVal = filterEl.value;
+          var optHtml = '<option value="">-- Semua SPK --</option>';
+          res.listSpk.forEach(s => optHtml += `<option value="${s}">${s}</option>`);
+          filterEl.innerHTML = optHtml;
+          filterEl.value = currentVal;
+      }
+      
+      if(res && res.error) { t.innerHTML = "<tr><td colspan='6' class='text-center text-danger py-3'>❌ Gagal memuat WIP: "+res.error+"</td></tr>"; return; }
+      var arr = res.data;
+      if(!arr || !arr.length) { t.innerHTML = "<tr><td colspan='6' class='text-center text-muted py-3'>Bersih! Tidak ada SPK gantung.</td></tr>"; return; }
+      t.innerHTML = arr.map(i => `
+        <tr class="align-middle text-center">
+          <td class="text-start text-muted" style="font-size: 0.85rem;">${i.spk}</td>
+          <td class="text-start fw-bold text-primary" style="font-size: 1rem;">${i.produk}</td>
+          <td>${i.sisaPotong > 0 ? `<span class="badge bg-danger fs-6">${i.sisaPotong}</span>` : `<span class="text-muted">-</span>`}</td>
+          <td>${i.sisaJahit > 0 ? `<span class="badge bg-warning text-dark fs-6">${i.sisaJahit}</span>` : `<span class="text-muted">-</span>`}</td>
+          <td>${i.sisaQC > 0 ? `<span class="badge bg-info text-dark fs-6">${i.sisaQC}</span>` : `<span class="text-muted">-</span>`}</td>
+          <td class="fw-bold text-success fs-6">${i.selesai}</td>
+        </tr>`).join('');
+    }).getDashboardWIP(spkFilter); 
+  }
+
+  // ================= 5. TAB: LAPORAN GAJI & MODAL DETAIL =================
+  function muatGaji() {
+    var start = document.getElementById('filter-start') ? document.getElementById('filter-start').value : "";
+    var end = document.getElementById('filter-end') ? document.getElementById('filter-end').value : "";
+    var t = document.getElementById("tbl-gaji");
+    if(!t) return;
+    
+    t.innerHTML = "<tr><td colspan='6' class='text-center py-3'>⏳ Menarik data gaji dari server...</td></tr>";
+    if(document.getElementById("grand-total")) document.getElementById("grand-total").innerText = "Menghitung...";
+    
+    google.script.run.withSuccessHandler(res => {
+      globalRiwayatGaji = res.details; 
+      globalRekapGaji = res.rekap; 
+      
+      if(res.rekap.length === 0) {
+        t.innerHTML = "<tr><td colspan='6' class='text-center text-muted py-3'>Tidak ada data gaji pada periode ini.</td></tr>";
+        if(document.getElementById("grand-total")) document.getElementById("grand-total").innerText = "Rp 0";
+        return;
+      }
+      if(document.getElementById("grand-total")) document.getElementById("grand-total").innerText = res.grandTotal;
+  
+      t.innerHTML = res.rekap.map(i => `
+        <tr class="align-middle text-center">
+          <td class="text-start fw-bold text-success">${i.pic}</td>
+          <td>${i.totalPcs}</td>
+          <td class="text-end">${i.borongan}</td>
+          <td class="text-end">${i.biayaLain}</td>
+          <td class="text-end fw-bold text-success fs-6">${i.totalGaji}</td>
+          <td><button class="btn btn-sm btn-dark fw-bold px-3" onclick="lihatDetailPIC('${i.pic}')">🔍 Lihat</button></td>
+        </tr>`).join('');
+    }).getLaporanProduksi(start, end);
+  }
+
+  function lihatDetailPIC(namaPic) {
+    document.getElementById("modalTitle").innerText = "Riwayat Kerja: " + namaPic;
+    var filterData = globalRiwayatGaji.filter(item => item.pic === namaPic);
+    var tBody = document.getElementById("tbl-modal-detail");
+    
+    if(filterData.length === 0) {
+      tBody.innerHTML = "<tr><td colspan='7' class='text-center text-muted py-3'>Tidak ada riwayat detail.</td></tr>";
+    } else {
+      tBody.innerHTML = filterData.map(i => `
+        <tr class="align-middle text-center">
+        <td><small>${i.tglPrint}</small></td>
+        <td><small class="text-muted" style="font-size: 0.8rem;">${i.spk}</small></td>
+        <td><small>${i.proses}</small></td>
+        <td class="text-start fw-bold text-primary" style="font-size: 0.95rem;">${i.item}</td>
+        <td class="fw-bold fs-6">${i.qty}</td>
+        <td class="text-end pe-3 text-success fw-bold">${i.rpFormat}</td>
+        <td>
+          <div class="d-flex justify-content-center gap-1">
+            <button class="btn btn-sm btn-outline-primary py-0 px-2" title="Edit Data" onclick="editProduksi(${i.rowIndex})">✏️</button>
+            <button class="btn btn-sm btn-outline-danger py-0 px-2" title="Hapus Data" onclick="hapusProduksi(${i.rowIndex})">🗑️</button>
+          </div>
+        </td>
+      </tr>`).join('');
+    }
+    new bootstrap.Modal(document.getElementById('modalDetail')).show();
+  }
+
+  function hapusProduksi(rowIndex) {
+    if(!confirm("Yakin ingin menghapus setoran kerja ini? (Stok Gantung / WIP akan otomatis disesuaikan mundur)")) return;
+    var modalDet = bootstrap.Modal.getInstance(document.getElementById('modalDetail'));
+    if(modalDet) modalDet.hide();
+
+    showToast("⏳ Menghapus data...", "warning");
+    
+    google.script.run.withSuccessHandler(m => {
+      showToast(m, m.includes("✅") ? "success" : "error");
+      var tabWip = document.getElementById("tab-wip"); if(tabWip && !tabWip.classList.contains("d-none")) muatWIP();
+      var tabLap = document.getElementById("tab-laporan"); if(tabLap && !tabLap.classList.contains("d-none")) muatGaji();
+      var tabHpp = document.getElementById("tab-hpp"); if(tabHpp && !tabHpp.classList.contains("d-none")) muatHPP();
+      var tabRjc = document.getElementById("tab-reject"); if(tabRjc && !tabRjc.classList.contains("d-none")) muatReject();
+    }).hapusDataProduksi(rowIndex);
+  }
+
+  // ================= 5B. TAB: BARANG REJECT =================
+  function muatReject() {
+    var start = document.getElementById('filter-start-reject') ? document.getElementById('filter-start-reject').value : "";
+    var end = document.getElementById('filter-end-reject') ? document.getElementById('filter-end-reject').value : "";
+    var t = document.getElementById("tbl-reject");
+    if(!t) return;
+    
+    t.innerHTML = "<tr><td colspan='8' class='text-center py-3'>⏳ Menarik data barang reject...</td></tr>";
+    
+    google.script.run.withSuccessHandler(res => {
+      globalRiwayatReject = res; // 💡 Simpan ke memori global
+
+      if(res.length === 0) {
+        t.innerHTML = "<tr><td colspan='8' class='text-center text-muted py-3'>🎉 Mantap! Tidak ada barang reject pada periode ini.</td></tr>";
+        return;
+      }
+  
+      t.innerHTML = res.map(i => {
+        var badgeColor = i.proses.includes("Potong") ? "bg-danger" : (i.proses.includes("Jahit") ? "bg-warning text-dark" : "bg-info text-dark");
+        return `
+        <tr class="align-middle text-center">
+          <td><small>${i.tglStr}</small></td>
+          <td class="text-start text-muted" style="font-size: 0.85rem;">${i.spk}</td>
+          <td><span class="badge ${badgeColor}">${i.proses}</span></td>
+          <td class="text-start fw-bold text-dark">${i.item}</td>
+          <td class="fw-bold text-danger fs-5">${i.qty}</td>
+          <td class="text-start"><small>${i.pic}</small></td>
+          <td class="text-start"><small class="text-danger fw-bold">${i.catatan}</small></td>
+          <td>
+            <div class="d-flex justify-content-center gap-1">
+              <button class="btn btn-sm btn-outline-primary py-0 px-2" title="Edit Data" onclick="editProduksi(${i.rowIndex})">✏️</button>
+              <button class="btn btn-sm btn-outline-danger py-0 px-2" title="Hapus Data" onclick="hapusProduksi(${i.rowIndex})">🗑️</button>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+    }).getLaporanReject(start, end);
+  }
+
+  // ================= 6. TAB: LAPORAN HPP PRODUKSI =================
+  function muatHPP() {
+    var t = document.getElementById("tbl-hpp");
+    if(!t) return;
+    t.innerHTML = "<tr><td colspan='5' class='text-center py-3'>⏳ Memuat Perhitungan COGM...</td></tr>";
+    
+    google.script.run.withSuccessHandler(arr => {
+      if(!arr.length) { t.innerHTML = "<tr><td colspan='5' class='text-center text-muted py-3'>Belum ada data produksi / SPK Aktif.</td></tr>"; return; }
+      t.innerHTML = arr.map(i => `
+        <tr class="align-middle text-center">
+          <td class="text-start fw-bold">${i.spk}</td>
+          <td class="text-end text-danger">${i.bahanPcs}</td>
+          <td class="text-end text-primary">${i.upahPcs}</td>
+          <td class="text-end text-warning text-dark">${i.overheadPcs}</td>
+          <td class="text-end fw-bold text-success fs-6">${i.hppPerPcs}</td>
+        </tr>`).join('');
+    }).getLaporanHPP();
+  }
+
+  function jalankanSyncHPP() {
+    var btn = document.getElementById("btn-sync-hpp");
+    btn.innerHTML = "⏳ Menghitung & Sinkronisasi..."; btn.disabled = true;
+    showToast("⏳ Memulai sinkronisasi HPP...", "info");
+    
+    google.script.run.withSuccessHandler(m => {
+      showToast(m, m.includes("✅") ? "success" : "error");
+      btn.innerHTML = "🔄 Sync HPP ke Gudang"; btn.disabled = false;
+      muatHPP(); 
+    }).syncHppGudang();
+  }
+
+  // ================= 7. MESIN CETAK PDF REKAP GAJI =================
+  function cetakGajiPDF() {
+    if(!globalRekapGaji || globalRekapGaji.length === 0) return alert("❌ Data gaji kosong, tidak ada yang bisa dicetak!");
+    
+    var start = document.getElementById('filter-start') ? document.getElementById('filter-start').value : "";
+    var end = document.getElementById('filter-end') ? document.getElementById('filter-end').value : "";
+    
+    function formatTglUIPdf(dStr) {
+        if(!dStr) return "";
+        var parts = dStr.split("-");
+        if(parts.length === 3) return parts[2] + "/" + parts[1] + "/" + parts[0];
+        return dStr;
+    }
+    
+    var strStart = formatTglUIPdf(start);
+    var strEnd = formatTglUIPdf(end);
+    var periode = (strStart && strEnd) ? (strStart + " s/d " + strEnd) : "Semua Periode";
+    var grandTot = document.getElementById("grand-total") ? document.getElementById("grand-total").innerText : "Rp 0";
+
+    var trs = "";
+    var no = 1;
+    globalRekapGaji.forEach(i => {
+        trs += `<tr>
+            <td style="border:1px solid #000; padding:6px; text-align:center;">${no++}</td>
+            <td style="border:1px solid #000; padding:6px; font-weight:bold; text-transform:uppercase;">${i.pic}</td>
+            <td style="border:1px solid #000; padding:6px; text-align:center;">${i.totalPcs}</td>
+            <td style="border:1px solid #000; padding:6px; text-align:right;">${i.borongan}</td>
+            <td style="border:1px solid #000; padding:6px; text-align:right;">${i.biayaLain}</td>
+            <td style="border:1px solid #000; padding:6px; text-align:right; font-weight:bold; color:#198754;">${i.totalGaji}</td>
+        </tr>`;
+    });
+    
+    var dt = new Date();
+    var tglCetak = ("0" + dt.getDate()).slice(-2) + "/" + ("0" + (dt.getMonth()+1)).slice(-2) + "/" + dt.getFullYear();
+    
+    var htmlPrint = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Cetak Rekap Gaji - ${periode}</title>
+        <style>
+          body { font-family: Arial, sans-serif; color: #000; font-size: 13px; background: #fff; padding: 20px; }
+          @page { size: A4 portrait; margin: 15mm; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
+          th { background: #e9ecef; }
+          tr, td, th { page-break-inside: avoid; }
+        </style>
+      </head>
+      <body>
+        <div style="text-align: center; border-bottom: 3px solid #000; padding-bottom: 15px; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 24px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase;">KAMPUNG JAHIT</h2>
+            <p style="margin: 5px 0 0 0; font-size: 13px; line-height: 1.4;">Jalan Mahmud, Kp Sekebolek RT 05 RW 07 Desa Rahayu,<br>Kec Margaasih, Kab. Bandung, Jawa Barat 40218</p>
+            <h3 style="margin: 15px 0 0 0; font-size: 18px; text-transform: uppercase; text-decoration: underline;">REKAPITULASI UPAH PRODUKSI</h3>
+            <p style="margin: 5px 0 0 0; font-size: 13px; font-weight: bold;">Periode: ${periode}</p>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th style="border:1px solid #000; padding:8px; width:5%; text-align:center;">NO.</th>
+                    <th style="border:1px solid #000; padding:8px; text-align:left;">NAMA KARYAWAN / PIC</th>
+                    <th style="border:1px solid #000; padding:8px; width:10%; text-align:center;">TOTAL PCS</th>
+                    <th style="border:1px solid #000; padding:8px; width:18%; text-align:right;">BORONGAN</th>
+                    <th style="border:1px solid #000; padding:8px; width:18%; text-align:right;">OVERHEAD / EXTRA</th>
+                    <th style="border:1px solid #000; padding:8px; width:20%; text-align:right;">TOTAL GAJI</th>
+                </tr>
+            </thead>
+            <tbody>${trs}</tbody>
+        </table>
+
+        <div style="display: flex; justify-content: flex-end; margin-bottom: 40px;">
+            <table style="width: 45%; border-collapse: collapse; font-size: 14px;">
+                <tr>
+                    <td style="padding: 8px; font-weight: bold; border: 2px solid #000; background:#e9ecef;">GRAND TOTAL UPAH</td>
+                    <td style="padding: 8px; font-weight: bold; text-align: right; border: 2px solid #000; font-size:16px;">${grandTot}</td>
+                </tr>
+            </table>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; text-align: center; font-size: 13px; margin-top: 30px;">
+            <div style="width: 35%;"><b>Disetujui Oleh (Owner),</b><br><br><br><br><br><b style="text-decoration: underline;">( ........................................... )</b></div>
+            <div style="width: 35%;"><b>Dibuat Oleh (Admin),</b><br><br><br><br><br><b style="text-decoration: underline;">( ........................................... )</b><br><span style="font-size: 11px;">Tgl Cetak: ${tglCetak}</span></div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    var iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+    
+    var doc = iframe.contentWindow.document;
+    doc.write(htmlPrint);
+    doc.close();
+    
+    setTimeout(function() {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+      setTimeout(function() { document.body.removeChild(iframe); }, 2000);
+    }, 500);
+  }
+
+  // ================= 8. TAB PENGATURAN (MASTER DATA) =================
+  var globalDataPIC = [];
+  var globalDataTarif = [];
+
+  function muatPengaturan() {
+    document.getElementById("tbl-master-pic").innerHTML = "<tr><td colspan='3'>⏳ Memuat...</td></tr>";
+    document.getElementById("tbl-master-tarif").innerHTML = "<tr><td colspan='4'>⏳ Memuat...</td></tr>";
+    
+    google.script.run.withSuccessHandler(res => {
+      globalDataPIC = res.pic;
+      globalDataTarif = res.tarif;
+
+      var optProduk = '<option value="">-- Pilih Produk --</option>';
+      if(res.items && res.items.length > 0) {
+          res.items.forEach(it => { optProduk += `<option value="${it}">${it}</option>`; });
+      }
+      document.getElementById("i-trf-produk").innerHTML = optProduk;
+      document.getElementById("e-trf-produk").innerHTML = optProduk;
+      
+      var tPic = document.getElementById("tbl-master-pic");
+      if(!res.pic.length) tPic.innerHTML = "<tr><td colspan='3'>Belum ada data Karyawan</td></tr>";
+      else tPic.innerHTML = res.pic.map(i => `<tr>
+        <td class="text-start fw-bold">${i.nama}</td>
+        <td>${i.status === 'Aktif' ? '<span class="badge bg-success">Aktif</span>' : '<span class="badge bg-danger">Non-Aktif</span>'}</td>
+        <td>
+           <button class="btn btn-sm btn-outline-primary py-0 px-2" onclick="bukaEditPIC(${i.id})">✏️</button>
+           <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="hapusMaster('pic', ${i.id})">🗑️</button>
+        </td></tr>`).join('');
+        
+      var tTrf = document.getElementById("tbl-master-tarif");
+      if(!res.tarif.length) tTrf.innerHTML = "<tr><td colspan='4'>Belum ada data Tarif</td></tr>";
+      else tTrf.innerHTML = res.tarif.map(i => `<tr>
+        <td class="text-start"><small>${i.proses}</small></td>
+        <td class="text-start fw-bold">${i.produk}</td>
+        <td class="text-end text-success fw-bold">${i.formatHarga}</td>
+        <td>
+           <button class="btn btn-sm btn-outline-primary py-0 px-2" onclick="bukaEditTarif(${i.id})">✏️</button>
+           <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="hapusMaster('tarif', ${i.id})">🗑️</button>
+        </td></tr>`).join('');
+        
+      refreshDropdownPIC();
+    }).getMasterData();
+  }
+
+  function refreshDropdownPIC() {
+      google.script.run.withSuccessHandler(arr => { 
+        var s = document.getElementById("pic"); 
+        if(s) {
+            s.innerHTML = '<option value="">-- Pilih PIC --</option>';
+            arr.forEach(i => s.innerHTML += '<option value="'+i+'">'+i+'</option>'); 
+        }
+      }).getDaftarPIC();
+  }
+
+  // --- CRUD MASTER PIC ---
+  function simpanPIC() {
+    var nama = document.getElementById("i-nama-pic").value;
+    if(!nama) return showToast("Nama karyawan kosong!", "error");
+    document.getElementById("i-nama-pic").value = "⏳ Menyimpan...";
+    google.script.run.withSuccessHandler(m => { 
+        showToast(m, m.includes("✅") ? "success" : "error"); 
+        document.getElementById("i-nama-pic").value = ""; 
+        muatPengaturan(); 
+    }).simpanMasterPIC(nama);
+  }
+
+  function bukaEditPIC(id) {
+    var d = globalDataPIC.find(x => x.id === id);
+    if(!d) return;
+    document.getElementById("e-pic-id").value = d.id;
+    document.getElementById("e-pic-nama").value = d.nama;
+    document.getElementById("e-pic-status").value = d.status;
+    new bootstrap.Modal(document.getElementById('modalEditPIC')).show();
+  }
+
+  function simpanEditPIC() {
+    var d = { id: document.getElementById("e-pic-id").value, nama: document.getElementById("e-pic-nama").value, status: document.getElementById("e-pic-status").value };
+    if(!d.nama) return showToast("Nama kosong!", "error");
+    document.getElementById("btn-sv-pic").innerHTML = "⏳ Updating...";
+    google.script.run.withSuccessHandler(m => { 
+        bootstrap.Modal.getInstance(document.getElementById('modalEditPIC')).hide(); 
+        document.getElementById("btn-sv-pic").innerHTML = "Update Data"; 
+        showToast(m, m.includes("✅") ? "success" : "error"); 
+        muatPengaturan(); 
+    }).editMasterPIC(d);
+  }
+
+  // --- CRUD MASTER TARIF ---
+  function simpanTarif() {
+    var p = document.getElementById("i-trf-proses").value, pr = document.getElementById("i-trf-produk").value, h = document.getElementById("i-trf-harga").value;
+    if(!pr || !h) return showToast("Produk dan Harga wajib diisi!", "error");
+    google.script.run.withSuccessHandler(m => { 
+        showToast(m, m.includes("✅") ? "success" : "error"); 
+        document.getElementById("i-trf-produk").value = ""; 
+        document.getElementById("i-trf-harga").value = ""; 
+        muatPengaturan(); 
+    }).simpanMasterTarif({proses: p, produk: pr, harga: h});
+  }
+
+  function bukaEditTarif(id) {
+    var d = globalDataTarif.find(x => x.id === id);
+    if(!d) return;
+    document.getElementById("e-trf-id").value = d.id;
+    document.getElementById("e-trf-proses").value = d.proses;
+    
+    var selProduk = document.getElementById("e-trf-produk");
+    var exists = Array.from(selProduk.options).some(opt => opt.value === d.produk);
+    if(!exists && d.produk) { 
+        var optBaru = document.createElement('option');
+        optBaru.value = d.produk;
+        optBaru.text = d.produk;
+        selProduk.appendChild(optBaru);
+    }
+    selProduk.value = d.produk;
+    
+    document.getElementById("e-trf-harga").value = d.harga;
+    new bootstrap.Modal(document.getElementById('modalEditTarif')).show();
+  }
+
+  function simpanEditTarif() {
+    var d = { id: document.getElementById("e-trf-id").value, proses: document.getElementById("e-trf-proses").value, produk: document.getElementById("e-trf-produk").value, harga: document.getElementById("e-trf-harga").value };
+    if(!d.produk || !d.harga) return showToast("Data tidak lengkap!", "error");
+    document.getElementById("btn-sv-trf").innerHTML = "⏳ Updating...";
+    google.script.run.withSuccessHandler(m => { 
+        bootstrap.Modal.getInstance(document.getElementById('modalEditTarif')).hide(); 
+        document.getElementById("btn-sv-trf").innerHTML = "Update Tarif"; 
+        showToast(m, m.includes("✅") ? "success" : "error"); 
+        muatPengaturan(); 
+    }).editMasterTarif(d);
+  }
+
+  function hapusMaster(jenis, id) {
+    if(!confirm("Yakin ingin menghapus data ini secara permanen?")) return;
+    if(jenis === 'pic') google.script.run.withSuccessHandler(m => { muatPengaturan(); }).hapusMasterPIC(id);
+    if(jenis === 'tarif') google.script.run.withSuccessHandler(m => { muatPengaturan(); }).hapusMasterTarif(id);
+  }
+</script>
+
+<!-- PROD FLOW LOGIN / LOGOUT / HEARTBEAT CLIENT v0.9.4 - matched with Purchasing stable pattern -->
+<script>
+(function(){
+  if (window.__PROD_FLOW_HEARTBEAT_INSTALLED__) return;
+  window.__PROD_FLOW_HEARTBEAT_INSTALLED__ = true;
+
+  var HEARTBEAT_MS = 60000;
+  var qs = new URLSearchParams(location.search);
+  var PROD_SESSION = {
+    email: (window.ERP_USER_EMAIL || '') || qs.get('vouch') || qs.get('email') || '',
+    paspor: (window.ERP_SERVER_PASSPORT || '') || qs.get('paspor') || qs.get('passport') || '',
+    portalUrl: window.ERP_SERVER_PORTAL_URL || '',
+    displayName: window.ERP_DISPLAY_NAME || ''
+  };
+
+  var PROD_LAST_HEARTBEAT = sessionStorage.getItem('ERP_GLOBAL_VERSION') || '';
+  var PROD_HEARTBEAT_TIMER = null;
+  var PROD_REFRESHING = false;
+
+  function prodSessionArgs() {
+    if (!PROD_SESSION.email || !PROD_SESSION.paspor) throw new Error('Sesi Produksi tidak lengkap. Masuk ulang dari Portal.');
+    return [PROD_SESSION.email, PROD_SESSION.paspor];
+  }
+
+  function runGasProd(functionName, args, onSuccess, onFailure) {
+    args = Array.isArray(args) ? args.slice() : [];
+    var finalArgs;
+    try { finalArgs = args.concat(prodSessionArgs()); }
+    catch (sessionErr) {
+      try { if (typeof showToast === 'function') showToast('❌ ' + sessionErr.message, 'error'); } catch(_) {}
+      if (typeof onFailure === 'function') onFailure(sessionErr);
+      return;
+    }
+    var fail = function(err) {
+      var msg = (err && err.message) ? err.message : String(err || 'Server error');
+      console.warn('PROD GAS Error [' + functionName + ']:', err);
+      try { if (typeof showToast === 'function') showToast('❌ ' + msg, 'error'); } catch(_) {}
+      if (typeof onFailure === 'function') onFailure(err);
+    };
+    try {
+      var runner = google.script.run
+        .withFailureHandler(fail)
+        .withSuccessHandler(function(res){ if (typeof onSuccess === 'function') onSuccess(res); });
+      if (!runner[functionName]) throw new Error('Fungsi server tidak ditemukan: ' + functionName);
+      runner[functionName](...finalArgs);
+    } catch (err) { fail(err); }
+  }
+
+  function prodActiveTabKey(){
+    try {
+      var el = document.querySelector('.glass-sidebar .nav-link.active[id^="nav-"]') || document.querySelector('.nav-link.active[id^="nav-"]');
+      if (el && el.id) return el.id.replace(/^nav-/, '');
+    } catch(e) {}
+    return 'wip';
+  }
+
+  function prodModalSedangTerbuka(){
+    try { return !!document.querySelector('.modal.show'); } catch(e) { return false; }
+  }
+
+  function prodSoftRefresh(){
+    if (PROD_REFRESHING || prodModalSedangTerbuka()) return;
+    PROD_REFRESHING = true;
+    try {
+      var key = prodActiveTabKey();
+      if (typeof PROD_loadTabData === 'function') PROD_loadTabData(key || 'wip', true);
+      else if (typeof muatWIP === 'function') muatWIP();
+    } catch(e) {
+      console.warn('PROD soft refresh gagal', e);
+    } finally {
+      setTimeout(function(){ PROD_REFRESHING = false; }, 3000);
+    }
+  }
+
+  function prodPortalUrl(res) {
+    return (res && res.portalUrl) || PROD_SESSION.portalUrl || '';
+  }
+
+  function PROD_logout(){
+    if(!confirm('Logout dari ERP dan semua modul?')) return;
+    runGasProd('PROD_logout', [], function(res){
+      try { if (typeof showToast === 'function') showToast('✅ Logout berhasil', 'success'); } catch(_) {}
+      var url = prodPortalUrl(res);
+      setTimeout(function(){
+        if (!url) {
+          alert('Logout berhasil, tapi URL Portal tidak ditemukan di Master_Module. Silakan buka Portal manual.');
+          return;
+        }
+        try { window.top.location.href = url; } catch(e) { window.location.href = url; }
+      }, 350);
+    });
+  }
+
+  function checkProdHeartbeat(){
+    runGasProd('PROD_globalHeartbeat', [PROD_LAST_HEARTBEAT], function(res){
+      var displayName = (res && res.user && res.user.name) || PROD_SESSION.displayName || PROD_SESSION.email || '';
+      var userEl = document.getElementById('user-email');
+      if (displayName && userEl) userEl.textContent = displayName;
+      if (!PROD_LAST_HEARTBEAT) {
+        PROD_LAST_HEARTBEAT = String((res && res.serverVersion) || '');
+        try { sessionStorage.setItem('ERP_GLOBAL_VERSION', PROD_LAST_HEARTBEAT); } catch(e) {}
+        return;
+      }
+      if (res && res.shouldRefresh) {
+        PROD_LAST_HEARTBEAT = String(res.serverVersion || '');
+        try { sessionStorage.setItem('ERP_GLOBAL_VERSION', PROD_LAST_HEARTBEAT); } catch(e) {}
+        prodSoftRefresh();
+      }
+    }, function(err){
+      // Sama seperti Purchasing: heartbeat gagal tidak memaksa redirect/hang.
+      console.warn('PROD heartbeat gagal:', err && err.message || err);
+    });
+  }
+
+  function startProdHeartbeat(){
+    if (PROD_HEARTBEAT_TIMER) clearInterval(PROD_HEARTBEAT_TIMER);
+    PROD_HEARTBEAT_TIMER = setInterval(checkProdHeartbeat, HEARTBEAT_MS);
+  }
+
+  window.runGasProd = runGasProd;
+  window.PROD_logout = PROD_logout;
+  window.ERP_logoutAllModules = PROD_logout;
+  window.ERP_touchGlobalChangeClient = function(reason){
+    runGasProd('PROD_touchGlobalChange', [reason || 'Client mutation'], function(){}, function(){});
+  };
+
+  if (PROD_SESSION.displayName && document.getElementById('user-email')) document.getElementById('user-email').textContent = PROD_SESSION.displayName;
+  setTimeout(checkProdHeartbeat, PROD_SESSION.paspor ? 1200 : 800);
+  startProdHeartbeat();
+})();
+</script>

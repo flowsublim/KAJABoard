@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ERP Modul Produksi</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <?!= include('CSS'); ?>
+</head>
+<body class="bg-light">
+<script>
+  window.ERP_SERVER_PASSPORT = <?!= JSON.stringify(ERP_PASSPORT || '') ?>;
+  window.ERP_SERVER_PORTAL_URL = <?!= JSON.stringify(ERP_PORTAL_URL || '') ?>;
+  window.ERP_USER_EMAIL = <?!= JSON.stringify(ERP_USER_EMAIL || '') ?>;
+  window.ERP_DISPLAY_NAME = <?!= JSON.stringify(ERP_DISPLAY_NAME || '') ?>;
+</script>
+
+<div class="d-flex vh-100" style="background-color: #f1f5f9;">
+
+  <aside class="glass-sidebar d-none d-lg-flex flex-column p-4 shadow-lg justify-content-between">
+    <div>
+      <div class="mb-5 px-2">
+        <h4 class="fw-bold text-warning m-0" style="letter-spacing: 1px;">🏢 ERP<br><span class="text-white fs-5">CV KIRAL</span></h4>
+      </div>
+      <ul class="nav flex-column gap-1">
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-wip" class="nav-link active fw-bold px-3 py-2" onclick="pindah('wip'); return false;">📊 Pantauan WIP</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-laporan" class="nav-link fw-bold px-3 py-2" onclick="pindah('laporan'); return false;">💰 Rekap Gaji</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-hpp" class="nav-link fw-bold px-3 py-2" onclick="pindah('hpp'); return false;">📈 Laporan HPP</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-reject" class="nav-link fw-bold px-3 py-2 text-danger" onclick="pindah('reject'); return false;">🗑️ Barang Reject</a></li>
+        <li class="nav-item mt-3"><a href="javascript:void(0)" id="nav-pengaturan" class="nav-link fw-bold px-3 py-2 text-warning" onclick="pindah('pengaturan'); return false;">⚙️ Master Data</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <div class="flex-grow-1 d-flex flex-column main-content">
+    
+    <header class="glass-header d-flex justify-content-between align-items-center p-3 px-4 shadow-sm">
+      <div class="text-truncate pe-2">
+        <h4 class="m-0 fw-bolder text-primary text-truncate" style="letter-spacing: -0.5px;">🏭 Modul Produksi</h4>
+        <small class="text-muted judul-subtitle text-truncate">Pantauan WIP, Upah Borongan & HPP COGM</small>
+      </div>
+      
+      <div class="d-flex align-items-center gap-2 gap-md-3">
+        <div class="text-end border-end border-secondary-subtle pe-3 d-none d-md-block">
+          <small class="text-muted d-block" style="font-size: 0.75rem;">Login sebagai:</small>
+          <span class="fw-bold text-dark" id="user-email"><?!= ERP_DISPLAY_NAME || ERP_USER_EMAIL || 'Memuat user...'; ?></span>
+        </div>
+
+        <div class="dropdown" id="menuPindahModul">
+          <button class="btn btn-light fw-bold border-0 shadow-sm dropdown-toggle d-flex align-items-center justify-content-center btn-pindah-modul px-lg-3 py-2" type="button" data-bs-toggle="dropdown" title="Pindah Modul" style="border-radius: 12px;">
+            <span class="fs-5" style="line-height: 1;">🔄</span> 
+            <span class="teks-pindah-modul d-none d-lg-inline ms-2">Pindah Modul</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2 rounded-3" id="menu-modul-list">
+            <li><h6 class="dropdown-header">⏳ Memuat link...</h6></li>
+          </ul>
+        </div>
+        <button class="btn btn-danger fw-bold border-0 shadow-sm d-flex align-items-center justify-content-center" type="button" title="Logout ERP" onclick="if(window.PROD_logout){window.PROD_logout();}else{alert('JS belum siap. Tunggu sebentar lalu coba lagi.');}" style="width:42px;height:42px;border-radius:12px;">⏻</button>
+      </div> 
+    </header>
+
+    <main class="p-3 px-lg-4 pb-5">
+      <div id="notif-global"></div>
+
+      <section id="tab-wip" class="container-fluid p-0">
+        <div class="card p-4 shadow-sm border-top border-primary border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h5 class="fw-bold text-primary m-0">📊 Dashboard Status WIP (Work In Progress)</h5>
+            <div class="d-flex gap-2 align-items-center">
+              <select id="filter-spk-wip" class="form-select border-primary fw-bold" style="width: auto;" onchange="muatWIP()">
+                 <option value="">-- Semua SPK --</option>
+              </select>
+              <button class="btn btn-primary fw-bold px-3 py-2 text-nowrap" onclick="bukaModalInput()">➕ Input Setoran</button>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle text-center">
+              <thead class="table-light">
+                <tr>
+                  <th class="text-start">No SPK</th>
+                  <th class="text-start">Produk / Varian</th>
+                  <th>Sisa Potong</th>
+                  <th>Sisa Jahit</th>
+                  <th>Sisa QC/Pack</th>
+                  <th>Gudang (Jadi)</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-wip"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-laporan" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-success border-4 mb-4">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h5 class="fw-bold text-success m-0">💰 Laporan Rekap Gaji Karyawan</h5>
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+              <input type="date" id="filter-start" class="form-control border-success" style="width: auto;">
+              <span class="fw-bold text-muted">s/d</span>
+              <input type="date" id="filter-end" class="form-control border-success" style="width: auto;">
+              <button class="btn btn-success fw-bold px-3" onclick="muatGaji()">🔍 Filter</button>
+              <button class="btn btn-outline-dark fw-bold px-3" onclick="cetakGajiPDF()">🖨️ Cetak PDF</button>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle text-center">
+              <thead class="table-light">
+                <tr>
+                  <th class="text-start">Nama Karyawan</th>
+                  <th>Total Pcs</th>
+                  <th class="text-end">Borongan (Rp)</th>
+                  <th class="text-end">Biaya Ekstra (Rp)</th>
+                  <th class="text-end">Total Upah (Rp)</th>
+                  <th>Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-gaji"></tbody>
+            </table>
+          </div>
+          <div class="mt-3 text-end">
+            <h5 class="fw-bold m-0 p-3 bg-success bg-opacity-10 border border-success border-opacity-25 text-success d-inline-block rounded-3">
+               Grand Total Upah: <span id="grand-total" class="ms-2">Rp 0</span>
+            </h5>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-hpp" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-info border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h5 class="fw-bold text-info text-dark m-0">📈 Laporan HPP Produksi (COGM)</h5>
+            <button class="btn btn-info fw-bold text-dark px-3 py-2" id="btn-sync-hpp" onclick="jalankanSyncHPP()">🔄 Sync HPP ke Gudang</button>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle text-center">
+              <thead class="table-light">
+                <tr>
+                  <th class="text-start">No SPK (Status)</th>
+                  <th class="text-end">Biaya Bahan / Pcs</th>
+                  <th class="text-end">Upah Lgsg / Pcs</th>
+                  <th class="text-end">BOP Bulanan / Pcs</th>
+                  <th class="text-end">HPP Total / Pcs</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-hpp"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB BARANG REJECT -->
+      <section id="tab-reject" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-danger border-4 mb-4">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h5 class="fw-bold text-danger m-0">🗑️ Laporan Barang Reject (Cacat)</h5>
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+              <input type="date" id="filter-start-reject" class="form-control border-danger" style="width: auto;">
+              <span class="fw-bold text-muted">s/d</span>
+              <input type="date" id="filter-end-reject" class="form-control border-danger" style="width: auto;">
+              <button class="btn btn-danger fw-bold px-3" onclick="muatReject()">🔍 Filter</button>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle text-center">
+              <thead class="table-light">
+                <tr>
+                  <th>Tgl Input</th>
+                  <th class="text-start">No SPK</th>
+                  <th>Tahap Reject</th>
+                  <th class="text-start">Produk / Varian</th>
+                  <th>QTY</th>
+                  <th class="text-start">Karyawan (PIC)</th>
+                  <th class="text-start">Alasan / Catatan</th>
+                  <th>Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-reject"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-pengaturan" class="container-fluid p-0 d-none">
+        <div class="row g-4">
+          <div class="col-lg-6">
+            <div class="card p-4 shadow-sm border-top border-warning border-4 h-100">
+              <h5 class="fw-bold text-warning text-dark mb-3">⚙️ Master Karyawan (PIC)</h5>
+              <div class="d-flex gap-2 mb-3">
+                <input type="text" id="i-nama-pic" class="form-control border-warning" placeholder="Nama Karyawan Baru...">
+                <button class="btn btn-warning fw-bold text-dark" onclick="simpanPIC()">💾 Simpan</button>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle text-center">
+                  <thead class="table-light"><tr><th class="text-start">Nama PIC</th><th>Status</th><th>Aksi</th></tr></thead>
+                  <tbody id="tbl-master-pic"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="card p-4 shadow-sm border-top border-secondary border-4 h-100">
+              <h5 class="fw-bold text-secondary mb-3">⚙️ Master Tarif Produksi</h5>
+              <div class="row g-2 mb-3">
+                <div class="col-md-3">
+                  <select id="i-trf-proses" class="form-select border-secondary">
+                    <option value="Potong">Potong</option>
+                    <option value="Jahit Internal">Jahit Internal</option>
+                    <option value="Jahit Luar">Jahit Luar</option>
+                    <option value="QC & Packing">QC / Packing</option>
+                    <option value="Setor Gudang" class="fw-bold text-success">Setor Gudang (Fee SPV)</option>
+                  </select>
+                </div>
+                <div class="col-md-5"><select id="i-trf-produk" class="form-select border-secondary"><option value="">- Loading -</option></select></div>
+                <div class="col-md-4 d-flex gap-2">
+                   <input type="number" id="i-trf-harga" class="form-control border-secondary" placeholder="Rp /Pcs">
+                   <button class="btn btn-secondary fw-bold text-white px-3" onclick="simpanTarif()">💾</button>
+                </div>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle text-center">
+                  <thead class="table-light"><tr><th class="text-start">Proses</th><th class="text-start">Produk</th><th class="text-end">Tarif</th><th>Aksi</th></tr></thead>
+                  <tbody id="tbl-master-tarif"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MENU BAWAH KHUSUS HP (Navigasi Melayang) -->
+      <div class="d-lg-none fixed-bottom bg-white border-top shadow-lg d-flex justify-content-around p-2" style="z-index: 1040; border-radius: 20px 20px 0 0; overflow-x: auto; white-space: nowrap;">
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('wip')">📊 WIP</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('laporan')">💰 Gaji</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-danger" onclick="pindah('reject')">🗑️ Reject</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('hpp')">📈 HPP</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('pengaturan')">⚙️ Master</button>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<div class="modal fade" id="modalInputKerja" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content border-primary shadow-lg">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title fw-bold">➕ Input Setoran Pekerjaan</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4 bg-light">
+        <div id="notif-modal"></div>
+        <form id="form-produksi">
+          <input type="hidden" id="prod-row-lama">
+          <div class="row g-3 border-bottom pb-4 mb-4">
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Tanggal <span class="text-danger">*</span></label>
+              <input type="date" id="tgl" class="form-control border-primary" required>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Pilih Pekerja (PIC) <span class="text-danger">*</span></label>
+              <select id="pic" class="form-select border-primary" required><option value="">- Memuat -</option></select>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Tugas / Proses <span class="text-danger">*</span></label>
+              <select id="proses" class="form-select border-primary fw-bold text-primary" onchange="aturFormProses()" required>
+                <option value="Potong">Potong</option>
+                <option value="Jahit Internal">Jahit Internal</option>
+                <option value="Jahit Luar">Jahit Luar</option>
+                <option value="QC & Packing">QC & Packing</option>
+                <option value="Setor Gudang">Setor Gudang (Selesai)</option>
+                <option value="Tugas Umum (Non-SPK)">Tugas Umum (Non-SPK)</option>
+                <option value="Reject Potong">Reject Potong</option>
+                <option value="Reject Jahit">Reject Jahit</option>
+                <option value="Reject QC">Reject QC</option>
+              </select>
+            </div>
+            <div class="col-md-3" id="area-spk">
+              <label class="fw-bold mb-1 text-danger">Terikat SPK <span class="text-danger">*</span></label>
+              <select id="spk" class="form-select border-danger" onchange="upDropdownBahan()"><option value="">-- Pilih SPK Aktif --</option></select>
+            </div>
+          </div>
+
+          <div class="row g-3 mb-4 d-none bg-white p-3 rounded shadow-sm border border-warning" id="area-bahan">
+            <div class="col-md-6"><label class="fw-bold mb-1">Bahan Baku yang Digunakan</label><select id="bahan" class="form-select border-warning"></select></div>
+            <div class="col-md-6"><label class="fw-bold mb-1">QTY Bahan (Kg / Roll / Yard)</label><input type="number" id="qtyBahan" class="form-control border-warning" placeholder="Jumlah Pemakaian"></div>
+          </div>
+
+          <div class="card p-3 shadow-sm border-0 mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h6 class="fw-bold m-0 text-primary">🎯 Daftar Varian Produk yang Disetor</h6>
+              <button type="button" class="btn btn-sm btn-outline-primary fw-bold" onclick="tambahBaris()">+ Tambah Produk</button>
+            </div>
+            <div id="area-items"></div>
+          </div>
+
+          <div class="row g-3">
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Sistem Upah</label>
+              <select id="sistemUpah" class="form-select text-dark fw-bold border-success">
+                <option value="borongan">Hitung Borongan Otomatis</option>
+                <option value="harian">Gaji Harian / Tetap (Abaikan Borongan)</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="fw-bold mb-1">Biaya / Bonus Tambahan (Rp)</label>
+              <input type="number" id="biayaTambahan" class="form-control border-success" placeholder="Cth: 50000" value="0">
+            </div>
+            <div class="col-md-6">
+              <label class="fw-bold mb-1 text-danger">Catatan Khusus (Wajib diisi jika Reject)</label>
+              <input type="text" id="catatan" class="form-control border-danger" placeholder="Keterangan / Alasan Reject...">
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer bg-white p-3">
+        <button type="button" class="btn btn-outline-secondary fw-bold" data-bs-dismiss="modal">Batal</button>
+        <button type="button" class="btn btn-primary fw-bold px-4 fs-6" id="btn-simpan" onclick="simpan()">💾 Simpan Setoran</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="modalDetail" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content border-0 shadow-lg">
+      <div class="modal-header bg-dark text-white">
+        <h5 class="modal-title fw-bold" id="modalTitle">Riwayat Input Kerja</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0 table-responsive">
+        <table class="table table-sm table-striped m-0 align-middle text-center">
+          <thead class="table-secondary">
+            <tr><th>Tgl</th><th>SPK</th><th>Proses</th><th class="text-start">Item</th><th>QTY</th><th class="text-end pe-3">Nilai (Rp)</th><th class="text-center">Aksi</th></tr>
+          </thead>
+          <tbody id="tbl-modal-detail"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="modalEditPIC" tabindex="-1">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content border-warning shadow-lg">
+      <div class="modal-header bg-warning text-dark"><h6 class="modal-title fw-bold m-0">✏️ Edit Karyawan</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body p-4">
+        <input type="hidden" id="e-pic-id">
+        <div class="mb-3"><label class="fw-bold mb-1">Nama PIC:</label><input type="text" id="e-pic-nama" class="form-control border-warning fw-bold"></div>
+        <div class="mb-2"><label class="fw-bold mb-1">Status:</label><select id="e-pic-status" class="form-select border-warning"><option value="Aktif">Aktif</option><option value="Non-Aktif">Non-Aktif</option></select></div>
+      </div>
+      <div class="modal-footer p-2 bg-light"><button type="button" class="btn btn-warning fw-bold text-dark w-100" id="btn-sv-pic" onclick="simpanEditPIC()">Update Data</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="modalEditTarif" tabindex="-1">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content border-secondary shadow-lg">
+      <div class="modal-header bg-secondary text-white"><h6 class="modal-title fw-bold m-0">✏️ Edit Tarif</h6><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body p-4">
+        <input type="hidden" id="e-trf-id">
+        <div class="mb-3">
+          <label class="fw-bold mb-1">Proses:</label>
+          <select id="e-trf-proses" class="form-select border-secondary">
+            <option value="Potong">Potong</option>
+            <option value="Jahit Internal">Jahit Internal</option>
+            <option value="Jahit Luar">Jahit Luar</option>
+            <option value="QC & Packing">QC / Packing</option>
+            <option value="Setor Gudang" class="fw-bold text-success">Setor Gudang (Fee SPV)</option>
+          </select>
+        </div>
+        <div class="mb-3"><label class="fw-bold mb-1">Produk:</label><select id="e-trf-produk" class="form-select border-secondary fw-bold"></select></div>
+        <div class="mb-2"><label class="fw-bold mb-1">Tarif / Pcs (Rp):</label><input type="number" id="e-trf-harga" class="form-control border-secondary text-success fw-bold"></div>
+      </div>
+      <div class="modal-footer p-2 bg-light"><button type="button" class="btn btn-secondary fw-bold w-100" id="btn-sv-trf" onclick="simpanEditTarif()">Update Tarif</button></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<?!= include('JS'); ?>
+<div id="toast-container" class="position-fixed top-0 start-50 translate-middle-x p-3" style="z-index: 9999; margin-top: 10px; pointer-events: none;"></div>
+</body>
+</html>

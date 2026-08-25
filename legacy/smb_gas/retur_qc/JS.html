@@ -1,0 +1,914 @@
+<script>
+const RQC_AUTH = window.RQC_BOOTSTRAP || {};
+let __rqcLoading = false;
+let __rqcLoadedOnce = false;
+let __rqcRefreshQueued = false;
+let __rqcQueuedHeartbeatVersion = '';
+let __rqcHeartbeatVersion = String(RQC_AUTH.serverVersion || RQC_AUTH.heartbeatVersion || '');
+let __rqcActiveTab = 'scan';
+
+function rqcEmail() { return String(RQC_AUTH.email || RQC_AUTH.userEmail || '').trim().toLowerCase(); }
+function rqcPaspor() { return String(RQC_AUTH.paspor || RQC_AUTH.passport || '').trim(); }
+
+let APP = {
+  session: null,
+  source: null,
+  lines: [],
+  stats: {},
+  masterItems: [],
+  currentRecord: null,
+  currentScan: '',
+  scanner: null,
+  scanning: false,
+  lastScanAt: 0,
+  didAutoScanFromRedirect: false,
+  manualTimer: null,
+  lastManualAutoCode: '',
+  unscanned: [],
+  unscannedStats: {},
+  scannedHistory: [],
+  scannedHistoryStats: {}
+};
+
+function esc(v) {
+  return String(v ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+function fmtDate(v) {
+  if (!v) return '';
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return esc(v);
+  return d.toLocaleString('id-ID', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+function showToast(message, type='success') {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = 'custom-toast toast-' + type;
+  toast.innerHTML = message;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.classList.add('fade-out');
+    setTimeout(() => toast.remove(), 300);
+  }, 3500);
+}
+// v2.0.1: inline/status notifications dimatikan agar UI bersih; gunakan toast saja.
+function setStatus(msg, type='info') {
+  const el = document.getElementById('status-bar');
+  if (el) {
+    el.className = 'd-none';
+    el.innerHTML = '';
+  }
+  const t = String(type || '').toLowerCase();
+  if (t === 'danger' || t === 'error') {
+    showToast(msg, 'error');
+  }
+}
+
+function isProbablyInAppBrowser() {
+  const ua = navigator.userAgent || '';
+  return /FBAN|FBAV|Instagram|Line|WhatsApp|MicroMessenger|GSA|TikTok|Twitter/i.test(ua) || document.referrer.includes('whatsapp');
+}
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+function cameraHelpMessage() {
+  if (isIOS() && isProbablyInAppBrowser()) {
+    return 'Live camera tidak dipakai. Gunakan <b>Scan/Ambil Foto Resi</b>, input manual, atau scanner Bluetooth/USB.';
+  }
+  return 'Live camera tidak dipakai. Gunakan Scan/Ambil Foto Resi, input manual, atau scanner Bluetooth/USB.';
+}
+function showBrowserWarningIfNeeded() {
+  // v2.0.1: tidak menanam notifikasi permanen di halaman.
+}
+function showOpenInSafariHelp() {
+  const url = window.location.href;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).catch(() => {});
+  }
+  alert('Untuk iPhone dari WhatsApp:\n\n1. Tap ikon share / titik tiga di browser WhatsApp.\n2. Pilih Open in Safari / Buka di Safari.\n3. Izinkan Camera saat diminta.\n\nLink sudah dicoba disalin. Kalau tidak tersalin, copy manual dari address bar.');
+}
+
+function getCleanReturnUrl() {
+  const fromServer = window.CURRENT_WEBAPP_URL || '';
+  if (fromServer && /^https:\/\//i.test(fromServer)) return fromServer;
+  return window.location.href.split('?')[0].split('#')[0];
+}
+function buildExternalScannerUrl() {
+  const scannerUrl = String(window.EXTERNAL_SCANNER_URL || '').trim();
+  if (!scannerUrl || scannerUrl.includes('PASTE_EXTERNAL_SCANNER_URL')) return '';
+  const sep = scannerUrl.includes('?') ? '&' : '?';
+  return scannerUrl + sep + 'returnUrl=' + encodeURIComponent(getCleanReturnUrl()) + '&title=' + encodeURIComponent('Retur QC CV Kiral');
+}
+function openExternalScanner() {
+  const url = buildExternalScannerUrl();
+  if (!url) {
+    showToast('❌ URL scanner eksternal belum diisi di Kode.gs: RQC_CFG.EXTERNAL_SCANNER_URL', 'error');
+    alert('URL Scanner External belum diisi.\n\n1. Host file Scanner_External.html di hosting HTTPS.\n2. Copy URL publiknya.\n3. Isi di Kode.gs: RQC_CFG.EXTERNAL_SCANNER_URL.\n4. Deploy ulang WebApp Retur QC.');
+    return;
+  }
+  window.location.href = url;
+}
+function copyScannerLinkHelp() {
+  const url = buildExternalScannerUrl() || getCleanReturnUrl();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => showToast('✅ Link disalin.', 'success')).catch(() => alert(url));
+  } else {
+    alert(url);
+  }
+}
+function runInitialScanFromRedirect() {
+  const code = String(window.INIT_SCAN_RESI || '').trim();
+  if (!code || APP.didAutoScanFromRedirect) return;
+  APP.didAutoScanFromRedirect = true;
+  const input = document.getElementById('manual-code');
+  if (input) input.value = code;
+  showToast('✅ Hasil scan diterima dari scanner eksternal: <b>' + esc(code) + '</b>', 'success');
+  try { window.history.replaceState({}, document.title, getCleanReturnUrl()); } catch(e) {}
+  setTimeout(() => cariKode(code), 250);
+}
+
+function openPhotoScanner() {
+  const inp = document.getElementById('photo-scan-input');
+  if (inp) inp.click();
+}
+
+async function scanFromPhotoFile(file) {
+  if (!file) return;
+  const btn = document.getElementById('btn-start-camera');
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Membaca Foto...'; }
+  showToast('⏳ Membaca barcode dari foto. Usahakan barcode memenuhi foto...', 'info');
+
+  try {
+    const code = await decodeBarcodeSmart_(file);
+    if (!code) throw new Error('Barcode tidak terbaca.');
+
+    document.getElementById('manual-code').value = code;
+    showToast('✅ Barcode terbaca: <b>' + esc(code) + '</b>', 'success');
+    cariKode(code);
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err || 'Barcode tidak terbaca.');
+    showToast('❌ ' + esc(msg) + '<br><small>Coba foto lebih dekat, terang, barcode lurus/horizontal, dan penuhi area foto. Kalau tetap gagal, pakai scanner Bluetooth/USB atau ketik manual.</small>', 'warning');
+    focusManualInput();
+  } finally {
+    const inp = document.getElementById('photo-scan-input');
+    if (inp) inp.value = '';
+    if (btn) { btn.disabled = false; btn.innerHTML = '📸 Scan / Ambil Foto Resi'; }
+  }
+}
+
+async function decodeBarcodeSmart_(file) {
+  // Urutan dibuat dari paling ringan sampai fallback preprocessing.
+  // Mayoritas resi ekspedisi memakai barcode 1D CODE_128; foto full label sering gagal
+  // kalau barcode terlalu kecil, jadi kita coba native detector + beberapa crop canvas.
+  const candidates = [];
+
+  // 1) File asli langsung dulu.
+  candidates.push({ name: 'file-asli', blob: file });
+
+  // 2) Kandidat hasil canvas: full resize + crop area label.
+  try {
+    const canvasCandidates = await buildImageCandidates_(file);
+    canvasCandidates.forEach(c => candidates.push(c));
+  } catch (e) {
+    console.warn('buildImageCandidates_ gagal', e);
+  }
+
+  let lastErr = '';
+  for (const c of candidates) {
+    try {
+      const nativeCode = await decodeWithNativeBarcodeDetector_(c.blob);
+      if (nativeCode) return cleanDecodedBarcode_(nativeCode);
+    } catch(e) { lastErr = e.message || String(e); }
+
+    try {
+      const qrCode = await decodeWithHtml5Qrcode_(c.blob);
+      if (qrCode) return cleanDecodedBarcode_(qrCode);
+    } catch(e) { lastErr = e.message || String(e); }
+  }
+
+  console.warn('Semua decode gagal:', lastErr);
+  return '';
+}
+
+function cleanDecodedBarcode_(v) {
+  return String(v || '')
+    .trim()
+    .replace(/[\r\n\t ]+/g, '')
+    .replace(/^URL:/i, '');
+}
+
+async function decodeWithNativeBarcodeDetector_(blob) {
+  if (!('BarcodeDetector' in window)) return '';
+  let formats = undefined;
+  try {
+    if (BarcodeDetector.getSupportedFormats) {
+      const supported = await BarcodeDetector.getSupportedFormats();
+      const wanted = ['code_128','code_39','code_93','codabar','ean_13','ean_8','itf','upc_a','upc_e','qr_code','data_matrix','pdf417'];
+      formats = wanted.filter(f => supported.indexOf(f) !== -1);
+      if (!formats.length) formats = undefined;
+    }
+  } catch(e) {}
+
+  const detector = formats ? new BarcodeDetector({ formats }) : new BarcodeDetector();
+  const img = await imageFromBlob_(blob);
+  const found = await detector.detect(img);
+  if (found && found.length) {
+    // Ambil hasil terpanjang karena resi biasanya lebih panjang daripada noise kecil.
+    found.sort((a,b) => String(b.rawValue || '').length - String(a.rawValue || '').length);
+    return found[0].rawValue || '';
+  }
+  return '';
+}
+
+function decodeWithHtml5Qrcode_(blob) {
+  return new Promise((resolve, reject) => {
+    if (typeof Html5Qrcode === 'undefined') {
+      reject(new Error('Library Html5Qrcode belum termuat.'));
+      return;
+    }
+    const targetId = 'reader-file';
+    let qr;
+    try {
+      const formats = (typeof Html5QrcodeSupportedFormats !== 'undefined') ? [
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.CODE_93,
+        Html5QrcodeSupportedFormats.CODABAR,
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.ITF,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.QR_CODE,
+        Html5QrcodeSupportedFormats.DATA_MATRIX,
+        Html5QrcodeSupportedFormats.PDF_417
+      ].filter(Boolean) : undefined;
+      qr = formats ? new Html5Qrcode(targetId, { formatsToSupport: formats, verbose: false }) : new Html5Qrcode(targetId);
+    } catch(e) {
+      try { qr = new Html5Qrcode(targetId); } catch(e2) { reject(e2); return; }
+    }
+
+    qr.scanFile(blob, false)
+      .then(decodedText => {
+        try { qr.clear(); } catch(e) {}
+        resolve(decodedText || '');
+      })
+      .catch(err => {
+        try { qr.clear(); } catch(e) {}
+        reject(err);
+      });
+  });
+}
+
+function imageFromBlob_(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Foto gagal dibaca browser.')); };
+    img.src = url;
+  });
+}
+
+async function buildImageCandidates_(file) {
+  const img = await imageFromBlob_(file);
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  if (!w || !h) return [];
+
+  const crops = [
+    { name:'full', x:0, y:0, w:w, h:h },
+    { name:'middle-wide', x:0, y:h*0.20, w:w, h:h*0.60 },
+    { name:'upper-wide', x:0, y:0, w:w, h:h*0.55 },
+    { name:'lower-wide', x:0, y:h*0.45, w:w, h:h*0.55 },
+    { name:'center', x:w*0.05, y:h*0.15, w:w*0.90, h:h*0.70 },
+    { name:'left', x:0, y:h*0.10, w:w*0.65, h:h*0.80 },
+    { name:'right', x:w*0.35, y:h*0.10, w:w*0.65, h:h*0.80 }
+  ];
+
+  const out = [];
+  for (const c of crops) {
+    const blob1 = await canvasCropBlob_(img, c, false);
+    if (blob1) out.push({ name:c.name, blob:blob1 });
+    const blob2 = await canvasCropBlob_(img, c, true);
+    if (blob2) out.push({ name:c.name + '-contrast', blob:blob2 });
+  }
+  return out;
+}
+
+function canvasCropBlob_(img, crop, enhance) {
+  return new Promise(resolve => {
+    const sourceW = Math.max(1, Math.round(crop.w));
+    const sourceH = Math.max(1, Math.round(crop.h));
+    const maxSide = 2200;
+    const scale = Math.min(maxSide / Math.max(sourceW, sourceH), 2.2); // boleh upscale sedikit untuk barcode kecil
+    const outW = Math.max(320, Math.round(sourceW * scale));
+    const outH = Math.max(220, Math.round(sourceH * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, Math.round(crop.x), Math.round(crop.y), sourceW, sourceH, 0, 0, outW, outH);
+
+    if (enhance) {
+      try {
+        const imgData = ctx.getImageData(0, 0, outW, outH);
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          // grayscale + contrast ringan untuk barcode hitam putih
+          let g = (d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114);
+          g = (g - 128) * 1.55 + 128;
+          g = g < 100 ? 0 : (g > 180 ? 255 : g);
+          d[i] = d[i+1] = d[i+2] = Math.max(0, Math.min(255, g));
+        }
+        ctx.putImageData(imgData, 0, 0);
+      } catch(e) {}
+    }
+
+    canvas.toBlob(blob => resolve(blob), 'image/png', 0.95);
+  });
+}
+
+function runGasReturQC(fnName, args, onSuccess, onFail) {
+  args = Array.isArray(args) ? args.slice() : [];
+  args.push(rqcEmail(), rqcPaspor());
+  let runner = google.script.run
+    .withSuccessHandler(onSuccess || function(){})
+    .withFailureHandler(err => {
+      const msg = err && err.message ? err.message : String(err);
+      showToast('❌ ' + esc(msg), 'error');
+      if (onFail) onFail(err);
+    });
+  return runner[fnName].apply(runner, args);
+}
+function gsRun(fnName, args, onSuccess, onFail) {
+  return runGasReturQC(fnName, args, onSuccess, onFail);
+}
+
+function hydrateUserReturQC(user) {
+  user = user || {};
+  const name = user.name || user.displayName || RQC_AUTH.displayName || RQC_AUTH.email || '';
+  const email = user.email || RQC_AUTH.email || '';
+  const el = document.getElementById('user-email');
+  if (el) el.innerText = name || email || 'User';
+}
+
+function bukaLinkModul(url) {
+  if (!url || url === '#') return false;
+  try { window.top.location.href = url; }
+  catch(e) { window.location.href = url; }
+  return false;
+}
+
+function rqcModalOrScanBusy() {
+  return !!document.querySelector('.modal.show') || !!APP.scanning || !!document.body.classList.contains('rqc-busy');
+}
+
+function prosesRefreshReturQcTertunda() {
+  if (!__rqcRefreshQueued) return;
+  if (rqcModalOrScanBusy() || __rqcLoading) return;
+  __rqcRefreshQueued = false;
+  if (__rqcQueuedHeartbeatVersion) __rqcHeartbeatVersion = String(__rqcQueuedHeartbeatVersion);
+  __rqcQueuedHeartbeatVersion = '';
+  loadInit({ silent: true, source: 'heartbeat_queued' });
+}
+
+function cekHeartbeatReturQC(silent) {
+  if (!rqcEmail() || !rqcPaspor()) return;
+  runGasReturQC('ERP_globalHeartbeat', [__rqcHeartbeatVersion], function(res) {
+    if (!res || !res.ok) {
+      if (res && res.shouldLogout && res.portalUrl) {
+        showToast('⚠️ Sesi Retur QC habis. Kembali ke Portal...', 'warning');
+        setTimeout(() => bukaLinkModul(res.portalUrl), 800);
+      }
+      return;
+    }
+    RQC_AUTH.email = res.userEmail || RQC_AUTH.email;
+    RQC_AUTH.displayName = res.displayName || RQC_AUTH.displayName;
+    RQC_AUTH.paspor = res.paspor || res.passport || RQC_AUTH.paspor;
+    RQC_AUTH.passport = res.passport || res.paspor || RQC_AUTH.passport;
+    hydrateUserReturQC(res.user || { name: res.displayName, email: res.userEmail });
+
+    const serverVersion = String(res.serverVersion || '');
+    if (res.shouldRefresh && __rqcLoadedOnce) {
+      if (rqcModalOrScanBusy() || __rqcLoading) {
+        __rqcRefreshQueued = true;
+        __rqcQueuedHeartbeatVersion = serverVersion;
+        if (!silent) showToast('⏳ Ada update data Retur QC, refresh ditunda sampai scan/modal selesai.', 'warning');
+        return;
+      }
+      if (serverVersion) __rqcHeartbeatVersion = serverVersion;
+      loadInit({ silent: true, source: 'heartbeat' });
+      return;
+    }
+    if (serverVersion) __rqcHeartbeatVersion = serverVersion;
+  }, function(err) {
+    if (!silent) showToast('⚠️ Heartbeat Retur QC gagal: ' + esc((err && err.message) || err), 'warning');
+  });
+}
+
+function startHeartbeatReturQC() {
+  cekHeartbeatReturQC(true);
+  setInterval(() => cekHeartbeatReturQC(true), 60000);
+  document.addEventListener('hidden.bs.modal', () => setTimeout(prosesRefreshReturQcTertunda, 250));
+  setInterval(prosesRefreshReturQcTertunda, 5000);
+}
+
+function logoutReturQC() {
+  const btn = document.getElementById('btn-logout-rqc');
+  if (btn) { btn.disabled = true; btn.innerText = 'Logout...'; }
+  runGasReturQC('ERP_globalLogout', [rqcPaspor()], function(res) {
+    const url = (res && res.portalUrl) || RQC_AUTH.portalUrl || '';
+    showToast('✅ Logout berhasil.', 'success');
+    setTimeout(() => { if (url) bukaLinkModul(url); }, 500);
+  }, function(err) {
+    if (btn) { btn.disabled = false; btn.innerText = 'Logout'; }
+    showToast('❌ Logout gagal: ' + esc((err && err.message) || err), 'error');
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => { showBrowserWarningIfNeeded(); hydrateUserReturQC(); loadInit(); startHeartbeatReturQC(); setTimeout(focusManualInput, 600); });
+
+function loadInit(opts) {
+  opts = opts || {};
+  if (__rqcLoading) return;
+  __rqcLoading = true;
+  if (!opts.silent) setStatus('⏳ Memuat Retur QC...', 'info');
+  gsRun('getReturQcInit', [], res => {
+    if (!res || !res.success) {
+      __rqcLoading = false;
+      if (!opts.silent) setStatus('❌ Gagal memuat: ' + esc(res && res.msg ? res.msg : 'Server error / response kosong'), 'danger');
+      return;
+    }
+    APP.session = res.session;
+    APP.source = res.source;
+    APP.lines = res.lines || [];
+    APP.stats = res.stats || {};
+    APP.masterItems = res.masterItems || [];
+    if (res.userInfo) hydrateUserReturQC(res.userInfo);
+    if (res.heartbeat && res.heartbeat.version) __rqcHeartbeatVersion = String(res.heartbeat.version);
+    renderAll();
+    renderModuleLinks(res.links || []);
+    loadUnscannedList(false);
+    loadScannedHistory(false);
+    __rqcLoadedOnce = true;
+    __rqcLoading = false;
+    if (!opts.silent) runInitialScanFromRedirect();
+  }, err => {
+    const msg = err && err.message ? err.message : String(err || 'Server error');
+    __rqcLoading = false;
+    if (!opts.silent) setStatus('❌ Gagal memuat database: ' + esc(msg), 'danger');
+  });
+}
+
+function renderModuleLinks(links) {
+  const el = document.getElementById('menu-modul-list');
+  if (!el) return;
+  let html = `<li><div class="dropdown-item fw-bold" style="background:#f8f9fa;color:#0d6efd;cursor:default;">♻️ Retur QC (Aktif)</div></li>`;
+  links.forEach(m => {
+    html += `<li><a class="dropdown-item fw-bold text-dark" href="${esc(m.url)}" target="_top" onclick="return bukaLinkModul(this.href)">${esc(m.nama)}</a></li>`;
+  });
+  el.innerHTML = html || '<li><h6 class="dropdown-header">Tidak ada link modul</h6></li>';
+}
+
+function renderAll() {
+  document.getElementById('session-badge').innerText = APP.session ? APP.session.Session_ID : 'SESSION';
+  renderStats();
+  renderLines();
+}
+function renderStats() {
+  const s = APP.stats || {};
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.innerText = v; };
+  set('stat-total', s.totalScan || 0);
+  set('stat-pass', s.passCount || 0);
+  set('stat-hold', s.holdCount || 0);
+  set('stat-qty', s.unpostedPassQty || 0);
+}
+function renderLines() {
+  const tbody = document.getElementById('tbl-lines');
+  if (!tbody) return;
+  if (!APP.lines || APP.lines.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" class="text-muted py-4">Belum ada scan.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = APP.lines.map(l => {
+    const result = String(l.QC_Result || '').toUpperCase();
+    const ok = result === 'PASS' || result === 'PARTIAL_PASS';
+    const posted = String(l.Posted_Flag || '').toUpperCase() === 'TRUE';
+    return `<tr>
+      <td><small>${fmtDate(l.Scan_Time)}</small></td>
+      <td class="fw-bold text-primary"><small>${esc(l.Tracking_No || l.Return_Tracking_No || l.Scanned_Code)}</small></td>
+      <td><small>${esc(l.Order_No)}</small></td>
+      <td class="text-start"><small>${esc(l.Expected_Item_Name)}</small></td>
+      <td class="text-start fw-bold"><small>${esc(l.Actual_Item_Name)}</small></td>
+      <td class="fw-bold">${esc(l.Actual_Qty || '')}</td>
+      <td><span class="badge ${ok ? 'bg-success' : 'bg-warning text-dark'}">${esc(result)}</span></td>
+      <td>${posted ? '<span class="badge bg-dark">POSTED</span>' : '<span class="badge bg-secondary">DRAFT</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function pindah(tab) {
+  __rqcActiveTab = tab;
+  ['scan','session','unscanned','scanned','hold'].forEach(t => {
+    const sec = document.getElementById('tab-' + t);
+    if (sec) sec.classList.toggle('d-none', t !== tab);
+  });
+  document.querySelectorAll('.nav-link, .mobile-nav .btn').forEach(el => {
+    el.classList.remove('active');
+    if (el.classList.contains('text-primary')) el.classList.replace('text-primary','text-secondary');
+  });
+  document.querySelectorAll('.nav-' + tab).forEach(el => {
+    el.classList.add('active');
+    if (el.classList.contains('text-secondary')) el.classList.replace('text-secondary','text-primary');
+  });
+  // v2.0: data utama diload di awal; filter manual tetap bisa refresh per tombol.
+}
+
+function loadUnscannedList(showLoading=true) {
+  const note = document.getElementById('unscan-note');
+  if (note) { note.className = 'd-none'; note.innerHTML = ''; }
+  const qEl = document.getElementById('unscan-search');
+  const odEl = document.getElementById('unscan-overdue');
+  const options = {
+    q: qEl ? qEl.value.trim() : '',
+    overdueDays: odEl ? Number(odEl.value || 0) : 0,
+    limit: 1000
+  };
+  gsRun('getReturQcUnscannedList', [options], res => {
+    if (!res || !res.success) {
+      showToast('❌ Gagal memuat daftar belum discan: ' + esc(res && res.msg ? res.msg : 'Server error'), 'error');
+      return;
+    }
+    APP.unscanned = res.data || [];
+    APP.unscannedStats = res.stats || {};
+    renderUnscannedList();
+  });
+}
+
+function renderUnscannedList() {
+  const stats = APP.unscannedStats || {};
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.innerText = v; };
+  set('unscan-total-source', stats.sourceTotal || 0);
+  set('unscan-scanned', stats.scannedTotal || 0);
+  set('unscan-total', stats.unscannedTotal || 0);
+  set('unscan-shown', stats.shown || 0);
+  const note = document.getElementById('unscan-note');
+  if (note) { note.className = 'd-none'; note.innerHTML = ''; }
+
+  const tbody = document.getElementById('tbl-unscanned');
+  if (!tbody) return;
+  const rows = APP.unscanned || [];
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="10" class="text-muted py-4">Tidak ada data belum discan.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const age = r.ageDays === '' || r.ageDays === undefined ? '-' : `${esc(r.ageDays)} hari`;
+    const ageBadge = Number(r.ageDays || 0) >= 3 ? 'bg-danger' : (Number(r.ageDays || 0) >= 1 ? 'bg-warning text-dark' : 'bg-secondary');
+    const resi = r.scanResi || r.returnTrackingNo || r.trackingNo || '';
+    const resiArg = encodeURIComponent(resi || '');
+    return `<tr>
+      <td><span class="badge ${ageBadge}">${age}</span></td>
+      <td><small>${esc(r.returnArrivedAt || '-')}</small></td>
+      <td class="fw-bold text-primary"><small>${esc(resi || '-')}</small></td>
+      <td><small>${esc(r.orderNo || '-')}</small></td>
+      <td><small>${esc(r.storeName || '-')}</small></td>
+      <td><small>${esc(r.marketplaceSku || '-')}</small></td>
+      <td class="text-start"><small>${esc(r.expectedItemName || r.productName || '-')}</small></td>
+      <td class="fw-bold">${esc(r.expectedQty || 1)}</td>
+      <td><small>${esc(r.marketplaceStatus || '-')}</small></td>
+      <td><button class="btn btn-sm btn-outline-primary fw-bold" onclick="qcUnscannedResi(decodeURIComponent('${resiArg}'))">QC</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function qcUnscannedResi(resi) {
+  resi = String(resi || '').trim();
+  if (!resi) return showToast('Resi kosong.', 'warning');
+  pindah('scan');
+  const input = document.getElementById('manual-code');
+  if (input) input.value = resi;
+  cariKode(resi);
+}
+
+function copyUnscannedResi() {
+  const rows = APP.unscanned || [];
+  if (rows.length === 0) return showToast('Tidak ada resi untuk dicopy.', 'warning');
+  const text = rows.map(r => [r.scanResi || r.returnTrackingNo || r.trackingNo || '', r.orderNo || '', r.storeName || '', r.expectedItemName || r.productName || '', r.ageDays === '' ? '' : (r.ageDays + ' hari')].join('\t')).join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => showToast('✅ Daftar resi belum discan disalin.', 'success')).catch(() => alert(text));
+  } else {
+    alert(text);
+  }
+}
+
+
+
+function loadScannedHistory(showLoading=true) {
+  const note = document.getElementById('scanhist-note');
+  if (note) { note.className = 'd-none'; note.innerHTML = ''; }
+  const qEl = document.getElementById('scanhist-search');
+  const resultEl = document.getElementById('scanhist-result');
+  const postedEl = document.getElementById('scanhist-posted-filter');
+  const options = {
+    q: qEl ? qEl.value.trim() : '',
+    result: resultEl ? resultEl.value : 'ALL',
+    posted: postedEl ? postedEl.value : 'ALL',
+    limit: 1000
+  };
+  gsRun('getReturQcScannedHistory', [options], res => {
+    if (!res || !res.success) {
+      showToast('❌ Gagal memuat riwayat scan: ' + esc(res && res.msg ? res.msg : 'Server error'), 'error');
+      return;
+    }
+    APP.scannedHistory = res.data || [];
+    APP.scannedHistoryStats = res.stats || {};
+    renderScannedHistory();
+  });
+}
+
+function renderScannedHistory() {
+  const stats = APP.scannedHistoryStats || {};
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.innerText = v; };
+  set('scanhist-total', stats.totalScanned || 0);
+  set('scanhist-pass', stats.passCount || 0);
+  set('scanhist-hold', stats.holdCount || 0);
+  set('scanhist-posted', stats.postedCount || 0);
+  const note = document.getElementById('scanhist-note');
+  if (note) { note.className = 'd-none'; note.innerHTML = ''; }
+
+  const tbody = document.getElementById('tbl-scanned-history');
+  if (!tbody) return;
+  const rows = APP.scannedHistory || [];
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="10" class="text-muted py-4">Tidak ada riwayat scan.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const result = String(r.qcResult || '').toUpperCase();
+    const ok = result === 'PASS' || result === 'PARTIAL_PASS';
+    const posted = !!r.postedFlag;
+    const resi = r.scanResi || r.returnTrackingNo || r.trackingNo || r.scannedCode || '';
+    return `<tr>
+      <td><small>${fmtDate(r.scanTime || r.updatedAt || '')}</small></td>
+      <td class="fw-bold text-primary"><small>${esc(resi || '-')}</small></td>
+      <td><small>${esc(r.orderNo || '-')}</small></td>
+      <td><small>${esc(r.marketplaceSku || '-')}</small></td>
+      <td class="text-start"><small>${esc(r.expectedItemName || '-')}</small></td>
+      <td class="text-start fw-bold"><small>${esc(r.actualItemName || '-')}</small></td>
+      <td class="fw-bold">${esc(r.actualQty || '')}</td>
+      <td><span class="badge ${ok ? 'bg-success' : 'bg-warning text-dark'}">${esc(result || '-')}</span></td>
+      <td>${posted ? `<span class="badge bg-dark">POSTED</span><br><small>${esc(r.movementBatchId || '')}</small>` : '<span class="badge bg-secondary">DRAFT</span>'}</td>
+      <td class="text-start"><small>${esc(r.notes || r.issueType || '-')}</small></td>
+    </tr>`;
+  }).join('');
+}
+
+function copyScannedHistory() {
+  const rows = APP.scannedHistory || [];
+  if (rows.length === 0) return showToast('Tidak ada riwayat scan untuk dicopy.', 'warning');
+  const header = ['Waktu Scan','Resi','Order','SKU','Expected','Actual','Qty','QC','Posted','Batch','Catatan'];
+  const body = rows.map(r => [
+    fmtDate(r.scanTime || r.updatedAt || ''),
+    r.scanResi || r.returnTrackingNo || r.trackingNo || r.scannedCode || '',
+    r.orderNo || '',
+    r.marketplaceSku || '',
+    r.expectedItemName || '',
+    r.actualItemName || '',
+    r.actualQty || '',
+    r.qcResult || '',
+    r.postedFlag ? 'POSTED' : 'DRAFT',
+    r.movementBatchId || '',
+    r.notes || r.issueType || ''
+  ].join('\t')).join('\n');
+  const text = header.join('\t') + '\n' + body;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => showToast('✅ Riwayat scan disalin.', 'success')).catch(() => alert(text));
+  } else {
+    alert(text);
+  }
+}
+
+function startScanner() {
+  openPhotoScanner();
+}
+
+function startInternalGasScanner() {
+  if (APP.scanning) return;
+  if (typeof Html5Qrcode === 'undefined') {
+    showToast('❌ Library kamera belum termuat. Pakai input manual dulu.', 'error');
+    return;
+  }
+  APP.scanner = new Html5Qrcode('reader');
+  const config = { fps: 10, qrbox: { width: 260, height: 120 }, aspectRatio: 1.777 };
+  APP.scanner.start(
+    { facingMode: 'environment' },
+    config,
+    decodedText => {
+      const now = Date.now();
+      if (now - APP.lastScanAt < 1800) return;
+      APP.lastScanAt = now;
+      document.getElementById('manual-code').value = decodedText;
+      cariKode(decodedText);
+    },
+    () => {}
+  ).then(() => {
+    APP.scanning = true;
+    document.getElementById('btn-start-camera').disabled = true;
+    if (document.getElementById('btn-stop-camera')) document.getElementById('btn-stop-camera').disabled = false;
+    showToast('📷 Kamera aktif. Arahkan ke barcode/resi.', 'info');
+  }).catch(err => {
+    const raw = err && err.message ? err.message : String(err || 'Permission denied');
+    const msg = cameraHelpMessage();
+    showToast('❌ Kamera gagal: ' + esc(raw) + '<br><br>' + msg, 'error');
+    const warn = document.getElementById('browser-warning');
+    if (warn) { warn.classList.remove('d-none'); warn.innerHTML = msg; }
+    APP.scanning = false;
+    document.getElementById('btn-start-camera').disabled = false;
+    if (document.getElementById('btn-stop-camera')) document.getElementById('btn-stop-camera').disabled = true;
+  });
+}
+function stopScanner() {
+  if (!APP.scanner || !APP.scanning) return;
+  APP.scanner.stop().then(() => {
+    APP.scanning = false;
+    document.getElementById('btn-start-camera').disabled = false;
+    if (document.getElementById('btn-stop-camera')) document.getElementById('btn-stop-camera').disabled = true;
+  }).catch(() => {});
+}
+
+function focusManualInput() {
+  const input = document.getElementById('manual-code');
+  if (input) {
+    input.focus();
+    try { input.select(); } catch(e) {}
+  }
+}
+function clearManualInput() {
+  const input = document.getElementById('manual-code');
+  if (input) input.value = '';
+  APP.lastManualAutoCode = '';
+  focusManualInput();
+}
+function handleManualCodeInput() {
+  const input = document.getElementById('manual-code');
+  if (!input) return;
+  const code = input.value.trim();
+  if (APP.manualTimer) clearTimeout(APP.manualTimer);
+  // Untuk scanner Bluetooth/USB yang tidak mengirim Enter: setelah input berhenti sebentar, auto-cari.
+  if (code.length < 8 || code === APP.lastManualAutoCode) return;
+  APP.manualTimer = setTimeout(() => {
+    const latest = input.value.trim();
+    if (latest.length >= 8 && latest !== APP.lastManualAutoCode) {
+      APP.lastManualAutoCode = latest;
+      cariKode(latest);
+    }
+  }, 650);
+}
+
+function cariManual() {
+  if (APP.manualTimer) clearTimeout(APP.manualTimer);
+  const code = document.getElementById('manual-code').value.trim();
+  if (!code) return showToast('Masukkan nomor resi dulu.', 'warning');
+  APP.lastManualAutoCode = code;
+  cariKode(code);
+}
+function cariKode(code) {
+  setStatus('🔎 Mencari resi: <b>' + esc(code) + '</b>...', 'info');
+  gsRun('cariReturByResi', [code], res => {
+    if (!res || !res.success) {
+      showToast('❌ ' + esc(res && res.msg ? res.msg : 'Gagal cari resi'), 'error');
+      return;
+    }
+    if (res.duplicate) {
+      showToast('⚠️ ' + esc(res.msg), 'warning');
+      return;
+    }
+    APP.currentScan = res.scannedCode || code;
+    APP.currentRecord = res.found ? res.record : null;
+    renderResult(res);
+    setStatus(res.found ? '✅ Resi ditemukan. Validasi fisik barang lalu simpan ke batch.' : '⚠️ Resi tidak ditemukan. Bisa simpan sebagai UNKNOWN_RESI/HOLD.', res.found ? 'success' : 'warning');
+  });
+}
+
+function renderResult(res) {
+  document.getElementById('empty-result').classList.add('d-none');
+  document.getElementById('result-card').classList.remove('d-none');
+  const r = res.record || {};
+  const found = !!res.found;
+  const resi = r.returnTrackingNo || r.trackingNo || res.scannedCode || '';
+  document.getElementById('res-order').innerText = found ? (r.orderNo || '-') : '-';
+  document.getElementById('res-resi').innerText = resi || '-';
+  document.getElementById('res-sku').innerText = found ? (r.marketplaceSku || '-') : '-';
+  document.getElementById('res-expected').innerText = found ? (r.expectedItemName || 'BELUM ADA ITEM MAPPING') : 'UNKNOWN_RESI';
+  document.getElementById('res-qty').innerText = found ? (r.expectedQty || 1) : 0;
+  document.getElementById('res-status').innerText = found ? (r.marketplaceStatus || '-') : 'Tidak ditemukan';
+
+  buildActualItemDropdown(found ? r.expectedItemName : '');
+  document.getElementById('qc-actual-qty').value = found ? (r.expectedQty || 1) : 0;
+  document.getElementById('qc-condition').value = found ? 'GOOD' : 'WRONG_ITEM';
+  document.getElementById('qc-result').value = found ? 'PASS' : 'UNKNOWN_RESI';
+  document.getElementById('qc-notes').value = found ? '' : 'Resi tidak ditemukan di sumber retur.';
+  syncQcResultStyle();
+}
+function buildActualItemDropdown(expected) {
+  const sel = document.getElementById('qc-actual-item');
+  let html = '<option value="">-- Pilih actual item fisik --</option>';
+  if (expected) html += `<option value="${esc(expected)}" selected>✅ ${esc(expected)} (expected)</option>`;
+  const grouped = {};
+  (APP.masterItems || []).forEach(it => {
+    if (expected && it.nama === expected) return;
+    const g = it.sub || it.kat || 'Umum';
+    if (!grouped[g]) grouped[g] = [];
+    grouped[g].push(it.nama);
+  });
+  Object.keys(grouped).sort().forEach(g => {
+    html += `<optgroup label="📁 ${esc(g)}">`;
+    grouped[g].sort().forEach(n => { html += `<option value="${esc(n)}">${esc(n)}</option>`; });
+    html += '</optgroup>';
+  });
+  sel.innerHTML = html;
+}
+function syncQcResultStyle() {
+  const result = document.getElementById('qc-result').value;
+  const btn = document.getElementById('btn-save-line');
+  if (result === 'PASS' || result === 'PARTIAL_PASS') {
+    btn.className = 'btn btn-success btn-lg fw-bolder w-100 mt-4';
+    btn.innerHTML = '✅ Simpan ke Batch QC';
+  } else {
+    btn.className = 'btn btn-warning btn-lg fw-bolder w-100 mt-4 text-dark';
+    btn.innerHTML = '🚧 Simpan ke Karantina/Hold';
+  }
+}
+
+function simpanLineQC() {
+  const r = APP.currentRecord || {};
+  const result = document.getElementById('qc-result').value;
+  const payload = {
+    scannedCode: APP.currentScan,
+    sourceSheet: r.sourceSheet || '',
+    sourceRow: r.sourceRow || '',
+    sourceReturnId: r.sourceReturnId || '',
+    orderNo: r.orderNo || '',
+    trackingNo: r.trackingNo || APP.currentScan,
+    returnTrackingNo: r.returnTrackingNo || '',
+    marketplaceSku: r.marketplaceSku || '',
+    expectedItemName: r.expectedItemName || '',
+    expectedQty: r.expectedQty || 0,
+    actualItemName: document.getElementById('qc-actual-item').value,
+    actualQty: document.getElementById('qc-actual-qty').value,
+    condition: document.getElementById('qc-condition').value,
+    qcResult: result,
+    issueType: (result === 'PASS' || result === 'PARTIAL_PASS') ? '' : result,
+    notes: document.getElementById('qc-notes').value
+  };
+  if ((result === 'PASS' || result === 'PARTIAL_PASS') && !payload.actualItemName) {
+    return showToast('❌ Pilih actual item dulu.', 'warning');
+  }
+  const btn = document.getElementById('btn-save-line');
+  document.body.classList.add('rqc-busy');
+  btn.disabled = true; btn.innerHTML = '⏳ Menyimpan...';
+  gsRun('simpanQcLine', [payload], res => {
+    document.body.classList.remove('rqc-busy');
+    btn.disabled = false; syncQcResultStyle();
+    if (!res || !res.success) return showToast('❌ ' + esc(res && res.msg ? res.msg : 'Gagal simpan'), 'error');
+    APP.lines = res.lines || APP.lines;
+    APP.stats = res.stats || APP.stats;
+    renderStats(); renderLines();
+    clearResultForm();
+    // v2.0: update cache tab di background. Pindah tab tetap tidak hit server ulang.
+    loadUnscannedList(false);
+    loadScannedHistory(false);
+    showToast('✅ QC tersimpan ke batch.', 'success');
+    pindah('scan');
+  }, () => { document.body.classList.remove('rqc-busy'); btn.disabled = false; syncQcResultStyle(); });
+}
+function clearResultForm() {
+  APP.currentRecord = null; APP.currentScan = '';
+  document.getElementById('manual-code').value = '';
+  document.getElementById('empty-result').classList.remove('d-none');
+  document.getElementById('result-card').classList.add('d-none');
+  document.getElementById('manual-code').focus();
+}
+
+function postBatch() {
+  if (!APP.session) return;
+  const qty = APP.stats.unpostedPassQty || 0;
+  if (qty <= 0) return showToast('Tidak ada qty PASS yang siap diposting.', 'warning');
+  if (!confirm(`Posting batch RETURN_IN ke Gudang?\nQty siap masuk: ${qty}\nSetelah posting, stok gudang akan bertambah per item secara akumulasi.`)) return;
+  const btn = document.getElementById('btn-post-batch');
+  document.body.classList.add('rqc-busy');
+  btn.disabled = true; btn.innerHTML = '⏳ Posting ke Stock_Movement...';
+  gsRun('postReturQcBatch', [APP.session.Session_ID], res => {
+    document.body.classList.remove('rqc-busy');
+    btn.disabled = false; btn.innerHTML = '🚚 Masuk Gudang / Posting RETURN_IN';
+    if (!res || !res.success) return showToast('❌ ' + esc(res && res.msg ? res.msg : 'Gagal posting'), 'error');
+    showToast(`✅ Batch ${esc(res.batchId)} diposting ke Gudang Contract. Movement baru: <b>${esc(res.movementRows)}</b>, Duplicate skip: <b>${esc(res.skippedDuplicate || 0)}</b>, Qty: <b>${esc(res.totalQty)}</b>`, 'success');
+    loadInit({ silent: false, source: 'post_batch_contract' });
+    pindah('session');
+  }, () => { document.body.classList.remove('rqc-busy'); btn.disabled = false; btn.innerHTML = '🚚 Masuk Gudang / Posting RETURN_IN'; });
+}
+</script>

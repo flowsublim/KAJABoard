@@ -1,0 +1,174 @@
+/****************************************************
+ * ERP CV KIRAL - DATABASE CORE
+ * Semua baca/tulis sheet wajib berdasarkan header.
+ ****************************************************/
+
+function DB_getSheet_(moduleCode, sheetName) {
+  var ss = CFG_openModuleSpreadsheet_(moduleCode);
+  var sh = ss.getSheetByName(sheetName);
+
+  if (!sh) {
+    throw new Error("Sheet tidak ditemukan: " + moduleCode + " / " + sheetName);
+  }
+
+  return sh;
+}
+
+function DB_getHeaderMap_(sheet) {
+  var lastCol = sheet.getLastColumn();
+  if (lastCol < 1) throw new Error("Sheet kosong tanpa header: " + sheet.getName());
+
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var map = {};
+  var duplicate = [];
+
+  for (var i = 0; i < headers.length; i++) {
+    var h = String(headers[i] || "").trim();
+    if (!h) continue;
+
+    var key = h.toLowerCase();
+    if (map[key] !== undefined) duplicate.push(h);
+    map[key] = i;
+  }
+
+  if (duplicate.length > 0) {
+    throw new Error("Header duplikat di sheet " + sheet.getName() + ": " + duplicate.join(", "));
+  }
+
+  return {
+    headers: headers.map(function(h) { return String(h || "").trim(); }),
+    map: map
+  };
+}
+
+function DB_col_(headerInfo, headerName) {
+  var key = String(headerName || "").trim().toLowerCase();
+  if (headerInfo.map[key] === undefined) return -1;
+  return headerInfo.map[key];
+}
+
+function DB_requireHeaders_(moduleCode, sheetName, requiredHeaders) {
+  var sh = DB_getSheet_(moduleCode, sheetName);
+  var info = DB_getHeaderMap_(sh);
+  var missing = [];
+
+  requiredHeaders.forEach(function(h) {
+    if (DB_col_(info, h) === -1) missing.push(h);
+  });
+
+  if (missing.length > 0) {
+    throw new Error(
+      "Header kurang di " + moduleCode + " / " + sheetName + ": " + missing.join(", ")
+    );
+  }
+
+  return true;
+}
+
+function DB_readObjects_(moduleCode, sheetName, options) {
+  options = options || {};
+  var sh = DB_getSheet_(moduleCode, sheetName);
+  var info = DB_getHeaderMap_(sh);
+  var lastRow = sh.getLastRow();
+  var lastCol = sh.getLastColumn();
+
+  if (lastRow <= 1) return [];
+
+  var values = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  var rows = [];
+
+  values.forEach(function(row, idx) {
+    var obj = {};
+    info.headers.forEach(function(h, c) {
+      if (h) obj[h] = row[c];
+    });
+
+    obj.__rowNumber = idx + 2;
+
+    if (options.excludeDeleted) {
+      var del = String(obj.Is_Deleted || "").toUpperCase();
+      if (del === "TRUE" || del === "YA" || del === "1") return;
+    }
+
+    rows.push(obj);
+  });
+
+  return rows;
+}
+
+function DB_findOne_(moduleCode, sheetName, idHeader, idValue) {
+  var rows = DB_readObjects_(moduleCode, sheetName);
+  var target = String(idValue || "").trim();
+
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i][idHeader] || "").trim() === target) {
+      return rows[i];
+    }
+  }
+
+  return null;
+}
+
+function DB_appendObjects_(moduleCode, sheetName, objects) {
+  if (!objects || objects.length === 0) return { inserted: 0 };
+
+  var sh = DB_getSheet_(moduleCode, sheetName);
+  var info = DB_getHeaderMap_(sh);
+
+  var rows = objects.map(function(obj) {
+    return info.headers.map(function(h) {
+      if (!h) return "";
+      return obj[h] !== undefined ? obj[h] : "";
+    });
+  });
+
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, info.headers.length).setValues(rows);
+
+  return { inserted: rows.length };
+}
+
+function DB_updateById_(moduleCode, sheetName, idHeader, idValue, patch) {
+  var sh = DB_getSheet_(moduleCode, sheetName);
+  var info = DB_getHeaderMap_(sh);
+
+  var idCol = DB_col_(info, idHeader);
+  if (idCol === -1) throw new Error("Header ID tidak ditemukan: " + idHeader);
+
+  var lastRow = sh.getLastRow();
+  if (lastRow <= 1) throw new Error("Data kosong di sheet: " + sheetName);
+
+  var idValues = sh.getRange(2, idCol + 1, lastRow - 1, 1).getValues();
+  var target = String(idValue || "").trim();
+  var foundRow = -1;
+
+  for (var i = 0; i < idValues.length; i++) {
+    if (String(idValues[i][0] || "").trim() === target) {
+      foundRow = i + 2;
+      break;
+    }
+  }
+
+  if (foundRow === -1) {
+    throw new Error("Data tidak ditemukan: " + idHeader + " = " + idValue);
+  }
+
+  Object.keys(patch).forEach(function(key) {
+    var col = DB_col_(info, key);
+    if (col !== -1) {
+      sh.getRange(foundRow, col + 1).setValue(patch[key]);
+    }
+  });
+
+  return { updated: true, rowNumber: foundRow };
+}
+
+function DB_softDeleteById_(moduleCode, sheetName, idHeader, idValue, reason) {
+  var patch = {
+    Is_Deleted: true,
+    Deleted_At: FMT_now_(),
+    Deleted_By: FMT_userEmail_(),
+    Delete_Reason: reason || ""
+  };
+
+  return DB_updateById_(moduleCode, sheetName, idHeader, idValue, patch);
+}

@@ -1,0 +1,415 @@
+<script>
+  // =================================================================================
+  // MESIN PENCETAK PDF & TEMPLATE DOKUMEN (PO, INV, SJ, LABEL, REKAP)
+  // Dengan Fitur Dynamic Kop Surat dari Master_Company
+  // =================================================================================
+
+  var currentCetakTipe = "";
+  var currentCetakRef = "";
+
+  function formatRp(angka) { 
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Math.round(angka));
+  }
+
+  function SALES_docTitlePart_(value) {
+    return String(value || '')
+      .replace(/[\\/:*?"<>|]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function SALES_buildPrintTitle_(kind, nama, nomor) {
+    return SALES_docTitlePart_([kind, nama, nomor].filter(function(x){ return SALES_docTitlePart_(x); }).join(' ')) || 'Dokumen Penjualan';
+  }
+
+  function SALES_setPrintDocTitle_(title, meta) {
+    var area = document.getElementById('area-print-penjualan');
+    if (area) {
+      area.dataset.docTitle = SALES_docTitlePart_(title);
+      meta = meta || {};
+      Object.keys(meta).forEach(function(k){ area.dataset[k] = SALES_docTitlePart_(meta[k]); });
+    }
+    document.title = SALES_docTitlePart_(title) || 'Dokumen Penjualan';
+  }
+
+  function SALES_getPrintDocTitle_(fallbackTitle) {
+    var area = document.getElementById('area-print-penjualan');
+    var dataTitle = area && area.dataset ? area.dataset.docTitle : '';
+    return SALES_docTitlePart_(dataTitle || fallbackTitle || document.title || 'Dokumen Penjualan');
+  }
+
+
+  function SALES_html_(value) {
+    if (typeof escapeHtml === 'function') return escapeHtml(value);
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function SALES_br_(value) {
+    return SALES_html_(value || '').replace(/\r?\n/g, '<br>');
+  }
+
+  function SALES_logoUrlForPrint_(url) {
+    var s = String(url || '').trim();
+    if (!s) return '';
+
+    // Jika user menaruh link Google Drive biasa, ubah ke format image view yang lebih ramah untuk <img>.
+    var m = s.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || s.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (m && m[1]) return 'https://drive.google.com/uc?export=view&id=' + m[1];
+
+    return s;
+  }
+
+  function SALES_getSelectedCompanyForPrint_() {
+    var list = window.companyProfiles || companyProfilesGlobal || [];
+    var sel = document.getElementById('pilihan-kop');
+    var selectedId = sel ? String(sel.value || '') : '';
+
+    var selected = null;
+    if (selectedId) {
+      selected = list.find(function(c) { return String(c.id || '') === selectedId; });
+    }
+    if (!selected && list.length) selected = list[0];
+
+    // Fallback lama kalau Master_Company belum ter-load.
+    if (!selected) {
+      var setup = window.setupPerusahaan || {};
+      selected = {
+        id: 'KAMPUNG_JAHIT',
+        nama: setup['nama kampung jahit'] || setup['nama'] || 'KAMPUNG JAHIT',
+        alamat: setup['alamat kampung jahit'] || setup['alamat'] || '',
+        noHp: setup['no hp kampung jahit'] || setup['no hp'] || setup['telepon'] || '',
+        rekening: setup['rekening kampung jahit'] || setup['rekening'] || '',
+        logo: setup['logo kampung jahit'] || setup['logo'] || ''
+      };
+    }
+
+    return {
+      id: selected.id || '',
+      nama: selected.nama || selected.name || 'PERUSAHAAN',
+      alamat: selected.alamat || selected.address || '',
+      noHp: selected.noHp || selected.phone || selected.telepon || selected.wa || '',
+      rekening: selected.rekening || selected.bank || selected.bankAccount || '',
+      logo: SALES_logoUrlForPrint_(selected.logo || selected.logoUrl || '')
+    };
+  }
+
+  // Fungsi pemicu dari tabel: buka popup preview dulu, lalu render dokumen.
+  // Dibuat mengikuti pola popup cetak Modul Transaksi Flow Sublim.
+  function cetakPDF(tipe, noRef) {
+    currentCetakTipe = tipe;
+    currentCetakRef = noRef;
+
+    var area = document.getElementById('area-print-penjualan');
+    if (area) {
+      area.innerHTML = '<div class="text-center py-5 text-primary fw-bold"><i class="fa-solid fa-spinner fa-spin me-2"></i>Menyiapkan preview dokumen...</div>';
+      area.dataset.docTitle = '';
+    }
+
+    var titleEl = document.getElementById('title-preview-cetak');
+    if (titleEl) titleEl.innerHTML = '<i class="fa-solid fa-file-invoice text-primary me-2"></i>Preview Dokumen';
+    var subtitleEl = document.getElementById('subtitle-preview-cetak');
+    if (subtitleEl) subtitleEl.textContent = 'Pilih kop, cek isi dokumen, lalu cetak / save PDF.';
+
+    var modalEl = document.getElementById('modalPreviewCetak');
+    var modalIns = bootstrap.Modal.getInstance(modalEl);
+    if(!modalIns) { modalIns = new bootstrap.Modal(modalEl); }
+    modalIns.show();
+
+    setTimeout(function(){ jalankanRenderPDF(); }, 30);
+  }
+
+  // Fungsi Pemicu saat Dropdown Kop Surat Diubah
+  function renderUlangCetak() {
+    if(currentCetakTipe && currentCetakRef) {
+      jalankanRenderPDF();
+    }
+  }
+
+  function jalankanRenderPDF() {
+    var tipe = currentCetakTipe;
+    var noRef = currentCetakRef;
+
+    var printStyle = document.getElementById('dynamic-print-style');
+    if(!printStyle) { printStyle = document.createElement('style'); printStyle.id = 'dynamic-print-style'; document.head.appendChild(printStyle); }
+    if(tipe === "LABEL") { printStyle.innerHTML = "@media print { @page { size: 4in 6in; margin: 3mm; } }"; } 
+    else { printStyle.innerHTML = "@media print { @page { size: A4 portrait; margin: 10mm; } }"; }
+
+    var d = { tipe: tipe, noRef: noRef };
+    if(tipe === "PO") { 
+        var src = globalDataPenjualan.po.find(x => x.no === noRef);
+        if(!src) return alert("Data PO tidak ditemukan!");
+        d = { ...d, ...src }; d.tot = d.total; d.sisaTagihan = d.tot - d.totalDP;
+    }
+    else if(tipe === "INV") { 
+        var src = globalDataPenjualan.inv.find(x => x.no === noRef);
+        if(!src) return alert("Data INV tidak ditemukan!");
+        d = { ...d, ...src }; d.tot = d.total; d.sisaTagihan = d.tot - d.totalDP;
+        d.refPO = d.ref; 
+    }
+    else if(tipe === "SJ" || tipe === "LABEL") { 
+        var src = globalDataPenjualan.sj.find(x => x.no === noRef);
+        if(!src) return alert("Data SJ tidak ditemukan!");
+        d = { ...d, ...src };
+    }
+    else if(tipe === "REKAP") {
+        var pData = globalDataPiutang.find(x => x.cust === noRef);
+        d.cust = noRef; d.totTagihan = pData.tagihanRaw; d.totBayar = pData.bayarRaw;
+        d.sisa = d.totTagihan - d.totBayar;
+        d.listRekap = pData.detailsPdf;
+        var dt = new Date();
+        d.tglCetak = ("0" + dt.getDate()).slice(-2) + "/" + ("0" + (dt.getMonth()+1)).slice(-2) + "/" + dt.getFullYear();
+    }
+
+    d.detC = mapCustDetailGlobal[d.cust] || { kontak: "-", alamat: "-" };
+
+    var namaFile = ""; var judulDokumen = ""; var labelTgl = "TANGGAL"; var labelNo = "NO DOKUMEN";
+    if(d.tipe === "PO") { namaFile = "PI " + d.cust + " " + d.noRef; judulDokumen = "PROFORMA INVOICE"; labelTgl = "TANGGAL DOKUMEN"; labelNo = "NO PROFORMA"; }
+    else if(d.tipe === "INV") { namaFile = "INV " + d.cust + " " + d.noRef; judulDokumen = "FAKTUR PENJUALAN"; labelTgl = "TANGGAL PENGIRIMAN"; labelNo = "NO INVOICE"; }
+    else if(d.tipe === "SJ") { namaFile = "SJ " + d.cust + " " + d.noRef; judulDokumen = "SURAT JALAN PENGIRIMAN"; labelTgl = "TANGGAL PENGIRIMAN"; labelNo = "NO SURAT JALAN"; }
+    else if(d.tipe === "LABEL") { namaFile = "LABEL " + d.cust + " " + d.noRef; }
+    else if(d.tipe === "REKAP") { var amanTgl = d.tglCetak.replace(/\//g, "-"); namaFile = "REKAP " + d.cust + " " + amanTgl; judulDokumen = "STATEMENT OF ACCOUNT"; }
+    
+    SALES_setPrintDocTitle_(namaFile, { docType: d.tipe || tipe, customer: d.cust || '', noRef: d.noRef || noRef });
+    if(document.getElementById('title-preview-cetak')) {
+      document.getElementById('title-preview-cetak').innerHTML = '<i class="fa-solid fa-file-invoice text-primary me-2"></i>Preview : ' + SALES_html_(namaFile) + '.pdf';
+    }
+    if(document.getElementById('subtitle-preview-cetak')) {
+      document.getElementById('subtitle-preview-cetak').textContent = 'Dokumen siap dicek sebelum print / save PDF.';
+    }
+
+    // =========================================================================
+    // LOGIKA KOP SURAT DINAMIS DARI Master_Company
+    // =========================================================================
+    var companyPrint = SALES_getSelectedCompanyForPrint_();
+
+    var namaPerusahaan = companyPrint.nama;
+    var alamatPerusahaan = companyPrint.alamat || 'Alamat perusahaan belum diisi';
+    var noHpPerusahaan = companyPrint.noHp || '';
+    var rekeningPerusahaan = companyPrint.rekening || '';
+    var logoPerusahaan = companyPrint.logo || 'https://dummyimage.com/300x120/ffffff/000000&text=' + encodeURIComponent(namaPerusahaan || 'LOGO');
+
+    var kontakPerusahaanHtml = noHpPerusahaan ? '<br><b>Telp/WA:</b> ' + SALES_html_(noHpPerusahaan) : '';
+    var infoBankHtml = rekeningPerusahaan
+      ? '<b>' + SALES_br_(rekeningPerusahaan).replace(/<br>/g, '</b><br><b>') + '</b>'
+      : '<b>Info rekening belum diisi</b>';
+
+    var kopSuratHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px;">
+          <div style="width: 35%;">
+              <img src="${logoPerusahaan}" alt="Logo ${namaPerusahaan}" style="max-width: 100%; height: auto; max-height: 100px;">
+          </div>
+          <div style="width: 60%; text-align: right;">
+              <h2 style="margin: 0; font-size: 26px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase;">${namaPerusahaan}</h2>
+              <p style="margin: 5px 0 0 0; font-size: 13px; line-height: 1.4;">${SALES_br_(alamatPerusahaan)}${kontakPerusahaanHtml}</p>
+              <h3 style="margin: 15px 0 0 0; font-size: 20px; text-transform: uppercase; text-decoration: underline;">${judulDokumen}</h3>
+          </div>
+      </div>
+    `;
+    
+    var html = "";
+
+    // FORMAT 1: DOKUMEN PO, INV, ATAU SJ
+    if(d.tipe === "PO" || d.tipe === "INV" || d.tipe === "SJ") {
+      var trs = ""; var noUrut = 1; var subtotalBarang = 0; var valOngkir = 0, valDiskon = 0, valPpn = 0;
+      d.items.forEach(i => { 
+         var nm = i.nama.toString().trim();
+         if(nm === "Biaya Ongkos Kirim") valOngkir = Math.abs(i.harga);
+         else if(nm === "Potongan Diskon") valDiskon = Math.abs(i.harga);
+         else if(nm.startsWith("Pajak PPN")) valPpn = Math.abs(i.harga);
+         else {
+             if(d.tipe === "SJ") {
+                 trs += `<tr><td style="border:1px solid #000; padding:6px; text-align:center;">${noUrut}</td><td style="border:1px solid #000; padding:6px;">${i.nama}</td><td style="border:1px solid #000; padding:6px; text-align:center; font-weight:bold;">${i.qty}</td></tr>`;
+             } else {
+                 trs += `<tr><td style="border:1px solid #000; padding:6px; text-align:center;">${noUrut}</td><td style="border:1px solid #000; padding:6px;">${i.nama}</td><td style="border:1px solid #000; padding:6px; text-align:center;">${i.qty}</td><td style="border:1px solid #000; padding:6px; border-right:none;">Rp</td><td style="border:1px solid #000; padding:6px; text-align:right; border-left:none;">${new Intl.NumberFormat('id-ID').format(i.harga)}</td><td style="border:1px solid #000; padding:6px; border-right:none;">Rp</td><td style="border:1px solid #000; padding:6px; text-align:right; border-left:none;">${new Intl.NumberFormat('id-ID').format(i.total)}</td></tr>`; 
+             }
+             subtotalBarang += (i.total || 0); noUrut++;
+         }
+      });
+
+      html = `
+        <div style="font-family: Arial, sans-serif; color: #000; font-size: 13px;">
+            ${kopSuratHTML}
+            <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+                <div style="width: 50%;">
+                    <table style="width: 100%; border: none; font-size: 13px;">
+                        <tr><td style="width: 80px; vertical-align: top; padding-bottom: 5px;"><b>KEPADA</b></td><td style="vertical-align: top; padding-bottom: 5px;"><b>: ${d.cust}</b></td></tr>
+                        <tr><td style="vertical-align: top; padding-bottom: 5px;"><b>ALAMAT</b></td><td style="vertical-align: top; padding-bottom: 5px;">: ${d.detC.alamat}</td></tr>
+                        <tr><td style="vertical-align: top; padding-bottom: 5px;"><b>NO. HP</b></td><td style="vertical-align: top; padding-bottom: 5px;">: ${d.detC.kontak}</td></tr>
+                    </table>
+                </div>
+                <div style="width: 45%;">
+                    <table style="width: 100%; border-collapse: collapse; text-align: center; font-size: 13px; margin-bottom: 10px;">
+                        <tr><td style="border: 1px solid #000; padding: 6px; width: 50%;"><b>${labelTgl}</b></td><td style="border: 1px solid #000; padding: 6px; width: 50%;"><b>${labelNo}</b></td></tr>
+                        <tr><td style="border: 1px solid #000; padding: 6px;">${d.tgl}</td><td style="border: 1px solid #000; padding: 6px; font-weight: bold;">${d.noRef}</td></tr>
+                    </table>
+                    ${d.tipe !== "SJ" ? `<table style="width: 100%; border-collapse: collapse; text-align: center; font-size: 13px;"><tr><td style="border: 1px solid #000; padding: 8px;">${infoBankHtml}</td></tr></table>` : `<table style="width: 100%; border-collapse: collapse; text-align: center; font-size: 13px;"><tr><td style="border: 1px solid #000; padding: 8px;"><b>Ref Transaksi:</b> ${d.ref}<br><b>Ekspedisi:</b> ${d.eks}</td></tr></table>`}
+                </div>
+            </div>
+            <table style="width:100%; border-collapse:collapse; margin-bottom:20px; font-size:13px;">
+              <thead style="background:#f4f4f4;">
+                ${d.tipe === "SJ" ? `<tr><th style="border:1px solid #000; padding:8px; width:5%;">NO.</th><th style="border:1px solid #000; padding:8px; text-align:left;">NAMA BARANG DAN PESANAN</th><th style="border:1px solid #000; padding:8px; width:15%;">QTY</th></tr>` : `<tr><th style="border:1px solid #000; padding:8px; width:5%;">NO.</th><th style="border:1px solid #000; padding:8px; text-align:left;">NAMA BARANG DAN PESANAN</th><th style="border:1px solid #000; padding:8px; width:10%;">QTY</th><th style="border:1px solid #000; padding:8px; width:18%;" colspan="2">HARGA</th><th style="border:1px solid #000; padding:8px; width:22%;" colspan="2">TOTAL</th></tr>`}
+              </thead>
+              <tbody>${trs}</tbody>
+            </table>
+            <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 50px;">
+                <div style="width: 48%;">
+                    <b>NOTE</b>
+                    <div style="min-height: 50px; border: 1px solid #000; padding: 8px; margin-top: 4px;">${d.catatan || '-'}</div>
+                    ${d.refSJ && d.tipe === "INV" ? `<div style="margin-top: 5px;"><b>Ref Surat Jalan:</b> ${d.refSJ}</div>` : ''}
+                </div>
+                <div style="width: 45%;">
+                    ${d.tipe !== "SJ" ? `
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                            <tr><td style="padding: 4px 0; font-weight: bold;">SUBTOTAL</td><td style="padding: 4px 0; text-align: right; font-weight: bold;">${formatRp(subtotalBarang)}</td></tr>
+                            <tr><td style="padding: 4px 0; font-weight: bold;">DEPOSIT</td><td style="padding: 4px 0; text-align: right; font-weight: bold;">- ${formatRp(d.totalDP)}</td></tr>
+                            ${valDiskon > 0 ? `<tr><td style="padding: 4px 0; font-weight: bold;">DISKON</td><td style="padding: 4px 0; text-align: right; font-weight: bold;">- ${formatRp(valDiskon)}</td></tr>` : ''}
+                            ${valPpn > 0 ? `<tr><td style="padding: 4px 0; font-weight: bold;">PAJAK PPN</td><td style="padding: 4px 0; text-align: right; font-weight: bold;">${formatRp(valPpn)}</td></tr>` : ''}
+                            <tr><td style="padding: 4px 0; font-weight: bold;">ONGKOS PENGIRIMAN</td><td style="padding: 4px 0; text-align: right; font-weight: bold;">${formatRp(valOngkir)}</td></tr>
+                            <tr><td colspan="2" style="border-bottom: 2px solid #000; padding-top: 4px;"></td></tr>
+                            <tr><td style="padding: 8px 0; font-size: 16px; font-weight: bold;">TOTAL PENAGIHAN</td><td style="padding: 8px 0; font-size: 16px; text-align: right; font-weight: bold;">${formatRp(d.sisaTagihan)}</td></tr>
+                        </table>
+                    ` : ''}
+                </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; text-align: center; font-size: 13px; margin-top: 30px;">
+                <div style="width: 35%;"><b>HORMAT KAMI / PENGIRIM</b><br><br><br><br><br><b style="text-decoration: underline; text-transform: uppercase;">${namaPerusahaan}</b></div>
+                <div style="width: 35%;"><b>PENERIMA</b><br><br><br><br><br><b style="text-decoration: underline; text-transform: uppercase;">${d.cust}</b><br><span style="font-size: 11px;">(Nama Jelas & Tanda Tangan)</span></div>
+            </div>
+        </div>`;
+    }
+    // FORMAT 2: DOKUMEN REKAP PIUTANG (SOA)
+    else if(d.tipe === "REKAP") {
+      var trs = ""; var noUrut = 1;
+      if(d.listRekap.length === 0) { trs = `<tr><td colspan="6" style="text-align:center; font-style:italic; padding:8px; border:1px solid #000;">Belum ada riwayat tagihan & pembayaran</td></tr>`; } 
+      else {
+          d.listRekap.forEach(r => { 
+            var tglPrint = r.tglStr;
+            if(!tglPrint || tglPrint === "-") {
+                if(r.ket === "Invoice") { var fn = globalDataPenjualan.inv.find(x => x.no === r.no); if(fn) tglPrint = fn.tgl; }
+                else if(r.ket.includes("PO")) { var fp = globalDataPenjualan.po.find(x => x.no === r.no); if(fp) tglPrint = fp.tgl; }
+                else if(r.ket.includes("Pembayaran") && r.tglRaw) {
+                    var dtPay = new Date(r.tglRaw); tglPrint = !isNaN(dtPay.getTime()) ? ("0" + dtPay.getDate()).slice(-2) + "/" + ("0" + (dtPay.getMonth()+1)).slice(-2) + "/" + dtPay.getFullYear() : r.tglRaw.toString().substring(0,10);
+                }
+            }
+            var valTagihan = (r.tagihanRaw && r.tagihanRaw > 0) ? formatRp(r.tagihanRaw) : '-';
+            var valBayar = (r.bayarRaw && r.bayarRaw > 0) ? formatRp(r.bayarRaw) : '-';
+            trs += `<tr><td style="text-align:center; border:1px solid #000; padding:6px;">${noUrut}</td><td style="text-align:center; border:1px solid #000; padding:6px;">${tglPrint}</td><td style="border:1px solid #000; padding:6px;"><b>${r.no}</b></td><td style="border:1px solid #000; padding:6px;">${r.ket}</td><td style="text-align:right; border:1px solid #000; padding:6px;">${valTagihan}</td><td style="text-align:right; color:#198754; border:1px solid #000; padding:6px;">${valBayar}</td></tr>`;
+            noUrut++;
+          });
+      }
+
+      html = `
+        <div style="font-family: Arial, sans-serif; color: #000; font-size: 13px;">
+            ${kopSuratHTML}
+            <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+                <div style="width: 50%;">
+                    <table style="width: 100%; border: none; font-size: 13px;">
+                        <tr><td style="width: 80px; vertical-align: top; padding-bottom: 5px;"><b>KEPADA</b></td><td style="vertical-align: top; padding-bottom: 5px;"><b>: ${d.cust}</b></td></tr>
+                        <tr><td style="vertical-align: top; padding-bottom: 5px;"><b>ALAMAT</b></td><td style="vertical-align: top; padding-bottom: 5px;">: ${d.detC.alamat}</td></tr>
+                        <tr><td style="vertical-align: top; padding-bottom: 5px;"><b>NO. HP</b></td><td style="vertical-align: top; padding-bottom: 5px;">: ${d.detC.kontak}</td></tr>
+                    </table>
+                </div>
+                <div style="width: 45%;">
+                    <table style="width: 100%; border-collapse: collapse; text-align: center; font-size: 13px; margin-bottom: 10px;">
+                        <tr><td style="border: 1px solid #000; padding: 6px; width: 50%;"><b>TANGGAL CETAK</b></td><td style="border: 1px solid #000; padding: 6px; width: 50%;"><b>DICETAK OLEH</b></td></tr>
+                        <tr><td style="border: 1px solid #000; padding: 6px;">${d.tglCetak}</td><td style="border: 1px solid #000; padding: 6px; font-weight: bold;">ADMIN FINANCE ${namaPerusahaan}</td></tr>
+                    </table>
+                </div>
+            </div>
+            <table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+              <thead style="background:#f4f4f4;"><tr><th style="border:1px solid #000; padding:8px; width:5%; text-align:center;">NO.</th><th style="border:1px solid #000; padding:8px; width:15%; text-align:center;">TANGGAL</th><th style="border:1px solid #000; padding:8px; text-align:left;">NO. DOKUMEN</th><th style="border:1px solid #000; padding:8px; text-align:left;">KETERANGAN</th><th style="border:1px solid #000; padding:8px; width:18%; text-align:right;">NILAI TAGIHAN</th><th style="border:1px solid #000; padding:8px; width:18%; text-align:right;">PEMBAYARAN MASUK</th></tr></thead>
+              <tbody>${trs}</tbody>
+            </table>
+            <div style="display: flex; justify-content: flex-end; font-size: 13px; margin-bottom: 50px;">
+                <div style="width: 55%;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr><td style="padding: 4px 0; font-weight: bold;">TOTAL TAGIHAN (INV & PO)</td><td style="padding: 4px 0; text-align: right; font-weight: bold;">${formatRp(d.totTagihan)}</td></tr>
+                        <tr><td style="padding: 4px 0; font-weight: bold; color:#198754;">TOTAL DP & PEMBAYARAN MASUK</td><td style="padding: 4px 0; text-align: right; font-weight: bold; color:#198754;">- ${formatRp(d.totBayar)}</td></tr>
+                        <tr><td colspan="2" style="border-bottom: 2px solid #000; padding-top: 4px;"></td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 16px; font-weight: bold; color:#dc3545;">SISA PIUTANG (HARUS DIBAYAR)</td><td style="padding: 8px 0; font-size: 16px; text-align: right; font-weight: bold; color:#dc3545;">${formatRp(d.sisa)}</td></tr>
+                    </table>
+                </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; text-align: center; font-size: 13px; margin-top: 30px;">
+                <div style="width: 35%;"><b>DIBUAT OLEH (FINANCE)</b><br><br><br><br><br><b style="text-decoration: underline; text-transform: uppercase;">${namaPerusahaan}</b></div>
+                <div style="width: 35%;"><b>MENYETUJUI (KONSUMEN)</b><br><br><br><br><br><b style="text-decoration: underline; text-transform: uppercase;">${d.cust}</b></div>
+            </div>
+        </div>`;
+    }
+    // FORMAT 3: LABEL PENGIRIMAN
+    else if (d.tipe === "LABEL") {
+      var trs = "";
+      d.items.forEach(i => { trs += `<tr><td style="border:1px solid #000; padding:4px;">${i.nama}</td><td style="border:1px solid #000; padding:4px; text-align:center; font-weight:bold;">${i.qty}</td></tr>`; });
+      html = `
+        <div style="border: 2px solid #000; padding: 10px; border-radius: 6px; font-family:Arial, sans-serif; font-size:12px;">
+          <div style="text-align:center; border-bottom: 2px dashed #000; padding-bottom: 5px; margin-bottom: 10px;"><h3 style="margin:0;">LABEL PENGIRIMAN</h3><span style="font-size:11px;">No: <b>${d.noRef}</b> | Tgl: ${d.tgl}</span><br>Kurir: <b>${d.eks}</b><br><span style="font-size:10px;">Pengirim: ${namaPerusahaan}</span></div>
+          <div style="background:#000; color:#fff; text-align:center; padding:4px; font-weight:bold; margin-bottom:8px;">PENERIMA</div>
+          <div style="font-size:16px; font-weight:bold;">${d.cust}</div><div>Telp: ${d.detC.kontak}</div><div style="margin-bottom:15px;">Alamat: ${d.detC.alamat}</div>
+          <div style="background:#000; color:#fff; text-align:center; padding:4px; font-weight:bold; margin-bottom:8px;">DETAIL BARANG (${d.totBarang} Pcs)</div>
+          <table style="width:100%; border-collapse:collapse; font-size:12px;"><thead style="background:#ddd;"><tr><th style="border:1px solid #000; padding:4px; text-align:left;">Item</th><th style="border:1px solid #000; width:20%;">Qty</th></tr></thead><tbody>${trs}</tbody></table>
+        </div>`;
+    }
+    
+    document.getElementById('area-print-penjualan').innerHTML = html;
+  }
+
+  var modalCetakEl = document.getElementById('modalPreviewCetak');
+  if(modalCetakEl) { 
+      modalCetakEl.addEventListener('hidden.bs.modal', function () { 
+          document.title = 'ERP - Modul Penjualan'; 
+          // Reset ke perusahaan pertama yang aktif dari Master_Company, bukan hardcode.
+          var kopEl = document.getElementById("pilihan-kop");
+          if(kopEl && window.companyProfiles && window.companyProfiles.length) kopEl.value = window.companyProfiles[0].id || kopEl.value;
+      }); 
+  }
+
+  function eksekusiCetakLanjutan() {
+    var area = document.getElementById('area-print-penjualan');
+    if (!area) return alert('Area cetak tidak ditemukan.');
+    var kontenHtml = area.innerHTML;
+    if (!kontenHtml || !kontenHtml.trim()) return alert('Preview dokumen masih kosong.');
+
+    var styleKertas = document.getElementById('dynamic-print-style');
+    var ukuranKertas = styleKertas ? styleKertas.innerHTML : '@media print { @page { size: A4 portrait; margin: 10mm; } }';
+    var judulFile = SALES_getPrintDocTitle_('Dokumen Penjualan');
+
+    var winPrint = window.open('', '', 'left=0,top=0,width=900,height=950,toolbar=0,scrollbars=1,status=0');
+    if (!winPrint) {
+      alert('Popup print diblokir browser. Izinkan popup untuk halaman ERP ini lalu coba lagi.');
+      return;
+    }
+
+    winPrint.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>${SALES_html_(judulFile)}</title>
+        <style>
+          body { font-family: Arial, Helvetica, sans-serif; color: #000; line-height: 1.4; padding: 20px; background: #fff; margin: 0; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+          th, td { padding: 6px 10px; }
+          tr, td, th { page-break-inside: avoid; }
+          img { max-width: 100%; }
+          ${ukuranKertas}
+          @media print { body { padding: 0; } * { print-color-adjust: exact !important; -webkit-print-color-adjust: exact !important; } }
+        </style>
+      </head>
+      <body>
+        ${kontenHtml}
+        <script>
+          window.onload = function() {
+            setTimeout(function(){ window.focus(); window.print(); setTimeout(function(){ window.close(); }, 700); }, 450);
+          };
+        ${'</' + 'script>'}
+      </body>
+      </html>
+    `);
+    winPrint.document.close();
+    winPrint.focus();
+  }
+</script>

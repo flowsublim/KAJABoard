@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ERP Retail & Omnichannel - CV KIRAL</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <?!= include('CSS'); ?>
+  <script>window.OMNI_BOOTSTRAP = <?!= JSON.stringify(OMNI_BOOTSTRAP || {}) ?>;</script>
+</head>
+<body>
+
+<div class="d-flex vh-100">
+
+  <aside class="glass-sidebar d-none d-lg-flex flex-column p-4 shadow-lg justify-content-between">
+    <div>
+      <div class="mb-5 px-2">
+        <h4 class="fw-bold text-warning m-0" style="letter-spacing: 1px;">🏢 ERP<br><span class="text-white fs-5">CV KIRAL</span></h4>
+      </div>
+      <ul class="nav flex-column gap-1">
+        <li class="nav-item"><a href="javascript:void(0)" class="nav-link nav-laporan active fw-bold px-3 py-2" onclick="pindah('laporan')">📊 Laporan Retail</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" class="nav-link nav-biaya fw-bold px-3 py-2" onclick="pindah('biaya')">📉 Analisa Biaya</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" class="nav-link nav-import fw-bold px-3 py-2" onclick="pindah('import')">📥 Import BigSeller</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" class="nav-link nav-pos fw-bold px-3 py-2" onclick="pindah('pos')">🛒 Kasir POS (Toko)</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" class="nav-link nav-sku fw-bold px-3 py-2" onclick="pindah('sku')">🔗 Mapping SKU</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <div class="flex-grow-1 d-flex flex-column main-content">
+    
+    <header class="glass-header d-flex justify-content-between align-items-center p-3 px-4 shadow-sm">
+      <div class="text-truncate pe-2">
+        <h4 class="m-0 fw-bolder text-primary text-truncate" style="letter-spacing: -0.5px;">🛍️ Modul Retail & Omni</h4>
+        <small class="text-muted judul-subtitle text-truncate">Kasir POS & Integrasi Marketplace</small>
+      </div>
+      
+      <div class="d-flex align-items-center gap-2 gap-md-3">
+        <div class="text-end border-end border-secondary-subtle pe-3 d-none d-md-block">
+          <small class="text-muted d-block" style="font-size: 0.75rem;">Login sebagai:</small>
+          <span class="fw-bold text-dark" id="user-email"><?!= ERP_DISPLAY_NAME || ERP_USER_EMAIL || "User"; ?></span>
+        </div>
+
+        <div class="dropdown" id="menuPindahModul">
+          <button class="btn btn-light fw-bold border-0 shadow-sm dropdown-toggle d-flex align-items-center justify-content-center btn-pindah-modul px-lg-3 py-2" type="button" data-bs-toggle="dropdown" title="Pindah Modul" style="border-radius: 12px;">
+            <span class="fs-5" style="line-height: 1;">🔄</span> 
+            <span class="teks-pindah-modul d-none d-lg-inline ms-2">Pindah Modul</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2 rounded-3" id="menu-modul-list">
+            <li><h6 class="dropdown-header">⏳ Memuat link...</h6></li>
+          </ul>
+        </div>
+        <button id="btn-logout-omni" type="button" class="btn btn-outline-danger fw-bold shadow-sm px-3 py-2" style="border-radius:12px;" onclick="logoutOmni()">Logout</button>
+      </div> 
+    </header>
+
+    <main class="p-3 p-lg-4 pb-5">
+      <div id="notif-global"></div>
+
+      <section id="tab-import" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-0 mb-4">
+          <h5 class="fw-bold text-primary mb-3">📥 Import Data BigSeller (Pesanan & Retur)</h5>
+          <div id="drop-zone" class="drop-zone mb-4">
+            <div class="icon-circle text-primary">
+              <span style="line-height: 1;">📄</span>
+            </div>
+            <h5 class="fw-bolder text-dark mb-2">Drag & Drop file pesanan / retur di sini</h5>
+            <p class="text-muted mb-0" style="font-size: 0.95rem;">Mendukung format <b>.xlsx</b> dan <b>.csv</b> dari BigSeller</p>
+            <div class="mt-4">
+              <span class="btn btn-sm btn-outline-primary fw-bold px-4 py-2 rounded-pill shadow-sm bg-white">
+                🔍 Atau Klik untuk Cari File
+              </span>
+            </div>
+            <input type="file" id="file-upload" class="d-none" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel">
+          </div>
+          <button id="btn-proses-import" class="btn btn-primary fw-bold px-4 py-2 w-100 d-none" onclick="eksekusiImportDatabase()">🚀 Simpan Data ke Database Omnichannel</button>
+        </div>
+
+        <div id="area-hasil-import" class="card p-4 mt-4 shadow-sm border-0 d-none">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="fw-bold m-0 text-dark">📋 Preview Data Terbaca (<span id="count-preview">0</span> baris):</h6>
+            <span class="badge bg-warning text-dark px-3 py-2 rounded-pill" id="status-parsing">Menunggu...</span>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered table-hover align-middle text-center" style="font-size: 0.85rem;">
+              <thead class="table-light">
+                <tr><th>Tgl Pesanan</th><th>No Pesanan</th><th>Toko</th><th>SKU</th><th>QTY</th><th>Subtotal</th><th>Status</th><th>Resi</th></tr>
+              </thead>
+              <tbody id="tbl-preview-import"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <hr class="my-5 border-secondary border-opacity-25">
+
+        <div class="card p-4 border-top border-success border-4 shadow-sm mb-5">
+          <h5 class="fw-bold text-success mb-3">💰 Import Data Settlement (Keuangan & Pencairan)</h5>
+          <p class="text-muted mb-4" style="font-size: 0.9rem;">
+            Tarik data Laba Bersih, Biaya Admin, dan Penyesuaian langsung dari file laporan keuangan Marketplace.
+          </p>
+          <div class="row mb-4">
+            <div class="col-md-6">
+              <label class="fw-bold text-secondary mb-2">Pilih Toko Tujuan (Mapping Saldo)</label>
+              <select id="keuangan-toko" class="form-select border-success shadow-sm form-select-lg" style="font-size: 0.95rem;">
+                <option value="">⏳ Memuat daftar toko...</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="drop-zone-keuangan" class="drop-zone border-success bg-success bg-opacity-10">
+            <div class="icon-circle text-success shadow-sm">
+              <span style="line-height: 1;">💵</span>
+            </div>
+            <h5 class="fw-bolder text-dark mb-2">Drag & Drop file Settlement di sini</h5>
+            <p class="text-muted mb-0" style="font-size: 0.95rem;">Mendukung format laporan keuangan (.csv / .xlsx)</p>
+            <div class="mt-4">
+              <span class="btn btn-sm btn-outline-success fw-bold px-4 py-2 rounded-pill shadow-sm bg-white">
+                🔍 Atau Klik untuk Cari File Keuangan
+              </span>
+            </div>
+            <input type="file" id="file-upload-keuangan" class="d-none" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel">
+          </div>
+
+          <div id="area-preview-keuangan" class="mt-4 d-none p-4 border border-success border-2 rounded-3 bg-white shadow-sm">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+               <h6 class="fw-bold text-success m-0">✅ File Settlement Terbaca!</h6>
+            </div>
+            <hr class="text-success border-2 opacity-25">
+            <div class="row text-center mb-4 mt-3">
+               <div class="col-6 border-end border-success border-opacity-25">
+                  <h2 class="fw-bolder text-primary mb-1" id="count-keu-pesanan">0</h2>
+                  <small class="text-muted fw-bold text-uppercase" style="letter-spacing: 0.5px;">Pesanan Ditemukan</small>
+               </div>
+               <div class="col-6">
+                  <h2 class="fw-bolder text-danger mb-1" id="count-keu-penyesuaian">0</h2>
+                  <small class="text-muted fw-bold text-uppercase" style="letter-spacing: 0.5px;">Penyesuaian Teknis</small>
+               </div>
+            </div>
+            <button id="btn-proses-keuangan" class="btn btn-success fw-bold w-100 py-3 fs-6 rounded-3 shadow-sm" onclick="eksekusiImportKeuangan()">
+              💰 SINKRONKAN DATA KEUANGAN KE DATABASE
+            </button>
+          </div>
+        </div>
+    </section>
+
+      <section id="tab-pos" class="container-fluid p-0 d-none">
+        <div class="row g-4">
+          <div class="col-lg-7">
+            <div class="card p-4 h-100">
+              <h5 class="fw-bold text-primary mb-4">🛒 Input Barang Kasir</h5>
+              <div class="mb-3">
+                <label class="fw-bold text-secondary mb-1">Pilih Item Gudang</label>
+                <select id="pos-item" class="form-select form-select-lg" onchange="updateHargaPOS()"><option value="">-- Loading... --</option></select>
+              </div>
+              <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                  <label class="fw-bold text-secondary mb-1">Harga Jual (Per Pcs)</label>
+                  <input type="number" id="pos-harga" class="form-control form-control-lg" placeholder="Sistem Auto-Fill" readonly>
+                </div>
+                <div class="col-md-6">
+                  <label class="fw-bold text-secondary mb-1">QTY</label>
+                  <input type="number" id="pos-qty" class="form-control form-control-lg" value="1">
+                </div>
+              </div>
+              <button class="btn btn-primary btn-lg fw-bold w-100" onclick="tambahKeKeranjang()">➕ TAMBAH KE KERANJANG</button>
+            </div>
+          </div>
+
+          <div class="col-lg-5">
+            <div class="card p-4 h-100 bg-dark text-white border-0 shadow-lg" style="border-radius: 20px;">
+              <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="fw-bold text-warning mb-0">🛍️ Keranjang Belanja</h5>
+                <button class="btn btn-sm btn-outline-danger fw-bold" style="font-size:0.78rem;" onclick="kosongkanKeranjang()">🗑️ Bersihkan</button>
+              </div>
+              <div class="table-responsive bg-opacity-10 bg-white rounded-3 p-2 mb-3" style="max-height: 250px; min-height: 180px;">
+                <table class="table table-sm table-dark table-borderless align-middle text-center mb-0" style="font-size:0.9rem;">
+                  <thead class="border-bottom border-secondary">
+                    <tr><th class="text-start pb-2">Item</th><th class="pb-2">QTY</th><th class="text-end pb-2">Total</th><th class="pb-2">X</th></tr>
+                  </thead>
+                  <tbody id="tbl-keranjang">
+                    <tr><td colspan="4" class="text-muted text-center pt-5 pb-5">Keranjang masih kosong</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="d-flex justify-content-between align-items-center mb-3 px-2">
+                <span class="fs-5 text-light">Total Tagihan:</span>
+                <span class="fs-3 fw-bolder text-success" id="pos-total-tagihan">Rp 0</span>
+              </div>
+              <div class="row g-2 mb-2 px-2">
+                <div class="col-12">
+                  <select id="pos-metode" class="form-select bg-dark text-white border-secondary mb-2" onchange="ubahMetodeBayar()">
+                    <option value="Tunai">💵 Pembayaran Tunai</option>
+                    <option value="QRIS">📱 QRIS / e-Wallet</option>
+                    <option value="Transfer">🏦 Transfer Bank</option>
+                  </select>
+                </div>
+              </div>
+              <div class="row g-2 mb-4 px-2">
+                <div class="col-7">
+                  <input type="number" id="pos-tunai" class="form-control form-control-lg bg-secondary bg-opacity-50 text-white border-0" placeholder="Tunai (Rp)" onkeyup="hitungKembalian()">
+                </div>
+                <div class="col-5 text-end">
+                  <small class="text-muted d-block">Kembalian</small>
+                  <span class="fw-bold text-warning fs-5" id="pos-kembalian">Rp 0</span>
+                </div>
+              </div>
+              <button class="btn btn-success btn-lg fw-bold w-100 shadow" id="btn-bayar-pos" onclick="bayarPOS()">💵 BAYAR & CETAK STRUK</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-sku" class="container-fluid p-0 d-none">
+        <div class="row g-4">
+          <div class="col-md-6">
+           <div class="card p-4 h-100 border-top border-danger border-4">
+              <h5 class="fw-bold text-danger mb-2">⚠️ SKU Belum Terpetakan (UNMAPPED)</h5>
+              <p class="text-muted mb-3" style="font-size:0.85rem;">Pilih Item Gudang yang sesuai agar stok & produksi sinkron.</p>
+              <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle">
+                  <thead class="table-light">
+                    <tr><th>SKU BigSeller</th><th>Pilih Item Gudang</th><th style="width: 80px;">Isi</th><th>Aksi</th></tr>
+                  </thead>
+                  <tbody id="tbl-unmapped"><tr><td colspan="4" class="text-center text-muted py-4">⏳ Memuat...</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          
+          <div class="col-md-6">
+            <div class="card p-4 h-100 border-top border-success border-4">
+              <h5 class="fw-bold text-success mb-3">✅ SKU Terpetakan (Mapped)</h5>
+              <div class="table-responsive" style="max-height: 60vh;">
+                <table class="table table-sm table-hover align-middle text-center">
+                  <thead class="table-light sticky-top">
+                    <tr><th class="text-start">SKU BigSeller</th><th class="text-start">Item Gudang (Target)</th></tr>
+                  </thead>
+                  <tbody id="tbl-mapped"><tr><td colspan="2" class="text-muted py-4">⏳ Memuat...</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-laporan" class="container-fluid p-0">
+         <div class="card p-4">
+          <h5 class="fw-bold text-primary mb-4">📊 Dashboard Performa Penjualan</h5>
+          
+          <div class="row g-3 mb-4 align-items-end bg-light p-3 rounded-4 border border-light-subtle">
+            <div class="col-md-4">
+              <label class="fw-bold text-secondary mb-1" style="font-size:0.85rem;">Mulai Tanggal</label>
+              <input type="date" id="lap-start" class="form-control">
+            </div>
+            <div class="col-md-4">
+              <label class="fw-bold text-secondary mb-1" style="font-size:0.85rem;">Sampai Tanggal</label>
+              <input type="date" id="lap-end" class="form-control">
+            </div>
+            <div class="col-md-4">
+              <button class="btn btn-primary fw-bold w-100" onclick="muatLaporanRetail(true)">🔍 Tampilkan Laporan</button>
+            </div>
+          </div>
+
+          <div class="row g-3 mb-4">
+            <div class="col-6 col-md-3">
+              <div class="p-3 bg-primary bg-opacity-10 border border-primary border-opacity-25 rounded-4 text-center h-100">
+                <h6 class="fw-bold text-primary mb-2" style="font-size:0.75rem; text-transform:uppercase;">Seluruhnya (Bruto)</h6>
+                <h4 class="fw-bolder text-dark m-0" id="lap-tot-semua">⏳</h4>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="p-3 bg-success bg-opacity-10 border border-success border-opacity-25 rounded-4 text-center h-100">
+                <h6 class="fw-bold text-success mb-2" style="font-size:0.75rem; text-transform:uppercase;">Selesai (Cair)</h6>
+                <h4 class="fw-bolder text-dark m-0" id="lap-tot-selesai">⏳</h4>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="p-3 bg-warning bg-opacity-10 border border-warning border-opacity-25 rounded-4 text-center h-100">
+                 <h6 class="fw-bold text-warning mb-2" style="font-size:0.75rem; text-transform:uppercase;">Perjalanan / Proses</h6>
+                <h4 class="fw-bolder text-dark m-0" id="lap-tot-jalan">⏳</h4>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="p-3 bg-danger bg-opacity-10 border border-danger border-opacity-25 rounded-4 text-center h-100">
+                 <h6 class="fw-bold text-danger mb-2" style="font-size:0.75rem; text-transform:uppercase;">Batal & Retur</h6>
+                <h4 class="fw-bolder text-dark m-0" id="lap-tot-batal">⏳</h4>
+              </div>
+            </div>
+          </div>
+
+          <!-- ================= PANEL BARU: POTONGAN BIAYA MARKETPLACE ================= -->
+          <h6 class="fw-bold text-dark mt-4 mb-3">💸 Rincian Pendapatan Bersih & Potongan Marketplace</h6>
+          <div class="row g-3 mb-5">
+            <div class="col-12 col-md-4">
+              <div class="p-3 bg-success text-white shadow-sm rounded-4 text-center h-100 d-flex flex-column justify-content-center">
+                <h6 class="fw-bold text-light mb-2" style="font-size:0.8rem; text-transform:uppercase;">Pendapatan Bersih (Net)</h6>
+                <h3 class="fw-bolder m-0" id="lap-tot-bersih">⏳</h3>
+              </div>
+            </div>
+            <div class="col-12 col-md-8">
+                <div class="row g-2 h-100">
+                    <div class="col-6 col-md-3">
+                      <div class="p-2 bg-white border border-danger border-opacity-25 shadow-sm rounded-4 text-center h-100 d-flex flex-column justify-content-center">
+                        <small class="fw-bold text-secondary d-block mb-1" style="font-size:0.7rem;">ADMIN & GATEWAY</small>
+                        <span class="fw-bolder text-danger" id="lap-tot-admin">⏳</span>
+                      </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                      <div class="p-2 bg-white border border-danger border-opacity-25 shadow-sm rounded-4 text-center h-100 d-flex flex-column justify-content-center">
+                        <small class="fw-bold text-secondary d-block mb-1" style="font-size:0.7rem;">LAYANAN KAMPANYE</small>
+                        <span class="fw-bolder text-danger" id="lap-tot-layanan">⏳</span>
+                      </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                      <div class="p-2 bg-white border border-danger border-opacity-25 shadow-sm rounded-4 text-center h-100 d-flex flex-column justify-content-center">
+                         <small class="fw-bold text-secondary d-block mb-1" style="font-size:0.7rem;">KOMISI AFFILIATE</small>
+                        <span class="fw-bolder text-danger" id="lap-tot-aff">⏳</span>
+                      </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                      <div class="p-2 bg-white border border-danger border-opacity-25 shadow-sm rounded-4 text-center h-100 d-flex flex-column justify-content-center">
+                         <small class="fw-bold text-secondary d-block mb-1" style="font-size:0.7rem;">ONGKIR PENJUAL</small>
+                        <span class="fw-bolder text-danger" id="lap-tot-ongkir">⏳</span>
+                      </div>
+                    </div>
+                </div>
+            </div>
+          </div>
+          <!-- ======================================================================== -->
+
+          <div class="row mb-4">
+            <div class="col-12">
+               <div class="card p-3 shadow-sm border border-light-subtle rounded-4">
+                <h6 class="fw-bold text-dark mb-3">📈 Tren Omset Penjualan Harian</h6>
+                <div style="height: 250px; width: 100%;">
+                  <canvas id="salesChart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row g-4">
+            <div class="col-lg-6">
+               <h6 class="fw-bold text-dark mb-3">🏆 Performa Toko / Channel</h6>
+              <div class="table-responsive" style="max-height: 400px;">
+                <table class="table table-sm table-hover align-middle text-center" style="font-size:0.85rem;">
+                  <thead class="table-light sticky-top">
+                    <tr><th class="text-start">Nama Toko</th><th>Pcs Terjual</th><th class="text-end">Omset (Rp)</th></tr>
+                  </thead>
+                  <tbody id="tbl-lap-toko"><tr><td colspan="3" class="text-muted py-4">Klik Tampilkan Laporan</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="col-lg-6">
+               <h6 class="fw-bold text-dark mb-3">🔥 Top Produk Terlaris</h6>
+              <div class="table-responsive" style="max-height: 400px;">
+                <table class="table table-sm table-hover align-middle text-center" style="font-size:0.85rem;">
+                  <thead class="table-light sticky-top">
+                    <tr><th class="text-start">Item Gudang</th><th>Pcs Terjual</th><th class="text-end">Omset (Rp)</th></tr>
+                  </thead>
+                  <tbody id="tbl-lap-item"><tr><td colspan="3" class="text-muted py-4">Klik Tampilkan Laporan</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+      </div>
+      </section>
+
+      <div class="d-lg-none fixed-bottom bg-white border-top shadow-lg d-flex justify-content-around p-2" style="z-index: 1040; border-radius: 20px 20px 0 0;">
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('laporan')">📊 Lap</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('biaya')">📉 Biaya</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('import')">📥 Import</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('pos')">🛒 POS</button>
+         <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('sku')">🔗 Map</button>
+      </div>
+
+      <section id="tab-biaya" class="container-fluid p-0 d-none">
+        <div class="card p-4 border-top border-danger border-4 shadow-sm">
+          <h5 class="fw-bold text-danger mb-4">📉 Analisa Potongan Biaya Marketplace (Berdasarkan Tgl Pesanan)</h5>
+          
+          <div class="row g-3 mb-4 align-items-end bg-light p-3 rounded-4 border border-light-subtle">
+            <div class="col-md-4">
+              <label class="fw-bold text-secondary mb-1" style="font-size:0.85rem;">Mulai Tgl Pesanan</label>
+              <input type="date" id="biaya-start" class="form-control">
+            </div>
+            <div class="col-md-4">
+              <label class="fw-bold text-secondary mb-1" style="font-size:0.85rem;">Sampai Tgl Pesanan</label>
+              <input type="date" id="biaya-end" class="form-control">
+            </div>
+            <div class="col-md-4">
+              <button class="btn btn-danger fw-bold w-100" onclick="muatLaporanBiaya(true)">🔍 Analisa Biaya</button>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle text-center" style="font-size:0.85rem;">
+              <thead class="table-light sticky-top">
+                <tr>
+                  <th class="text-start">Toko / Channel</th>
+                  <th class="text-end">Omset Tercairkan</th>
+                  <th class="text-end text-danger">Admin & Gateway</th>
+                  <th class="text-end text-danger">Layanan/Kampanye</th>
+                  <th class="text-end text-danger">Komisi Affiliate</th>
+                  <th class="text-end text-danger">Ongkir Penjual</th>
+                  <th class="text-end text-success">Pendapatan Bersih</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-lap-biaya">
+                <tr><td colspan="7" class="text-muted py-4">Klik Analisa Biaya untuk menampilkan metrik persentase</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div id="toast-container" class="position-fixed top-0 start-50 translate-middle-x p-3" style="z-index: 9999; margin-top: 10px; pointer-events: none;"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<?!= include('JS'); ?>
+</body>
+</html>

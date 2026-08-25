@@ -1,0 +1,156 @@
+/****************************************************
+ * ERP CV KIRAL - CONFIG CORE
+ * Dipasang di file: 01_Master_Database_CV_Kiral
+ ****************************************************/
+
+var ERP = {
+  VERSION: "LEAN_V0.2",
+  DEFAULT_TIMEZONE: "Asia/Jakarta",
+  DEFAULT_WAREHOUSE: "MAIN",
+
+  MODULE: {
+    MASTER: "MASTER",
+    OMNI: "OMNI",
+    SALES: "SALES",
+    PURCH: "PURCH",
+    PROD: "PROD",
+    WH: "WH",
+    FIN: "FIN",
+    HRD: "HRD",
+    REPORT: "REPORT"
+  },
+
+  SHEET: {
+    MASTER_MODULE: "Master_Module",
+    MASTER_ITEM: "Master_Item",
+    MASTER_NUMBERING: "Master_Numbering",
+    LOG_ERROR: "Log_Error",
+
+    STOCK_MOVEMENT: "Stock_Movement",
+    STOCK_CUTOFF: "Stock_Cutoff",
+    STOCK_OPNAME: "Stock_Opname"
+  }
+};
+
+/**
+ * Jalankan sekali dari Apps Script Master Database.
+ * Fungsi ini menyimpan ID file Master ke Script Properties.
+ */
+function SETUP_installCore() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  PropertiesService.getScriptProperties().setProperty("MASTER_SPREADSHEET_ID", ss.getId());
+
+  SETUP_validateMasterHeaders_();
+
+  var result = TEST_coreHealthCheck();
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
+ * Ambil ID spreadsheet Master Database.
+ */
+function CFG_getMasterSpreadsheetId_() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty("MASTER_SPREADSHEET_ID");
+
+  if (id) return id;
+
+  var active = SpreadsheetApp.getActiveSpreadsheet();
+  if (!active) throw new Error("MASTER_SPREADSHEET_ID belum diset. Jalankan SETUP_installCore() dari file Master Database.");
+
+  id = active.getId();
+  props.setProperty("MASTER_SPREADSHEET_ID", id);
+  return id;
+}
+
+/**
+ * Buka file Master Database.
+ */
+function CFG_openMaster_() {
+  return SpreadsheetApp.openById(CFG_getMasterSpreadsheetId_());
+}
+
+/**
+ * Ambil info modul dari Master_Module.
+ */
+function CFG_getModuleInfo_(moduleCode) {
+  moduleCode = String(moduleCode || "").trim().toUpperCase();
+  if (!moduleCode) throw new Error("Module_Code kosong.");
+
+  if (moduleCode === ERP.MODULE.MASTER) {
+    var master = CFG_openMaster_();
+    return {
+      Module_Code: "MASTER",
+      Module_Name: "Master Database",
+      Spreadsheet_ID: master.getId(),
+      Spreadsheet_URL: master.getUrl(),
+      Status: "ACTIVE"
+    };
+  }
+
+  var rows = DB_readObjects_(ERP.MODULE.MASTER, ERP.SHEET.MASTER_MODULE);
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (String(r.Module_Code || "").trim().toUpperCase() === moduleCode) {
+      return r;
+    }
+  }
+
+  throw new Error("Module_Code tidak ditemukan di Master_Module: " + moduleCode);
+}
+
+/**
+ * Buka spreadsheet berdasarkan Module_Code.
+ */
+function CFG_openModuleSpreadsheet_(moduleCode) {
+  moduleCode = String(moduleCode || "").trim().toUpperCase();
+
+  if (moduleCode === ERP.MODULE.MASTER) {
+    return CFG_openMaster_();
+  }
+
+  var info = CFG_getModuleInfo_(moduleCode);
+  var id = String(info.Spreadsheet_ID || "").trim();
+
+  if (!id) {
+    throw new Error("Spreadsheet_ID kosong untuk module: " + moduleCode);
+  }
+
+  return SpreadsheetApp.openById(id);
+}
+
+/**
+ * Validasi header Master Database minimal.
+ */
+function SETUP_validateMasterHeaders_() {
+  DB_requireHeaders_(ERP.MODULE.MASTER, "Master_Config", [
+    "Config_Key", "Config_Value", "Description", "Updated_At", "Updated_By"
+  ]);
+
+  DB_requireHeaders_(ERP.MODULE.MASTER, "Master_Module", [
+    "Module_Code", "Module_Name", "Spreadsheet_ID", "Spreadsheet_URL",
+    "Web_App_URL", "Status", "Notes"
+  ]);
+
+  DB_requireHeaders_(ERP.MODULE.MASTER, "Master_User", [
+    "User_ID", "Email", "Display_Name", "Department", "Role",
+    "Status", "Created_At", "Notes"
+  ]);
+
+  DB_requireHeaders_(ERP.MODULE.MASTER, "Master_Item", [
+    "Item_ID", "Item_Code", "Item_Name", "Item_Type", "Category",
+    "Sub_Category", "Unit", "Min_Stock", "Default_Selling_Price",
+    "Default_Cost", "Status", "Notes"
+  ]);
+
+  DB_requireHeaders_(ERP.MODULE.MASTER, "Master_Numbering", [
+    "Doc_Type", "Prefix", "Format", "Last_Date",
+    "Last_Sequence", "Reset_Mode", "Notes"
+  ]);
+
+  DB_requireHeaders_(ERP.MODULE.MASTER, "Log_Error", [
+    "Error_ID", "Timestamp", "Module_Code", "Function_Name",
+    "Error_Message", "Payload_JSON", "User_Email", "Status"
+  ]);
+}

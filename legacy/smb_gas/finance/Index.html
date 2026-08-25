@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ERP Finance</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <?!= include('CSS'); ?>
+  <script>window.FIN_BOOTSTRAP = <?!= JSON.stringify(FIN_BOOTSTRAP || {}) ?>;</script>
+</head>
+<body class="bg-light">
+
+<div class="d-flex vh-100" style="background-color:#f1f5f9;">
+
+  <aside class="glass-sidebar d-none d-lg-flex flex-column p-4 shadow-lg justify-content-between">
+    <div>
+      <div class="mb-5 px-2">
+        <h4 class="fw-bold text-warning m-0" style="letter-spacing:1px;">🏢 ERP<br><span class="text-white fs-5">CV KIRAL</span></h4>
+      </div>
+      <ul class="nav flex-column gap-1">
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-dashboard" class="nav-link active fw-bold px-3 py-2" onclick="pindah('dashboard')">📊 Dashboard</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-aruskas" class="nav-link fw-bold px-3 py-2" onclick="pindah('aruskas')">💸 Arus Kas</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-jurnal" class="nav-link fw-bold px-3 py-2" onclick="pindah('jurnal')">🧮 Jurnal</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-piutang" class="nav-link fw-bold px-3 py-2" onclick="pindah('piutang')">🧾 Piutang</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-hutang" class="nav-link fw-bold px-3 py-2" onclick="pindah('hutang')">📌 Hutang</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-labarugi" class="nav-link fw-bold px-3 py-2" onclick="pindah('labarugi')">📈 Laba Rugi</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-neraca" class="nav-link fw-bold px-3 py-2" onclick="pindah('neraca')">⚖️ Neraca</a></li>
+        <li class="nav-item"><a href="javascript:void(0)" id="nav-cogm" class="nav-link fw-bold px-3 py-2" onclick="pindah('cogm')">🏭 COGM & COGS</a></li>
+        <li class="nav-item mt-3"><a href="javascript:void(0)" id="nav-setting" class="nav-link fw-bold px-3 py-2 text-warning" onclick="pindah('setting')">⚙️ COA & Setting</a></li>
+      </ul>
+    </div>
+    <div class="small text-white-50 px-2">Finance NewDB v1.9.1</div>
+  </aside>
+
+  <div class="flex-grow-1 d-flex flex-column main-content">
+
+    <header class="glass-header d-flex justify-content-between align-items-center p-3 px-4 shadow-sm">
+      <div class="text-truncate pe-2">
+        <h4 class="m-0 fw-bolder text-primary text-truncate" style="letter-spacing:-0.5px;">💼 Modul Finance</h4>
+        <small class="text-muted judul-subtitle text-truncate">Jurnal, penerimaan, pengeluaran, laporan keuangan & COGM/COGS</small>
+      </div>
+
+      <div class="d-flex align-items-center gap-2 gap-md-3">
+        <div class="text-end border-end border-secondary-subtle pe-3 d-none d-md-block">
+          <small class="text-muted d-block" style="font-size:0.75rem;">Login sebagai:</small>
+          <span class="fw-bold text-dark" id="user-email"><?!= ERP_DISPLAY_NAME || ERP_USER_EMAIL || 'User'; ?></span>
+        </div>
+
+        <div class="dropdown" id="menuPindahModul">
+          <button class="btn btn-light fw-bold border-0 shadow-sm dropdown-toggle d-flex align-items-center justify-content-center btn-pindah-modul px-lg-3 py-2" type="button" data-bs-toggle="dropdown" title="Pindah Modul" style="border-radius:12px;">
+            <span class="fs-5" style="line-height:1;">🔄</span>
+            <span class="teks-pindah-modul d-none d-lg-inline ms-2">Pindah Modul</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2 rounded-3" id="menu-modul-list">
+            <li><h6 class="dropdown-header">⏳ Memuat link...</h6></li>
+          </ul>
+        </div>
+        <button id="btn-logout-finance" type="button" class="btn btn-outline-danger fw-bold shadow-sm px-3 py-2" style="border-radius:12px;" onclick="logoutFinance()">Logout</button>
+      </div>
+    </header>
+
+    <main class="p-3 px-lg-4 pb-5">
+      <div id="notif-global"></div>
+
+      <div class="card shadow-sm border-0 mb-3 finance-period-card finance-period-strip">
+        <div class="card-body py-2 px-3">
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <div class="fw-bolder text-primary me-2">📅 Periode Laporan</div>
+            <div class="d-flex align-items-center gap-2">
+              <label class="form-label small fw-bold mb-0 text-muted" for="filterTanggalAwal">Awal</label>
+              <input id="filterTanggalAwal" type="date" class="form-control form-control-sm fw-bold" style="width:145px;">
+            </div>
+            <div class="d-flex align-items-center gap-2">
+              <label class="form-label small fw-bold mb-0 text-muted" for="filterTanggalAkhir">Akhir</label>
+              <input id="filterTanggalAkhir" type="date" class="form-control form-control-sm fw-bold" style="width:145px;">
+            </div>
+            <button class="btn btn-sm btn-primary fw-bold" onclick="applyReportPeriod()">Terapkan</button>
+            <button class="btn btn-sm btn-outline-dark fw-bold" onclick="printFinanceReport(state.activeTab)">🖨️ Cetak Tab</button>
+            
+          </div>
+        </div>
+      </div>
+
+      <div class="d-lg-none mb-3">
+        <select id="mobileTab" class="form-select fw-bold" onchange="pindah(this.value)">
+          <option value="dashboard">📊 Dashboard</option>
+          <option value="aruskas">💸 Arus Kas</option>
+          <option value="jurnal">🧮 Jurnal</option>
+          <option value="piutang">🧾 Piutang</option>
+          <option value="hutang">📌 Hutang</option>
+          <option value="labarugi">📈 Laba Rugi</option>
+          <option value="neraca">⚖️ Neraca</option>
+          <option value="cogm">🏭 COGM & COGS</option>
+          <option value="setting">⚙️ COA & Setting</option>
+        </select>
+      </div>
+
+      <section id="tab-dashboard" class="container-fluid p-0">
+        <div class="row g-3 mb-4">
+          <div class="col-6 col-xl-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted small fw-bold">Saldo Kas/Bank</div><h4 id="mCash" class="fw-bolder text-primary mb-0">Rp 0</h4></div></div>
+          <div class="col-6 col-xl-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted small fw-bold">Total Piutang</div><h4 id="mPiutang" class="fw-bolder text-info mb-0">Rp 0</h4></div></div>
+          <div class="col-6 col-xl-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted small fw-bold">Total Hutang</div><h4 id="mHutang" class="fw-bolder text-danger mb-0">Rp 0</h4></div></div>
+          <div class="col-6 col-xl-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted small fw-bold">DP Customer</div><h4 id="mDp" class="fw-bolder text-warning mb-0">Rp 0</h4></div></div>
+          <div class="col-6 col-xl-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted small fw-bold">Pendapatan Periode Ini</div><h4 id="mRevenue" class="fw-bolder text-success mb-0">Rp 0</h4></div></div>
+          <div class="col-6 col-xl-3"><div class="card p-3 shadow-sm h-100"><div class="text-muted small fw-bold">Biaya Periode Ini</div><h4 id="mExpense" class="fw-bolder text-secondary mb-0">Rp 0</h4></div></div>
+          <div class="col-12 col-xl-6"><div class="card p-3 shadow-sm h-100"><div class="text-muted small fw-bold">Laba Operasional Periode Ini</div><h4 id="mLaba" class="fw-bolder text-dark mb-0">Rp 0</h4></div></div>
+        </div>
+
+        <div class="row g-4">
+          <div class="col-xl-6">
+            <div class="card p-4 shadow-sm border-top border-primary border-4">
+              <div class="d-flex justify-content-between align-items-center mb-3"><h5 class="fw-bold text-primary m-0">🧾 Piutang Terbesar</h5><button class="btn btn-sm btn-outline-primary fw-bold" onclick="pindah('piutang')">Lihat</button></div>
+              <div id="dashPiutang" class="table-responsive"></div>
+            </div>
+          </div>
+          <div class="col-xl-6">
+            <div class="card p-4 shadow-sm border-top border-success border-4">
+              <div class="d-flex justify-content-between align-items-center mb-3"><h5 class="fw-bold text-success m-0">💸 Arus Kas Terbaru</h5><button class="btn btn-sm btn-outline-success fw-bold" onclick="pindah('aruskas')">Lihat</button></div>
+              <div id="dashKas" class="table-responsive"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-jurnal" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm mb-4 border-top border-primary border-4">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <div>
+              <h5 class="fw-bold text-primary m-0">🧮 Jurnal Manual</h5>
+              <small class="text-muted">Khusus jurnal penyesuaian/manual. Penerimaan dan pengeluaran dipindahkan ke tab Arus Kas.</small>
+            </div>
+            <button class="btn btn-primary fw-bold" onclick="bukaModalJurnal()">✍️ Input Jurnal</button>
+          </div>
+          <div class="box-item">
+            <div class="fw-bold text-primary">Jurnal Manual</div>
+            <small>Dipakai untuk penyesuaian akuntansi yang tidak berasal dari modul operasional atau arus kas harian.</small>
+          </div>
+        </div>
+
+        <div class="card p-4 shadow-sm border-top border-dark border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h5 class="fw-bold text-dark m-0">📚 Data Jurnal</h5>
+            <input id="searchJurnal" class="form-control w-auto" style="min-width:280px" placeholder="Cari ref/kontak/akun/keterangan..." oninput="renderJurnal()">
+          </div>
+          <div id="jurnalTable" class="table-responsive"></div>
+        </div>
+      </section>
+
+      <section id="tab-piutang" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-info border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><h5 class="fw-bold text-info text-dark m-0">🧾 Piutang Invoice</h5><input id="searchPiutang" class="form-control w-auto" style="min-width:280px" placeholder="Cari invoice/customer/PO..." oninput="renderPiutang()"></div>
+          <div id="piutangTable" class="table-responsive"></div>
+        </div>
+      </section>
+
+      <section id="tab-hutang" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-danger border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><h5 class="fw-bold text-danger m-0">📌 Hutang Supplier / Maklun</h5><input id="searchHutang" class="form-control w-auto" style="min-width:280px" placeholder="Cari vendor/ref..." oninput="renderHutang()"></div>
+          <div id="hutangTable" class="table-responsive"></div>
+        </div>
+      </section>
+
+      <section id="tab-aruskas" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm mb-4 border-top border-success border-4">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <div>
+              <h5 class="fw-bold text-success m-0">💸 Arus Kas / Bank</h5>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+              <button class="btn btn-outline-primary fw-bold" onclick="bukaModalUploadBankCsv()">📥 Upload Mutasi Bank</button>
+              <button class="btn btn-success fw-bold" onclick="bukaModalPenerimaan()">➕ Penerimaan</button>
+              <button class="btn btn-danger fw-bold" onclick="bukaModalPengeluaran()">➖ Pengeluaran</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card p-4 shadow-sm border-top border-success border-4 mb-4">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><h5 class="fw-bold text-success m-0">📒 Riwayat Arus Kas</h5><input id="searchKas" class="form-control w-auto" style="min-width:280px" placeholder="Cari kas/bank/ref/kontak..." oninput="renderArusKas()"></div>
+          <div id="arusKasTable" class="table-responsive"></div>
+        </div>
+
+        <div class="card p-4 shadow-sm border-top border-primary border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h5 class="fw-bold text-primary m-0">🏦 Rekonsiliasi Bank</h5>
+            <div class="d-flex gap-2 flex-wrap">
+              <input id="searchBankStatement" class="form-control" style="min-width:260px" placeholder="Cari mutasi bank..." oninput="renderBankStatement()">
+              <button class="btn btn-outline-secondary fw-bold" onclick="setBankReconMode('UNMATCHED')">Semua Belum Cocok</button>
+              <button class="btn btn-outline-secondary fw-bold" onclick="setBankReconMode('UNMATCHED_PERIOD')">Periode</button>
+              <button class="btn btn-outline-success fw-bold" onclick="autoMatchBankStatements()">Auto Match</button>
+              <button class="btn btn-outline-primary fw-bold" onclick="loadBankStatement(true)">Refresh</button>
+            </div>
+          </div>
+          <div id="bankStatementSummary" class="mb-2 small text-muted"></div>
+          <div id="bankStatementTable" class="table-responsive"></div>
+        </div>
+      </section>
+
+      <section id="tab-labarugi" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-primary border-4 report-card" data-report-title="Laporan Laba Rugi">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><h5 class="fw-bold text-primary m-0">📈 Laba Rugi</h5><div class="d-flex gap-2 align-items-center"><button class="btn btn-sm btn-outline-dark fw-bold" onclick="printFinanceReport('labarugi')">🖨️ Cetak</button></div></div>
+          <div id="labaRugiBox"></div>
+        </div>
+      </section>
+
+      <section id="tab-neraca" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-dark border-4 report-card" data-report-title="Neraca">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><h5 class="fw-bold text-dark m-0">⚖️ Neraca</h5><div class="d-flex gap-2 align-items-center"><span class="badge text-bg-secondary">As Of Period</span><button class="btn btn-sm btn-outline-dark fw-bold" onclick="printFinanceReport('neraca')">🖨️ Cetak</button></div></div>
+          <div id="neracaBox"></div>
+        </div>
+      </section>
+
+      <section id="tab-cogm" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-warning border-4 report-card" data-report-title="COGM & COGS">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><h5 class="fw-bold text-warning text-dark m-0">🏭 COGM & COGS</h5><div class="d-flex gap-2 align-items-center"><button class="btn btn-sm btn-outline-dark fw-bold" onclick="printFinanceReport('cogm')">🖨️ Cetak</button></div></div>
+          <div id="cogmBox" class="table-responsive"></div>
+        </div>
+      </section>
+
+      <section id="tab-setting" class="container-fluid p-0 d-none">
+        <div class="card p-4 shadow-sm border-top border-secondary border-4">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div>
+              <h5 class="fw-bold text-secondary m-0">⚙️ COA & Setting</h5>
+              <small class="text-muted">COA dibaca dari Master Database sheet <b>Master_COA</b>. Bisa tambah/edit/hapus langsung dari WebApp.</small>
+            </div>
+            <div class="d-flex gap-2 flex-wrap"><button class="btn btn-sm btn-primary fw-bold" onclick="bukaModalCOA()">➕ Tambah COA</button><button class="btn btn-sm btn-outline-dark fw-bold" onclick="refreshAll()">Refresh</button></div>
+          </div>
+          <div id="coaTable" class="table-responsive"></div>
+        </div>
+      </section>
+
+      <div class="d-lg-none fixed-bottom bg-white border-top shadow-lg d-flex justify-content-around p-2" style="z-index:1040;border-radius:20px 20px 0 0;">
+        <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('dashboard')">📊 Home</button>
+        <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('aruskas')">💸 Kas</button>
+        <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('jurnal')">🧮 Jurnal</button>
+        <button class="btn btn-sm btn-light flex-fill mx-1 fw-bold text-secondary" onclick="pindah('piutang')">🧾 Piutang</button>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<div class="modal fade" id="modalFinance" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content border-0 shadow-lg">
+      <div class="modal-header bg-primary text-white"><h5 class="modal-title fw-bold" id="modalFinanceTitle">Input Finance</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body p-4" id="modalFinanceBody"></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container" class="position-fixed top-0 start-50 translate-middle-x p-3" style="z-index:9999;margin-top:10px;pointer-events:none;"></div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<?!= include('JS'); ?>
+</body>
+</html>

@@ -1,0 +1,385 @@
+/**
+ * ERP CV KIRAL - PORTAL / BERANDA v0.6 FLOW-STYLE SECURITY
+ * Ringan: tanpa Security_Passport sheet, tanpa Global_Heartbeat sheet, tanpa histori login sheet.
+ * Session memakai HMAC token timestamp:hash seperti benchmark Flow Sublim.
+ * Global logout cukup cap Last_Logout_At di Master_User.
+ * Heartbeat global disimpan di Master_Module!J1 agar modul bisa soft refresh data.
+ */
+var PORTAL_CFG = {
+  MASTER_SPREADSHEET_ID: '1bbtCMQfK5p_2c5GzIkTIrcIPcPsm3Wjh_R8PfAagu6I',
+  MODULE_CODE: 'PORTAL',
+  VERSION: 'PORTAL_BERANDA_V0.7_FLOW_SHARED_SECRET_CLEAN',
+  SESSION_TTL_MS: 6 * 60 * 60 * 1000,
+  SECRET_PROPERTY: 'ERP_CV_KIRAL_PORTAL_SECRET',
+  SHARED_SECRET: 'CV_KIRAL_FLOW_SUBLIM_STYLE_FIXED_SECRET_2026_KIRAL',
+  HEARTBEAT_CELL: 'J1',
+  HEARTBEAT_UPDATED_CELL: 'J2',
+  HEARTBEAT_NOTES_CELL: 'J3',
+  TZ: Session.getScriptTimeZone() || 'Asia/Jakarta'
+};
+
+var PORTAL_SHEETS = {
+  MASTER_USER: 'Master_User',
+  MASTER_MODULE: 'Master_Module'
+};
+
+function doGet(e) {
+  try {
+    var boot = PORTAL_getLoginBootstrap_((e && e.parameter) || {});
+    var t = HtmlService.createTemplateFromFile('Index');
+    t.BOOTSTRAP_JSON = JSON.stringify(boot).replace(/</g, '\\u003c');
+    return t.evaluate()
+      .setTitle('ERP CV KIRAL - Portal')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  } catch (err) {
+    return HtmlService.createHtmlOutput('<h2>Portal error</h2><pre>'+PORTAL_escape_(err && err.message || err)+'</pre>').setTitle('Portal Error');
+  }
+}
+
+function include(filename) { return HtmlService.createHtmlOutputFromFile(filename).getContent(); }
+
+function SETUP_installPortalModule() {
+  PORTAL_ensureLogoutColumn_();
+  if (!PORTAL_readGlobalHeartbeat_().version) PORTAL_bumpHeartbeat_('Init portal flow-style security');
+  return TEST_portalHealth();
+}
+
+// v0.7: Secret disamakan langsung di kode Portal + Modul supaya tidak beda antar Script Properties.
+function SETUP_setPortalSecret(secret) {
+  return { success:true, message:'v0.7 memakai shared secret di kode. Tidak perlu set Script Properties.' };
+}
+
+function TEST_portalHealth() {
+  var boot = PORTAL_getLoginBootstrap_({});
+  return {
+    success: true,
+    version: PORTAL_CFG.VERSION,
+    email: boot.email,
+    state: boot.state,
+    mode: 'FLOW_STYLE_HMAC_NO_SECURITY_PASSPORT_SHEET',
+    heartbeat: boot.heartbeat,
+    sheetsUsed: [PORTAL_SHEETS.MASTER_USER, PORTAL_SHEETS.MASTER_MODULE]
+  };
+}
+
+function TEST_portalSessionDebug() {
+  var email = PORTAL_userEmail_();
+  var auth = PORTAL_securityCheck_(email, '');
+  return { success:true, email:email, auth:auth, heartbeat:PORTAL_readGlobalHeartbeat_() };
+}
+
+function PORTAL_getLoginBootstrap_(params) {
+  var email = PORTAL_userEmail_();
+  var auth = PORTAL_securityCheck_(email, '');
+  var state = !email ? 'EMAIL_EMPTY' : (auth.allowed ? 'LOGIN_READY' : 'FORBIDDEN');
+  return {
+    app: { code: PORTAL_CFG.MODULE_CODE, version: PORTAL_CFG.VERSION, title: 'ERP CV KIRAL' },
+    state: state,
+    email: email,
+    auth: auth,
+    passport: '',
+    modules: [],
+    heartbeat: PORTAL_readGlobalHeartbeat_(),
+    sessionPolicy: {
+      ttlMs: PORTAL_CFG.SESSION_TTL_MS,
+      hours: Math.round(PORTAL_CFG.SESSION_TTL_MS / 3600000),
+      previewExpiresAt: auth.allowed ? PORTAL_formatDateTime_(new Date(Date.now() + PORTAL_CFG.SESSION_TTL_MS)) : ''
+    },
+    now: PORTAL_formatDateTime_(new Date()),
+    forceLogin: !!(params && (params.login || params.logout || params.relogin || params.action === 'global_logout'))
+  };
+}
+
+function PORTAL_login() {
+  var email = PORTAL_userEmail_();
+  var auth = PORTAL_securityCheck_(email, '');
+  if (!auth.allowed) {
+    return { ok:false, state:'FORBIDDEN', auth:auth, reason:auth.reason || 'Akses ditolak' };
+  }
+  PORTAL_ensureLogoutColumn_();
+  var stamp = Date.now();
+  var token = PORTAL_makePassport_(auth.email, stamp);
+  var hb = PORTAL_bumpHeartbeat_('Login ' + auth.email);
+  return {
+    ok:true,
+    state:'LOGGED_IN',
+    auth:auth,
+    passport:token,
+    modules:PORTAL_getModulesForUser_(auth, token),
+    heartbeat:hb,
+    portalUrl: PORTAL_getPortalUrl_(),
+    session: PORTAL_sessionInfoFromToken_(auth.email, token),
+    now:PORTAL_formatDateTime_(new Date())
+  };
+}
+
+function PORTAL_refreshBootstrap(passport) {
+  var email = PORTAL_userEmail_();
+  var auth = PORTAL_securityCheck_(email, passport);
+  if (!auth.allowed) return { ok:false, auth:auth, modules:[], heartbeat:PORTAL_readGlobalHeartbeat_(), portalUrl:PORTAL_getPortalUrl_() };
+  return { ok:true, auth:auth, passport:passport, modules:PORTAL_getModulesForUser_(auth, passport), heartbeat:PORTAL_readGlobalHeartbeat_(), session:PORTAL_sessionInfoFromToken_(auth.email, passport), portalUrl:PORTAL_getPortalUrl_() };
+}
+
+function PORTAL_globalHeartbeat(passport, clientVersion) {
+  var email = PORTAL_userEmail_();
+  var auth = PORTAL_securityCheck_(email, passport);
+  var hb = PORTAL_readGlobalHeartbeat_();
+  return {
+    ok: auth.allowed,
+    reason: auth.reason,
+    shouldLogout: !auth.allowed,
+    user: { email: auth.email || email || '', name: auth.displayName || auth.email || email || '', role: auth.role || '', department: auth.department || '' },
+    serverVersion: hb.version,
+    updatedAt: hb.updatedAt,
+    shouldRefresh: !!clientVersion && String(clientVersion) !== String(hb.version),
+    session: auth.allowed ? PORTAL_sessionInfoFromToken_(auth.email, passport) : null,
+    portalUrl: PORTAL_getPortalUrl_(),
+    now: PORTAL_formatDateTime_(new Date())
+  };
+}
+
+function PORTAL_logout(passport) {
+  var email = PORTAL_userEmail_();
+  if (email) {
+    PORTAL_markLogout_(email, Date.now());
+    PORTAL_bumpHeartbeat_('Logout ' + email);
+  }
+  return { success:true, message:'Logout berhasil.', portalUrl:PORTAL_withLoginParam_(PORTAL_getPortalUrl_()) };
+}
+
+function PORTAL_touchGlobalChange(notes) {
+  var email = PORTAL_userEmail_();
+  var auth = PORTAL_securityCheck_(email, '');
+  if (!auth.allowed || !auth.isAdmin) throw new Error('Hanya admin yang boleh update heartbeat manual.');
+  var hb = PORTAL_bumpHeartbeat_(notes || 'Manual refresh trigger');
+  return { success:true, heartbeat:hb };
+}
+
+function PORTAL_securityCheck_(email, passport) {
+  email = PORTAL_normEmail_(email);
+  if (!email) return { allowed:false, reason:'EMAIL_KOSONG', email:'' };
+  var user = PORTAL_findUser_(email);
+  if (!user) return { allowed:false, reason:'USER_TIDAK_ADA_DI_MASTER_USER', email:email };
+  if (!PORTAL_isActive_(PORTAL_pickValue_(user, ['Status','Status_Akun','Aktif']))) return { allowed:false, reason:'USER_NONAKTIF', email:email, status:PORTAL_pickValue_(user, ['Status','Status_Akun','Aktif']) || '' };
+
+  if (passport) {
+    var pv = PORTAL_validatePassport_(email, passport);
+    if (!pv.ok) return { allowed:false, reason:'PASSPORT_' + pv.reason, email:email };
+  }
+
+  var role = PORTAL_pickValue_(user, ['Role','Jabatan','Hak_Akses','Akses']) || '';
+  var department = PORTAL_pickValue_(user, ['Department','Departemen','Divisi']) || '';
+  var allowedModules = PORTAL_pickValue_(user, ['Allowed_Modules','Allowed Modules','Module_Access','Hak_Modul','Akses_Modul','Modul']) || '';
+  var isAdmin = PORTAL_key_(role).indexOf('ADMIN') !== -1 || PORTAL_key_(department).indexOf('ADMIN') !== -1 || PORTAL_key_(allowedModules).indexOf('SUPERADMIN') !== -1 || PORTAL_key_(allowedModules).indexOf('ALL') !== -1;
+  return {
+    allowed:true,
+    reason:isAdmin ? 'ADMIN' : 'ACTIVE_USER',
+    email:email,
+    displayName:PORTAL_userDisplayName_(user, email),
+    role:role,
+    department:department,
+    allowedModules:allowedModules,
+    isAdmin:isAdmin,
+    loginAt: passport ? PORTAL_parsePassport_(passport).stamp : 0
+  };
+}
+
+function PORTAL_getModulesForUser_(auth, passport) {
+  var sh = PORTAL_master_().getSheetByName(PORTAL_SHEETS.MASTER_MODULE);
+  if (!sh) return [];
+  var rows = PORTAL_readRows_(sh);
+  var out = [];
+  rows.forEach(function(r) {
+    var code = PORTAL_clean_(r.Module_Code || r.Code || r.ID_Modul || r.Kode_Modul || '');
+    var name = PORTAL_clean_(r.Module_Name || r.Name || r.Nama_Modul || r.Nama || code);
+    var url = PORTAL_clean_(r.Web_App_URL || r.WebApp_URL || r.URL_Web_Aktif || r.URL || r.Link || '');
+    if (!code || !url) return;
+    if (!PORTAL_moduleStatusAllowed_(r.Status || r.Aktif)) return;
+    if (PORTAL_key_(code) === 'PORTAL') return;
+    if (!auth.isAdmin && !PORTAL_userCanOpenModule_(auth, code, name)) return;
+    var sep = url.indexOf('?') === -1 ? '?' : '&';
+    var withPassport = url + sep + 'vouch=' + encodeURIComponent(auth.email || '') + '&paspor=' + encodeURIComponent(passport || '') + '&passport=' + encodeURIComponent(passport || '') + '&from=PORTAL';
+    out.push({ code:code, id:code, name:name, nama:name, url:withPassport, rawUrl:url, status:r.Status || '', notes:r.Notes || '', icon:PORTAL_iconForModule_(code, name) });
+  });
+  out.sort(function(a,b){ return PORTAL_moduleOrder_(a.code)-PORTAL_moduleOrder_(b.code) || a.name.localeCompare(b.name); });
+  return out;
+}
+
+function PORTAL_userCanOpenModule_(auth, code, name) {
+  var targets = [PORTAL_key_(code), PORTAL_key_(name)];
+  var fields = [auth.allowedModules, auth.role, auth.department].map(PORTAL_key_).join('|');
+  if (fields.indexOf('ALL') !== -1 || fields.indexOf('SUPERADMIN') !== -1) return true;
+  return targets.some(function(t){ return t && fields.indexOf(t) !== -1; });
+}
+
+function PORTAL_makePassport_(email, stamp) {
+  stamp = Number(stamp) || Date.now();
+  return stamp + ':' + PORTAL_hashPassport_(email, stamp);
+}
+
+function PORTAL_parsePassport_(passport) {
+  var raw = PORTAL_clean_(passport);
+  var m = raw.match(/^(\d{10,}):([a-f0-9]{64})$/i);
+  return m ? { stamp:Number(m[1]) || 0, hash:String(m[2] || '').toLowerCase() } : { stamp:0, hash:raw.toLowerCase() };
+}
+
+function PORTAL_validatePassport_(email, passport) {
+  var p = PORTAL_parsePassport_(passport);
+  if (!p.stamp || !p.hash) return { ok:false, reason:'FORMAT_TIDAK_VALID' };
+  if (p.hash !== PORTAL_hashPassport_(email, p.stamp)) return { ok:false, reason:'HASH_TIDAK_VALID' };
+  if (Date.now() - p.stamp > PORTAL_CFG.SESSION_TTL_MS) return { ok:false, reason:'EXPIRED' };
+  var lastLogout = PORTAL_getLastLogoutStamp_(email);
+  if (lastLogout && p.stamp < lastLogout) return { ok:false, reason:'GLOBAL_LOGOUT' };
+  return { ok:true, stamp:p.stamp };
+}
+
+function PORTAL_hashPassport_(email, stamp) {
+  var raw = PORTAL_normEmail_(email) + '|' + Number(stamp || 0) + '|' + PORTAL_secret_();
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw)
+    .map(function(b){ return (b < 0 ? b + 256 : b).toString(16).padStart(2, '0'); })
+    .join('');
+}
+
+function PORTAL_secret_() { return PORTAL_CFG.SHARED_SECRET; }
+
+function PORTAL_sessionInfoFromToken_(email, passport) {
+  var p = PORTAL_parsePassport_(passport);
+  var exp = p.stamp ? new Date(p.stamp + PORTAL_CFG.SESSION_TTL_MS) : null;
+  return {
+    loginAt: p.stamp ? PORTAL_formatDateTime_(new Date(p.stamp)) : '',
+    expiresAt: exp ? PORTAL_formatDateTime_(exp) : '',
+    lastLogoutAt: PORTAL_getLastLogoutStamp_(email) ? PORTAL_formatDateTime_(new Date(PORTAL_getLastLogoutStamp_(email))) : '',
+    ttlHours: Math.round(PORTAL_CFG.SESSION_TTL_MS / 3600000)
+  };
+}
+
+function PORTAL_findUser_(email) {
+  var sh = PORTAL_master_().getSheetByName(PORTAL_SHEETS.MASTER_USER);
+  if (!sh) throw new Error('Sheet Master_User tidak ditemukan.');
+  var rows = PORTAL_readRows_(sh);
+  email = PORTAL_normEmail_(email);
+  for (var i=0; i<rows.length; i++) {
+    var e = PORTAL_pickValue_(rows[i], ['Email','Email_Google','Gmail','Email_User','User_Email']);
+    if (PORTAL_normEmail_(e) === email) return rows[i];
+  }
+  return null;
+}
+
+function PORTAL_userDisplayName_(user, email) {
+  return PORTAL_clean_(PORTAL_pickValue_(user || {}, ['Display_Name','Display Name','Nama','Nama User','Nama_User','Nama_Lengkap','Nama Lengkap','Name','User_Name','Username','User'])) || PORTAL_clean_(email);
+}
+
+function PORTAL_pickValue_(obj, aliases) {
+  aliases = aliases || [];
+  var map = {};
+  Object.keys(obj || {}).forEach(function(k){ map[PORTAL_key_(k)] = obj[k]; });
+  for (var i=0;i<aliases.length;i++) {
+    var key = PORTAL_key_(aliases[i]);
+    if (map[key] !== undefined) return map[key];
+  }
+  return '';
+}
+
+function PORTAL_ensureLogoutColumn_() {
+  var sh = PORTAL_master_().getSheetByName(PORTAL_SHEETS.MASTER_USER);
+  if (!sh) throw new Error('Master_User tidak ditemukan.');
+  var lastCol = Math.max(1, sh.getLastColumn());
+  var headers = sh.getRange(1,1,1,lastCol).getValues()[0].map(PORTAL_clean_);
+  var map = PORTAL_headerMap_(headers);
+  if (PORTAL_col_(map, ['Last_Logout_At','Global_Logout_At','Logout_At','Sesi_Terakhir_Logout'], false) === -1) {
+    sh.getRange(1, lastCol + 1).setValue('Last_Logout_At');
+  }
+}
+
+function PORTAL_markLogout_(email, stamp) {
+  var sh = PORTAL_master_().getSheetByName(PORTAL_SHEETS.MASTER_USER);
+  if (!sh) return;
+  PORTAL_ensureLogoutColumn_();
+  var vals = sh.getDataRange().getValues();
+  if (vals.length < 2) return;
+  var map = PORTAL_headerMap_(vals[0]);
+  var cEmail = PORTAL_col_(map, ['Email','Email_Google','Gmail','Email_User','User_Email'], false);
+  var cLogout = PORTAL_col_(map, ['Last_Logout_At','Global_Logout_At','Logout_At','Sesi_Terakhir_Logout'], false);
+  if (cEmail < 0 || cLogout < 0) return;
+  for (var r=1; r<vals.length; r++) {
+    if (PORTAL_normEmail_(vals[r][cEmail]) === PORTAL_normEmail_(email)) {
+      sh.getRange(r+1, cLogout+1).setValue(Number(stamp) || Date.now());
+      return;
+    }
+  }
+}
+
+function PORTAL_getLastLogoutStamp_(email) {
+  var user = PORTAL_findUser_(email);
+  if (!user) return 0;
+  var raw = PORTAL_pickValue_(user, ['Last_Logout_At','Global_Logout_At','Logout_At','Sesi_Terakhir_Logout']);
+  if (!raw) return 0;
+  if (raw instanceof Date) return raw.getTime();
+  var n = Number(raw);
+  if (n > 0) return n;
+  var d = new Date(raw);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
+}
+
+function PORTAL_readGlobalHeartbeat_() {
+  var sh = PORTAL_master_().getSheetByName(PORTAL_SHEETS.MASTER_MODULE);
+  if (!sh) return { version:'0', updatedAt:'', notes:'Master_Module belum ada' };
+  var version = String(sh.getRange(PORTAL_CFG.HEARTBEAT_CELL).getValue() || '0');
+  var updated = sh.getRange(PORTAL_CFG.HEARTBEAT_UPDATED_CELL).getValue();
+  var notes = sh.getRange(PORTAL_CFG.HEARTBEAT_NOTES_CELL).getValue();
+  return { version:version, updatedAt:PORTAL_formatDateTime_(updated), notes:notes || '' };
+}
+
+function PORTAL_bumpHeartbeat_(notes) {
+  var sh = PORTAL_master_().getSheetByName(PORTAL_SHEETS.MASTER_MODULE);
+  if (!sh) return { version:'0', updatedAt:'', notes:'Master_Module belum ada' };
+  var ts = Date.now();
+  sh.getRange(PORTAL_CFG.HEARTBEAT_CELL).setValue(ts);
+  sh.getRange(PORTAL_CFG.HEARTBEAT_UPDATED_CELL).setValue(new Date());
+  sh.getRange(PORTAL_CFG.HEARTBEAT_NOTES_CELL).setValue(notes || 'Update');
+  return PORTAL_readGlobalHeartbeat_();
+}
+
+function PORTAL_getPortalUrl_() {
+  try {
+    var rows = PORTAL_readRows_(PORTAL_master_().getSheetByName(PORTAL_SHEETS.MASTER_MODULE));
+    for (var i=0;i<rows.length;i++) {
+      var code=PORTAL_key_(rows[i].Module_Code || rows[i].Kode_Modul), name=PORTAL_key_(rows[i].Module_Name || rows[i].Nama_Modul);
+      if (code==='PORTAL' || name.indexOf('PORTAL')!==-1 || name.indexOf('BERANDA')!==-1) return PORTAL_clean_(rows[i].Web_App_URL || rows[i].WebApp_URL || rows[i].URL_Web_Aktif || rows[i].URL || '');
+    }
+  } catch(e) {}
+  return '';
+}
+
+function PORTAL_moduleStatusAllowed_(status) {
+  var s=PORTAL_key_(status);
+  if (!s) return true;
+  return ['OFF','DISABLED','INACTIVE','NONAKTIF','ARCHIVE','ARSIP','FALSE','STOP'].indexOf(s) === -1;
+}
+function PORTAL_iconForModule_(code, name) {
+  var k=PORTAL_key_(code+' '+name);
+  if(k.indexOf('SALES')!==-1||k.indexOf('PENJUALAN')!==-1)return'📦';
+  if(k.indexOf('PURCH')!==-1||k.indexOf('PEMBELIAN')!==-1)return'🧾';
+  if(k.indexOf('PROD')!==-1||k.indexOf('PRODUKSI')!==-1)return'🏭';
+  if(k.indexOf('FIN')!==-1||k.indexOf('FINANCE')!==-1)return'💼';
+  if(k==='WH'||k.indexOf('GUDANG')!==-1)return'🏬';
+  if(k.indexOf('OMNI')!==-1)return'🛒';
+  if(k.indexOf('RETUR')!==-1)return'↩️';
+  return'📁';
+}
+function PORTAL_moduleOrder_(code) { var order={SALES:10,PURCH:20,PROD:30,WH:40,FIN:50,OMNI:60,RETURQC:70,RETUR_QC:70}; return order[PORTAL_key_(code)] || 999; }
+
+function PORTAL_master_(){ return SpreadsheetApp.openById(PORTAL_CFG.MASTER_SPREADSHEET_ID); }
+function PORTAL_userEmail_(){ try { return PORTAL_normEmail_(Session.getActiveUser().getEmail()); } catch(e) { return ''; } }
+function PORTAL_clean_(v){ return String(v===null||v===undefined?'':v).trim(); }
+function PORTAL_normEmail_(v){ return PORTAL_clean_(v).toLowerCase(); }
+function PORTAL_key_(v){ return PORTAL_clean_(v).toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function PORTAL_isActive_(v){ var s=PORTAL_key_(v); return ['ACTIVE','AKTIF','ON','TRUE','YES','ENABLED','NEWCORE'].indexOf(s)!==-1; }
+function PORTAL_parseDate_(v){ if(v instanceof Date) return v; var d=new Date(v); return isNaN(d.getTime())?null:d; }
+function PORTAL_formatDateTime_(v){ var d=PORTAL_parseDate_(v); return d?Utilities.formatDate(d,PORTAL_CFG.TZ,'yyyy-MM-dd HH:mm:ss'):''; }
+function PORTAL_headerMap_(headers){ var m={}; for(var i=0;i<headers.length;i++){ var k=PORTAL_key_(headers[i]); if(k)m[k]=i; } return m; }
+function PORTAL_col_(map,names,required){ names=Array.isArray(names)?names:[names]; for(var i=0;i<names.length;i++){ var k=PORTAL_key_(names[i]); if(map[k]!==undefined)return map[k]; } if(required)throw new Error('Header tidak ditemukan: '+names.join('/')); return -1; }
+function PORTAL_readRows_(sh){ if(!sh)return[]; var vals=sh.getDataRange().getValues(); if(vals.length<2)return[]; var headers=vals[0].map(PORTAL_clean_); return vals.slice(1).filter(function(r){return r.some(function(c){return c!==''&&c!==null;});}).map(function(r){var o={}; headers.forEach(function(h,i){ if(h)o[h]=r[i]; }); return o;}); }
+function PORTAL_withLoginParam_(url){ url=PORTAL_clean_(url); if(!url)return ''; var sep=url.indexOf('?')===-1?'?':'&'; return url+sep+'login=1'; }
+function PORTAL_escape_(s){ return String(s||'').replace(/[&<>'"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c];}); }

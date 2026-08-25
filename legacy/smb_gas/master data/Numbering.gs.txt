@@ -1,0 +1,189 @@
+/****************************************************
+ * ERP CV KIRAL - NUMBERING + FORMATTER
+ ****************************************************/
+
+function FMT_pad_(value, length) {
+  var s = String(value);
+  while (s.length < length) s = "0" + s;
+  return s;
+}
+
+function FMT_dateParts_(dateValue) {
+  var d = dateValue ? new Date(dateValue) : new Date();
+  if (isNaN(d.getTime())) d = new Date();
+
+  var yyyy = d.getFullYear();
+  var yy = String(yyyy).slice(-2);
+  var mm = FMT_pad_(d.getMonth() + 1, 2);
+  var dd = FMT_pad_(d.getDate(), 2);
+
+  return {
+    yyyy: String(yyyy),
+    yy: yy,
+    mm: mm,
+    dd: dd,
+    yyyymmdd: String(yyyy) + mm + dd,
+    yymmdd: yy + mm + dd
+  };
+}
+
+function FMT_now_() {
+  return Utilities.formatDate(new Date(), ERP.DEFAULT_TIMEZONE, "dd/MM/yyyy HH:mm:ss");
+}
+
+function FMT_dateOnly_(dateValue) {
+  var d = dateValue ? new Date(dateValue) : new Date();
+  if (isNaN(d.getTime())) d = new Date();
+  return Utilities.formatDate(d, ERP.DEFAULT_TIMEZONE, "dd/MM/yyyy");
+}
+
+function FMT_userEmail_() {
+  return Session.getActiveUser().getEmail() || "unknown";
+}
+
+/**
+ * Parser angka aman:
+ * "0,5" -> 0.5
+ * "0.5" -> 0.5
+ * "1.234,56" -> 1234.56
+ * "1,234.56" -> 1234.56
+ * "25" -> 25
+ */
+function FMT_toNumber_(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number") return value;
+
+  var s = String(value).trim();
+  if (!s) return 0;
+
+  s = s.replace(/[Rp\s]/gi, "");
+  s = s.replace(/[^\d,.\-]/g, "");
+
+  if (!s || s === "-" || s === "," || s === ".") return 0;
+
+  var lastComma = s.lastIndexOf(",");
+  var lastDot = s.lastIndexOf(".");
+
+  if (lastComma !== -1 && lastDot !== -1) {
+    var decimalSep = lastComma > lastDot ? "," : ".";
+    var thousandSep = decimalSep === "," ? "." : ",";
+
+    s = s.split(thousandSep).join("");
+    s = s.replace(decimalSep, ".");
+    return parseFloat(s) || 0;
+  }
+
+  if (lastComma !== -1) {
+    var commaParts = s.split(",");
+    if (commaParts.length > 2) {
+      s = commaParts.join("");
+    } else {
+      var decimals = commaParts[1] || "";
+      if (decimals.length <= 2) s = commaParts[0] + "." + decimals;
+      else s = commaParts.join("");
+    }
+    return parseFloat(s) || 0;
+  }
+
+  if (lastDot !== -1) {
+    var dotParts = s.split(".");
+    if (dotParts.length > 2) {
+      s = dotParts.join("");
+    } else {
+      var before = dotParts[0] || "";
+      var after = dotParts[1] || "";
+
+      if (before === "0" || after.length <= 2) {
+        s = before + "." + after;
+      } else if (after.length === 3 && before.length >= 1) {
+        s = before + after;
+      } else {
+        s = before + "." + after;
+      }
+    }
+    return parseFloat(s) || 0;
+  }
+
+  return parseFloat(s) || 0;
+}
+
+/**
+ * Generate nomor dokumen dari Master_Numbering.
+ */
+function NUM_getNextDocNo_(docType, dateValue) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    docType = String(docType || "").trim().toUpperCase();
+    if (!docType) throw new Error("Doc_Type kosong.");
+
+    var sh = DB_getSheet_(ERP.MODULE.MASTER, ERP.SHEET.MASTER_NUMBERING);
+    var info = DB_getHeaderMap_(sh);
+
+    var cDoc = DB_col_(info, "Doc_Type");
+    var cFormat = DB_col_(info, "Format");
+    var cLastDate = DB_col_(info, "Last_Date");
+    var cSeq = DB_col_(info, "Last_Sequence");
+    var cReset = DB_col_(info, "Reset_Mode");
+
+    if (cDoc === -1 || cFormat === -1 || cLastDate === -1 || cSeq === -1) {
+      throw new Error("Header Master_Numbering belum lengkap.");
+    }
+
+    var lastRow = sh.getLastRow();
+    if (lastRow <= 1) throw new Error("Master_Numbering kosong.");
+
+    var data = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getValues();
+    var foundIndex = -1;
+
+    for (var i = 0; i < data.length; i++) {
+      if (String(data[i][cDoc] || "").trim().toUpperCase() === docType) {
+        foundIndex = i;
+        break;
+      }
+    }
+
+    if (foundIndex === -1) {
+      throw new Error("Doc_Type tidak ditemukan di Master_Numbering: " + docType);
+    }
+
+    var row = data[foundIndex];
+    var rowNumber = foundIndex + 2;
+    var parts = FMT_dateParts_(dateValue || new Date());
+
+    var resetMode = cReset !== -1 ? String(row[cReset] || "DAILY").trim().toUpperCase() : "DAILY";
+    var lastDate = String(row[cLastDate] || "").trim();
+    var lastSeq = parseInt(row[cSeq], 10) || 0;
+
+    var currentDateKey = parts.yyyymmdd;
+
+    if (resetMode === "DAILY" && lastDate !== currentDateKey) {
+      lastSeq = 0;
+    }
+
+    var nextSeq = lastSeq + 1;
+    var format = String(row[cFormat] || "").trim();
+    if (!format) throw new Error("Format kosong untuk Doc_Type: " + docType);
+
+    var docNo = format;
+    docNo = docNo.replace(/\{yyyy\}/g, parts.yyyy);
+    docNo = docNo.replace(/\{yy\}/g, parts.yy);
+    docNo = docNo.replace(/\{mm\}/g, parts.mm);
+    docNo = docNo.replace(/\{dd\}/g, parts.dd);
+    docNo = docNo.replace(/\{yyyymmdd\}/g, parts.yyyymmdd);
+    docNo = docNo.replace(/\{yymmdd\}/g, parts.yymmdd);
+
+    docNo = docNo.replace(/\{seq(\d+)\}/g, function(match, len) {
+      return FMT_pad_(nextSeq, parseInt(len, 10));
+    });
+
+    sh.getRange(rowNumber, cLastDate + 1).setValue(currentDateKey);
+    sh.getRange(rowNumber, cSeq + 1).setValue(nextSeq);
+
+    return docNo;
+
+  } finally {
+    lock.releaseLock();
+  }
+}

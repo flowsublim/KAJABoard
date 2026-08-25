@@ -1,0 +1,160 @@
+/****************************************************
+ * ERP CV KIRAL - STOCK MOVEMENT SERVICE
+ * Fondasi Gudang Core
+ ****************************************************/
+
+function SM_validateWarehouseHeaders_() {
+  DB_requireHeaders_(ERP.MODULE.WH, ERP.SHEET.STOCK_MOVEMENT, [
+    "Movement_ID", "Tanggal", "Item_ID", "Item_Name", "Warehouse_Code",
+    "Direction", "Movement_Type", "Qty", "Unit_Cost", "Source_Module",
+    "Source_ID", "Source_Line_ID", "Ref_No", "Notes",
+    "Created_At", "Created_By", "Is_Deleted"
+  ]);
+
+  DB_requireHeaders_(ERP.MODULE.WH, ERP.SHEET.STOCK_CUTOFF, [
+    "Cutoff_ID", "Cutoff_Date", "Item_ID", "Item_Name", "Warehouse_Code",
+    "Qty_Cutoff", "Unit_Cost", "Source", "Created_At", "Created_By", "Notes"
+  ]);
+
+  DB_requireHeaders_(ERP.MODULE.WH, ERP.SHEET.STOCK_OPNAME, [
+    "Opname_ID", "Opname_Date", "Item_ID", "Item_Name", "Warehouse_Code",
+    "System_Qty", "Physical_Qty", "Diff_Qty", "Reason", "Status",
+    "Created_At", "Created_By", "Posted_Movement_ID", "Notes"
+  ]);
+
+  return true;
+}
+
+function SM_getItem_(itemId) {
+  if (!itemId) return null;
+  return DB_findOne_(ERP.MODULE.MASTER, ERP.SHEET.MASTER_ITEM, "Item_ID", itemId);
+}
+
+/**
+ * Tambah mutasi stok.
+ *
+ * Input minimal:
+ * {
+ *   Tanggal,
+ *   Item_ID,
+ *   Direction,
+ *   Movement_Type,
+ *   Qty,
+ *   Unit_Cost,
+ *   Source_Module,
+ *   Source_ID,
+ *   Source_Line_ID,
+ *   Ref_No,
+ *   Notes
+ * }
+ */
+function SM_appendMovement_(input) {
+  input = input || {};
+
+  var direction = String(input.Direction || "").trim().toUpperCase();
+  var allowedDirection = ["IN", "OUT", "ADJUSTMENT", "VERIFY"];
+
+  if (allowedDirection.indexOf(direction) === -1) {
+    throw new Error("Direction tidak valid: " + direction);
+  }
+
+  var qty = FMT_toNumber_(input.Qty);
+  if (qty <= 0 && direction !== "VERIFY") {
+    throw new Error("Qty harus lebih dari 0.");
+  }
+
+  var itemId = String(input.Item_ID || "").trim();
+  if (!itemId) throw new Error("Item_ID wajib diisi.");
+
+  var item = SM_getItem_(itemId);
+  if (!item) throw new Error("Item_ID tidak ditemukan di Master_Item: " + itemId);
+
+  var tanggal = input.Tanggal || new Date();
+  var movementId = input.Movement_ID || NUM_getNextDocNo_("MOV", tanggal);
+
+  var row = {
+    Movement_ID: movementId,
+    Tanggal: FMT_dateOnly_(tanggal),
+    Item_ID: itemId,
+    Item_Name: String(item.Item_Name || input.Item_Name || "").trim(),
+    Warehouse_Code: String(input.Warehouse_Code || ERP.DEFAULT_WAREHOUSE).trim(),
+    Direction: direction,
+    Movement_Type: String(input.Movement_Type || "").trim().toUpperCase(),
+    Qty: qty,
+    Unit_Cost: FMT_toNumber_(input.Unit_Cost),
+    Source_Module: String(input.Source_Module || "").trim().toUpperCase(),
+    Source_ID: String(input.Source_ID || "").trim(),
+    Source_Line_ID: String(input.Source_Line_ID || "").trim(),
+    Ref_No: String(input.Ref_No || "").trim(),
+    Notes: String(input.Notes || "").trim(),
+    Created_At: FMT_now_(),
+    Created_By: FMT_userEmail_(),
+    Is_Deleted: false
+  };
+
+  if (!row.Movement_Type) throw new Error("Movement_Type wajib diisi.");
+
+  DB_appendObjects_(ERP.MODULE.WH, ERP.SHEET.STOCK_MOVEMENT, [row]);
+
+  return row;
+}
+
+/**
+ * Hitung saldo stok dari Stock_Cutoff + Stock_Movement.
+ * Ini versi awal, belum pakai cache/snapshot.
+ */
+function SM_getStockBalance_(itemId, warehouseCode) {
+  itemId = String(itemId || "").trim();
+  warehouseCode = String(warehouseCode || ERP.DEFAULT_WAREHOUSE).trim();
+
+  if (!itemId) throw new Error("Item_ID wajib diisi.");
+
+  var balance = 0;
+  var lastCost = 0;
+
+  var cutoffs = DB_readObjects_(ERP.MODULE.WH, ERP.SHEET.STOCK_CUTOFF);
+  cutoffs.forEach(function(r) {
+    if (
+      String(r.Item_ID || "").trim() === itemId &&
+      String(r.Warehouse_Code || ERP.DEFAULT_WAREHOUSE).trim() === warehouseCode
+    ) {
+      balance = FMT_toNumber_(r.Qty_Cutoff);
+      lastCost = FMT_toNumber_(r.Unit_Cost);
+    }
+  });
+
+  var movements = DB_readObjects_(ERP.MODULE.WH, ERP.SHEET.STOCK_MOVEMENT, {
+    excludeDeleted: true
+  });
+
+  movements.forEach(function(r) {
+    if (
+      String(r.Item_ID || "").trim() !== itemId ||
+      String(r.Warehouse_Code || ERP.DEFAULT_WAREHOUSE).trim() !== warehouseCode
+    ) {
+      return;
+    }
+
+    var dir = String(r.Direction || "").trim().toUpperCase();
+    var qty = FMT_toNumber_(r.Qty);
+    var cost = FMT_toNumber_(r.Unit_Cost);
+
+    if (dir === "IN") {
+      balance += qty;
+      if (cost > 0) lastCost = cost;
+    } else if (dir === "OUT") {
+      balance -= qty;
+    } else if (dir === "ADJUSTMENT") {
+      balance += qty;
+      if (cost > 0) lastCost = cost;
+    }
+  });
+
+  return {
+    Item_ID: itemId,
+    Warehouse_Code: warehouseCode,
+    Qty_Balance: balance,
+    Last_Cost: lastCost,
+    Value_Estimate: balance * lastCost
+  };
+}
