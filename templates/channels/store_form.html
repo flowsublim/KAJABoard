@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Store / Channel</p><h1>{{ title }}</h1><p class="muted">Store identity and mapping hooks only; this screen never creates orders or journal entries.</p></div></div>
+<form method="post" class="panel master-form">{% csrf_token %}{{ form.as_div }}<div class="form-actions"><a class="button" href="{% url 'channels:store-list' %}">Cancel</a><button class="button button-primary" type="submit">Save</button></div></form>
+{% endblock %}

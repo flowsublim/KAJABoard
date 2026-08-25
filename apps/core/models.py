@@ -163,3 +163,150 @@ class IdempotencyRecord(UUIDPrimaryKeyModel):
 
     def __str__(self) -> str:
         return f"{self.namespace}:{self.key} ({self.status})"
+
+
+class SequenceResetMode(models.TextChoices):
+    NEVER = "NEVER", "Never"
+    YEARLY = "YEARLY", "Yearly"
+    MONTHLY = "MONTHLY", "Monthly"
+    DAILY = "DAILY", "Daily"
+
+
+class DocumentSequence(UUIDPrimaryKeyModel, TimeStampedModel, EffectivePeriodModel):
+    """Effective document-number configuration owned by Core."""
+
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity",
+        on_delete=models.PROTECT,
+        related_name="document_sequences",
+    )
+    document_type = models.CharField(max_length=64)
+    name = models.CharField(max_length=150)
+    prefix = models.CharField(max_length=32, blank=True)
+    format_template = models.CharField(
+        max_length=120,
+        default="{prefix}{yyyymmdd}-{seq}",
+        help_text=(
+            "Allowed tokens: {prefix}, {yyyy}, {yy}, {mm}, {dd}, "
+            "{yyyymmdd}, {yymmdd}, and exactly one {seq}."
+        ),
+    )
+    padding = models.PositiveSmallIntegerField(default=4)
+    starting_number = models.PositiveBigIntegerField(default=1)
+    reset_mode = models.CharField(
+        max_length=10,
+        choices=SequenceResetMode.choices,
+        default=SequenceResetMode.DAILY,
+    )
+    notes = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ("legal_entity__code", "document_type", "-effective_from")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "document_type", "effective_from"),
+                name="core_sequence_entity_type_start_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(padding__gte=1) & Q(padding__lte=12),
+                name="core_sequence_padding_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(starting_number__gte=1),
+                name="core_sequence_starting_number_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(effective_to__isnull=True)
+                | Q(effective_to__gte=models.F("effective_from")),
+                name="core_documentsequence_effective_period_valid",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "document_type", "is_active"),
+                name="core_sequence_lookup_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.legal_entity.code}/{self.document_type}"
+
+
+class DocumentSequenceState(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Locked counter for one effective configuration and reset period."""
+
+    sequence = models.ForeignKey(
+        DocumentSequence,
+        on_delete=models.PROTECT,
+        related_name="states",
+    )
+    period_key = models.CharField(max_length=16)
+    last_value = models.PositiveBigIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("sequence", "period_key"),
+                name="core_sequence_state_period_unique",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.sequence} [{self.period_key}] = {self.last_value}"
+
+
+class DocumentNumberAllocation(UUIDPrimaryKeyModel):
+    """Final allocated number; this is not a business transaction document."""
+
+    sequence = models.ForeignKey(
+        DocumentSequence,
+        on_delete=models.PROTECT,
+        related_name="allocations",
+    )
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity",
+        on_delete=models.PROTECT,
+        related_name="document_number_allocations",
+    )
+    document_type = models.CharField(max_length=64)
+    business_date = models.DateField()
+    period_key = models.CharField(max_length=16)
+    sequence_value = models.PositiveBigIntegerField()
+    number = models.CharField(max_length=120)
+    request_key = models.CharField(max_length=120, blank=True)
+    allocated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="document_number_allocations",
+    )
+    allocated_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ("-allocated_at",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "number"),
+                name="core_document_number_entity_unique",
+            ),
+            models.UniqueConstraint(
+                fields=("sequence", "period_key", "sequence_value"),
+                name="core_document_number_value_unique",
+            ),
+            models.UniqueConstraint(
+                fields=("legal_entity", "document_type", "request_key"),
+                condition=~Q(request_key=""),
+                name="core_document_number_request_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "document_type", "business_date"),
+                name="core_docnum_lookup_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.number

@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Number Preview · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Non-consuming preview</p><h1>{{ sequence }}</h1><p class="muted">The value shown is informational and is not reserved until allocation.</p></div></div>
+<form method="get" class="panel master-form narrow">{{ form.as_div }}<div class="form-actions"><a class="button" href="{% url 'numbering:list' %}">Back</a><button class="button button-primary" type="submit">Preview</button></div></form>
+{% if preview %}<section class="panel preview-result"><p class="muted">Next number preview</p><strong>{{ preview }}</strong></section>{% endif %}
+{% endblock %}

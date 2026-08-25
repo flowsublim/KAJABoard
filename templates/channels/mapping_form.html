@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">External SKU Mapping</p><h1>{{ title }}</h1><p class="muted">Exact Store + SKU + variation mapping. End an effective mapping and create a new version to change historical meaning.</p></div></div>
+<form method="post" class="panel master-form">{% csrf_token %}{{ form.as_div }}<div class="form-actions"><a class="button" href="{% url 'channels:mapping-list' %}">Cancel</a><button class="button button-primary" type="submit">Save</button></div></form>
+{% endblock %}

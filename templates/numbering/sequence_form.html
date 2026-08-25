@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Document numbering</p><h1>{{ title }}</h1><p class="muted">Use controlled tokens and create a new effective version after a series has allocated numbers.</p></div></div>
+<form method="post" class="panel master-form">{% csrf_token %}{{ form.as_div }}<div class="form-actions"><a class="button" href="{% url 'numbering:list' %}">Cancel</a><button class="button button-primary" type="submit">Save</button></div></form>
+{% endblock %}

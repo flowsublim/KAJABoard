@@ -70,6 +70,7 @@ INSTALLED_APPS = [
     "apps.organizations.apps.OrganizationsConfig",
     "apps.partners.apps.PartnersConfig",
     "apps.catalog.apps.CatalogConfig",
+    "apps.channels.apps.ChannelsConfig",
 ]
 
 MIDDLEWARE = [

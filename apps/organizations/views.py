@@ -8,6 +8,8 @@ from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 
+from apps.channels.selectors import sku_mappings, stores
+from apps.core.selectors import document_sequences
 from apps.organizations.forms import (
     BusinessUnitForm,
     CostCenterForm,
@@ -105,10 +107,18 @@ def _add_service_errors(form, error: ValidationError) -> None:
 
 @login_required
 def workspace(request):
+    operational_counts = {
+        "sequences": document_sequences(request.user).count(),
+        "stores": stores(request.user).count(),
+        "mappings": sku_mappings(request.user).count(),
+    }
     return render(
         request,
         "master/workspace.html",
-        {"counts": organization_master_counts(request.user)},
+        {
+            "counts": organization_master_counts(request.user),
+            "operational_counts": operational_counts,
+        },
     )
 
 

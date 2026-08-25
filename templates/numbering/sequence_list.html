@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Document Numbering · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Operational settings</p><h1>Document Numbering</h1><p class="muted">Effective, entity-scoped series. Preview never consumes a number.</p></div>{% if can_add %}<a class="button button-primary" href="{% url 'numbering:create' %}">New series</a>{% endif %}</div>
+{% include "master/_filters.html" %}
+<section class="panel table-panel">
+  <div class="table-wrap"><table><thead><tr><th>Entity / Type</th><th>Format</th><th>Reset</th><th>Status</th><th>Effective</th><th class="actions">Actions</th></tr></thead>
+  <tbody>{% for object in page %}<tr><td><strong>{{ object.legal_entity.code }} / {{ object.document_type }}</strong><small>{{ object.name }}</small></td><td><code>{{ object.format_template }}</code><small>Prefix {{ object.prefix|default:"—" }} · pad {{ object.padding }}</small></td><td>{{ object.get_reset_mode_display }}</td><td>{% if object.is_active %}<span class="status status-active">Active</span>{% else %}<span class="status status-muted">Inactive</span>{% endif %}</td><td>{{ object.effective_from|date:"d M Y" }}{% if object.effective_to %} – {{ object.effective_to|date:"d M Y" }}{% endif %}</td><td class="actions"><a href="{% url 'numbering:preview' object.pk %}">Preview</a>{% if can_change %}<a href="{% url 'numbering:edit' object.pk %}">Edit</a><a href="{% url 'numbering:lifecycle' object.pk %}">{% if object.is_active %}Deactivate{% else %}Activate{% endif %}</a>{% endif %}</td></tr>{% empty %}<tr><td colspan="6" class="empty">No numbering configurations found.</td></tr>{% endfor %}</tbody></table></div>
+  {% include "master/_pagination.html" %}
+</section>
+{% endblock %}

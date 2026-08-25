@@ -30,7 +30,7 @@ def test_superuser_can_render_responsive_master_workspace_and_lists(client):
 
     assert workspace.status_code == 200
     assert b"Master Data Workspace" in workspace.content
-    assert b"Phase 2A" in workspace.content
+    assert b"Phase 2B" in workspace.content
     assert partners.status_code == 200
     assert items.status_code == 200
 
@@ -86,7 +86,7 @@ def test_login_page_uses_custom_application_shell(client):
     assert b"PT KAJA VASTRALOKA KREASINDO" in response.content
 
 
-def test_all_phase_2a_templates_compile_and_local_stylesheet_is_discoverable():
+def test_all_master_templates_compile_and_local_stylesheet_is_discoverable():
     template_root = settings.BASE_DIR / "templates"
     for template_path in template_root.rglob("*.html"):
         get_template(template_path.relative_to(template_root).as_posix())

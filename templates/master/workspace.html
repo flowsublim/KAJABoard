@@ -2,20 +2,24 @@
 {% block title %}Master Workspace · KAJABoard{% endblock %}
 {% block content %}
 <div class="page-header">
-  <div><p class="eyebrow">Master / Settings</p><h1>Master Data Workspace</h1><p class="muted">Canonical organization, partner, and catalog identities for later KAJABoard workflows.</p></div>
+  <div><p class="eyebrow">Master / Settings</p><h1>Master Data Workspace</h1><p class="muted">Canonical identities and operational configuration for later KAJABoard workflows.</p></div>
 </div>
 <div class="metric-grid">
   {% if perms.organizations.view_legalentity %}<a class="metric-card" href="{% url 'organizations:master-list' 'legal-entities' %}"><span>Legal Entities</span><strong>{{ counts.legal_entities }}</strong></a>{% endif %}
   {% if perms.organizations.view_businessunit %}<a class="metric-card" href="{% url 'organizations:master-list' 'business-units' %}"><span>Business Units</span><strong>{{ counts.business_units }}</strong></a>{% endif %}
   {% if perms.organizations.view_costcenter %}<a class="metric-card" href="{% url 'organizations:master-list' 'cost-centers' %}"><span>Cost Centers</span><strong>{{ counts.cost_centers }}</strong></a>{% endif %}
   {% if perms.organizations.view_warehouse %}<a class="metric-card" href="{% url 'organizations:master-list' 'warehouses' %}"><span>Warehouses</span><strong>{{ counts.warehouses }}</strong></a>{% endif %}
+  {% if perms.core.view_documentsequence %}<a class="metric-card" href="{% url 'numbering:list' %}"><span>Numbering Series</span><strong>{{ operational_counts.sequences }}</strong></a>{% endif %}
+  {% if perms.channels.view_store %}<a class="metric-card" href="{% url 'channels:store-list' %}"><span>Stores / Channels</span><strong>{{ operational_counts.stores }}</strong></a>{% endif %}
+  {% if perms.channels.view_externalskumap %}<a class="metric-card" href="{% url 'channels:mapping-list' %}"><span>External SKU Maps</span><strong>{{ operational_counts.mappings }}</strong></a>{% endif %}
 </div>
 <section class="panel">
   <div class="panel-heading"><div><h2>Foundation boundary</h2><p>These screens maintain master identity and eligibility only.</p></div></div>
   <div class="boundary-grid">
     <div><span class="status status-info">Catalog</span><h3>No stock quantity</h3><p>Items, UOM, and warehouses do not create inventory balances or movements.</p></div>
     <div><span class="status status-info">Partners</span><h3>One identity, many roles</h3><p>Customer and vendor views share BusinessPartner as their source of truth.</p></div>
-    <div><span class="status status-warning">Deferred</span><h3>No transaction modules</h3><p>Sales, Purchasing, Production, Warehouse posting, and Finance remain outside Phase 2A.</p></div>
+    <div><span class="status status-info">Operations</span><h3>Configuration only</h3><p>Numbering, Store, and external SKU mapping are ready without creating orders or postings.</p></div>
+    <div><span class="status status-warning">Deferred</span><h3>No transaction modules</h3><p>Sales, Purchasing, Production, Warehouse posting, Omnichannel import, POS, and Finance remain outside Phase 2B.</p></div>
   </div>
 </section>
 {% endblock %}
