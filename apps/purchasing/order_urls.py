@@ -2,8 +2,7 @@ from django.urls import path
 
 from apps.purchasing import views
 
-app_name = "purchasing"
-
+app_name = "purchasing_operations"
 urlpatterns = [
     path("", views.order_list, name="order-list"),
     path("new/", views.order_create, name="order-create"),
@@ -11,12 +10,4 @@ urlpatterns = [
     path("<uuid:pk>/lines/new/", views.order_line_add, name="order-line-add"),
     path("<uuid:pk>/confirm/", views.order_confirm, name="order-confirm"),
     path("<uuid:pk>/cancel/", views.order_cancel, name="order-cancel"),
-    path("purchase-categories/", views.category_list, name="category-list"),
-    path("purchase-categories/new/", views.category_create, name="category-create"),
-    path("purchase-categories/<uuid:pk>/edit/", views.category_edit, name="category-edit"),
-    path(
-        "purchase-categories/<uuid:pk>/lifecycle/",
-        views.category_lifecycle,
-        name="category-lifecycle",
-    ),
 ]

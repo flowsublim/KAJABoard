@@ -2,7 +2,37 @@ from django import forms
 
 from apps.organizations.models import CostCenter
 from apps.organizations.selectors import accessible_legal_entities
-from apps.purchasing.models import PurchaseCategory
+from apps.purchasing.models import PurchaseCategory, PurchaseOrder, PurchaseOrderLine
+
+
+class PurchaseOrderForm(forms.ModelForm):
+    class Meta:
+        model = PurchaseOrder
+        fields = (
+            "legal_entity",
+            "vendor",
+            "vendor_reference",
+            "project",
+            "document_date",
+            "expected_date",
+            "currency",
+            "freight_amount",
+            "notes",
+        )
+
+
+class PurchaseOrderLineForm(forms.ModelForm):
+    class Meta:
+        model = PurchaseOrderLine
+        fields = (
+            "item",
+            "purchase_category",
+            "quantity",
+            "unit_price",
+            "discount_amount",
+            "tax_rate",
+            "notes",
+        )
 
 
 class PurchaseCategoryForm(forms.ModelForm):
