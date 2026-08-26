@@ -150,6 +150,35 @@ td small { display: block; color: var(--muted); margin-top: 4px; }
 .stacked-form { display: grid; gap: 10px; }
 .stacked-form .button { margin-top: 12px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.kb-modal { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 28px; opacity: 1; transition: opacity .15s ease; }
+.kb-modal[aria-hidden="true"] { opacity: 0; pointer-events: none; }
+.kb-modal__backdrop { position: absolute; inset: 0; background: rgba(14, 25, 58, .52); }
+.kb-modal__dialog { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(720px, 100%); max-height: min(820px, calc(100vh - 56px)); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 24px 70px rgba(10, 20, 48, .28); overflow: hidden; }
+.kb-modal__dialog.modal-sm { width: min(440px, 100%); }
+.kb-modal__dialog.modal-md { width: min(720px, 100%); }
+.kb-modal__dialog.modal-lg { width: min(980px, 100%); }
+.kb-modal__dialog.modal-xl { width: min(1240px, 100%); }
+.kb-modal__header, .kb-modal__footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; background: var(--surface); }
+.kb-modal__header { border-bottom: 1px solid var(--border); }
+.kb-modal__header h2 { font-size: 18px; }
+.kb-modal__header .eyebrow:empty { display: none; }
+.kb-modal__body { min-height: 0; overflow: auto; padding: 20px; }
+.kb-modal__body .content { width: 100%; padding: 0; }
+.kb-modal__body .page-header { margin-bottom: 16px; }
+.kb-modal__body .panel { box-shadow: none; margin: 0; padding: 0; border: 0; border-radius: 0; }
+.kb-modal__footer { justify-content: flex-end; border-top: 1px solid var(--border); }
+.kb-modal__footer:empty { display: none; }
+.kb-modal__close { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 24px; cursor: pointer; }
+.kb-modal__close:hover { background: var(--surface-soft); color: var(--text); }
+.modal-open { overflow: hidden; }
+.modal-loading { color: var(--muted); }
+.toast-container { position: fixed; z-index: 120; top: 18px; right: 18px; display: grid; gap: 10px; width: min(380px, calc(100vw - 36px)); }
+.toast { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 13px 14px; border: 1px solid var(--border); border-left: 4px solid var(--brand); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow); font-size: 14px; animation: toast-in .16s ease-out; }
+.toast-success { border-left-color: var(--success); }.toast-warning { border-left-color: var(--warning); }.toast-error { border-left-color: var(--danger); }.toast-info { border-left-color: var(--brand); }
+.toast button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+#kb-print-root { display: none; }
+@media print { body > .app-shell, body > .kb-modal, body > .toast-container { display: none !important; } #kb-print-root { display: block !important; } #kb-print-root .button, #kb-print-root .page-actions, #kb-print-root .sidebar { display: none !important; } }
 
 @media (max-width: 1000px) {
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
@@ -178,6 +207,10 @@ td small { display: block; color: var(--muted); margin-top: 4px; }
   .page-actions { justify-content: flex-start; }
   .form-actions { grid-column: 1; }
   .role-list > div { grid-template-columns: 1fr; gap: 7px; }
+  .kb-modal { padding: 0; }
+  .kb-modal__dialog, .kb-modal__dialog.modal-sm, .kb-modal__dialog.modal-md, .kb-modal__dialog.modal-lg, .kb-modal__dialog.modal-xl { width: 100%; height: 100vh; max-height: none; border: 0; border-radius: 0; }
+  .kb-modal__body { padding: 16px; }
+  .toast-container { top: 10px; right: 10px; width: calc(100vw - 20px); }
 }
 @media (max-width: 440px) {
   .metric-grid { grid-template-columns: 1fr; }

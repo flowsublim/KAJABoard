@@ -1,0 +1,1 @@
+<div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true">{% if messages %}{% for message in messages %}<div class="toast toast-{{ message.tags|default:'info' }}" role="status"><span>{{ message }}</span><button type="button" aria-label="Tutup notifikasi" data-toast-close>×</button></div>{% endfor %}{% endif %}</div>
