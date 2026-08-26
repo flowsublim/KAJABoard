@@ -16,6 +16,7 @@ from apps.core.services.snapshots import changed_field_names, model_snapshot
 from apps.organizations.models import BusinessUnit, LegalEntity
 from apps.partners.models import BusinessPartner, PartnerRoleType
 from apps.sales.models import DiscountType, SalesOrder, SalesOrderLine, SalesOrderState
+from apps.sales.services.credit import record_sales_order_credit_control
 
 SALES_ORDER_DOCUMENT_TYPE = "SALES_ORDER"
 MONEY_QUANTUM = Decimal("0.01")
@@ -488,6 +489,18 @@ def confirm_sales_order(order, *, actor=None, idempotency_key="") -> SalesOrder:
     locked.full_clean()
     locked.save()
     _audit(locked, action="sales.salesorder.confirmed", actor=actor, before=before)
+    credit_control = record_sales_order_credit_control(locked, actor=actor)
+    if credit_control.status == "HELD":
+        credit_before = model_snapshot(locked)
+        locked.state = SalesOrderState.ON_HOLD
+        locked.save(update_fields=("state", "updated_at"))
+        _audit(
+            locked,
+            action="sales.salesorder.credit_held",
+            actor=actor,
+            reason="Authoritative Finance exposure exceeds the configured credit limit.",
+            before=credit_before,
+        )
     if claim:
         complete_idempotency(
             claim.record.pk,

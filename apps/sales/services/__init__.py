@@ -1,4 +1,9 @@
-from apps.sales.services.credit import CreditCheckContext, customer_credit_check_context
+from apps.sales.services.credit import (
+    CreditCheckContext,
+    customer_credit_check_context,
+    evaluate_sales_order_credit,
+    override_sales_order_credit_hold,
+)
 from apps.sales.services.deliveries import (
     add_draft_delivery_line,
     cancel_delivery,
@@ -39,6 +44,7 @@ __all__ = [
     "confirm_sales_order",
     "create_draft_sales_order",
     "customer_credit_check_context",
+    "evaluate_sales_order_credit",
     "hold_sales_order",
     "release_sales_order",
     "remove_draft_line",
@@ -61,4 +67,5 @@ __all__ = [
     "remove_draft_invoice_line",
     "update_draft_invoice",
     "update_draft_invoice_line",
+    "override_sales_order_credit_hold",
 ]

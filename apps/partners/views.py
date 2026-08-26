@@ -15,6 +15,7 @@ from apps.partners.services import (
     remove_partner_role,
     update_business_partner_with_roles,
 )
+from apps.projects.selectors import customer_360, statement_of_account
 
 
 def _require(user, action: str, model) -> None:
@@ -130,6 +131,25 @@ def partner_edit(request, pk):
         request,
         "partners/partner_form.html",
         {"form": form, "title": f"Edit {partner}", "partner": partner},
+    )
+
+
+@login_required
+def partner_customer_360(request, pk):
+    _require(request.user, "view", BusinessPartner)
+    partner = get_object_or_404(business_partners(request.user), pk=pk)
+    context = customer_360(request.user, customer=partner)
+    return render(request, "partners/customer_360.html", context)
+
+
+@login_required
+def partner_statement_of_account(request, pk):
+    _require(request.user, "view", BusinessPartner)
+    partner = get_object_or_404(business_partners(request.user), pk=pk)
+    return render(
+        request,
+        "partners/statement_of_account.html",
+        {"customer": partner, "exposure": statement_of_account(request.user, customer=partner)},
     )
 
 

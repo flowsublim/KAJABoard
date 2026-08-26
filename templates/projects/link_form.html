@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<div class="page-header"><div><p class="eyebrow">{{ project.code }}</p><h1>Link Sales Order</h1></div></div><form method="post" class="panel form-panel">{% csrf_token %}{{ form.as_p }}<button class="button button-primary" type="submit">Link Sales Order</button></form>{% endblock %}

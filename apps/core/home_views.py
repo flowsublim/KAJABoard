@@ -44,6 +44,15 @@ def _module_cards(user) -> tuple[HomeModule, ...]:
                 group="OPERASIONAL",
             )
         )
+    if user.has_perm("projects.view_project"):
+        modules.append(
+            HomeModule(
+                "Projects & Contracts",
+                "Kontrak, anggaran, dan handoff B2B.",
+                reverse("projects:list"),
+                "OPERASIONAL",
+            )
+        )
 
     master_permissions = (
         ("organizations.view_legalentity", "organizations:master-list"),

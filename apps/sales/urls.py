@@ -15,6 +15,7 @@ urlpatterns = [
     path("<uuid:pk>/confirm/", views.order_confirm, name="order-confirm"),
     path("<uuid:pk>/cancel/", views.order_cancel, name="order-cancel"),
     path("<uuid:pk>/hold-release/", views.order_hold_release, name="order-hold-release"),
+    path("<uuid:pk>/credit-override/", views.order_credit_override, name="order-credit-override"),
     path("deliveries/", views.delivery_list, name="delivery-list"),
     path("deliveries/new/", views.delivery_create, name="delivery-create"),
     path("deliveries/<uuid:pk>/", views.delivery_detail, name="delivery-detail"),

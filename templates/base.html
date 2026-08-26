@@ -16,10 +16,11 @@
       </a>
       <nav aria-label="Navigasi utama">
         <a href="{% url 'home:home' %}">Beranda</a>
-        {% if perms.sales.view_salesorder or perms.sales.view_salesdelivery or perms.sales.view_salesinvoice %}<p class="nav-label">Operasional</p>{% endif %}
+        {% if perms.sales.view_salesorder or perms.sales.view_salesdelivery or perms.sales.view_salesinvoice or perms.projects.view_project %}<p class="nav-label">Operasional</p>{% endif %}
         {% if perms.sales.view_salesorder %}<a href="{% url 'sales:order-list' %}">Sales Orders</a>{% endif %}
         {% if perms.sales.view_salesdelivery %}<a href="{% url 'sales:delivery-list' %}">Surat Jalan</a>{% endif %}
         {% if perms.sales.view_salesinvoice %}<a href="{% url 'sales:invoice-list' %}">Invoice Sources</a>{% endif %}
+        {% if perms.projects.view_project %}<a href="{% url 'projects:list' %}">Projects &amp; Contracts</a>{% endif %}
         {% if perms.organizations.view_legalentity or perms.organizations.view_businessunit or perms.organizations.view_department or perms.organizations.view_costcenter or perms.organizations.view_warehouse or perms.partners.view_businesspartner or perms.catalog.view_item or perms.catalog.view_itemcategory or perms.catalog.view_uom or perms.channels.view_store or perms.channels.view_externalskumap or perms.purchasing.view_purchasecategory or perms.core.view_documentsequence or perms.finance.view_coaaccount or perms.finance.view_coamapping or perms.tax.view_taxregistration or perms.data_exchange.view_importbatch %}<p class="nav-label">Master &amp; Konfigurasi</p>{% endif %}
         {% if perms.organizations.view_legalentity or perms.organizations.view_businessunit or perms.organizations.view_department or perms.organizations.view_costcenter or perms.organizations.view_warehouse %}<a href="{% url 'organizations:workspace' %}">Master Workspace</a>{% endif %}
         {% if perms.organizations.view_legalentity %}<a href="{% url 'organizations:master-list' 'legal-entities' %}">Legal Entities</a>{% endif %}
@@ -44,7 +45,7 @@
     <div class="app-main">
       <header class="topbar">
         <a class="mobile-brand" href="{% url 'home:home' %}">KAJABoard</a>
-        <span class="phase-badge">Phase 3B · Delivery &amp; Invoice Source</span>
+        <span class="phase-badge">Phase 3C · Projects &amp; Customer 360 · Phase 3B foundation</span>
         <div class="user-menu">
           <span>{{ request.user.email }}</span>
           <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="link-button" type="submit">Keluar</button></form>

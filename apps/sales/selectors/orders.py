@@ -15,6 +15,7 @@ def sales_orders(user, *, search="", state="", legal_entity=None):
         "business_unit",
         "created_by",
         "confirmed_by",
+        "credit_control",
     ).filter(legal_entity__in=accessible_legal_entities(user))
     if legal_entity is not None:
         queryset = queryset.filter(legal_entity=legal_entity)

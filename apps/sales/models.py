@@ -45,6 +45,14 @@ class SalesInvoiceState(models.TextChoices):
     CANCELLED = "CANCELLED", "Cancelled"
 
 
+class CreditControlStatus(models.TextChoices):
+    NOT_AVAILABLE = "NOT_AVAILABLE", "Finance source unavailable"
+    NOT_CONFIGURED = "NOT_CONFIGURED", "Credit limit not configured"
+    PASSED = "PASSED", "Passed"
+    HELD = "HELD", "Held"
+    OVERRIDDEN = "OVERRIDDEN", "Overridden"
+
+
 class SalesOrder(UUIDPrimaryKeyModel, TimeStampedModel):
     """Commercial B2B order source. It deliberately creates no stock or finance entry."""
 
@@ -202,6 +210,71 @@ class SalesOrderLine(UUIDPrimaryKeyModel, TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.sales_order.document_number} line {self.line_number}"
+
+
+class SalesOrderCreditControl(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Sales-side evaluation snapshot; Finance remains the authority for exposure balances."""
+
+    sales_order = models.OneToOneField(
+        SalesOrder, on_delete=models.PROTECT, related_name="credit_control"
+    )
+    customer = models.ForeignKey(
+        BusinessPartner, on_delete=models.PROTECT, related_name="sales_credit_controls"
+    )
+    legal_entity = models.ForeignKey(
+        LegalEntity, on_delete=models.PROTECT, related_name="sales_credit_controls"
+    )
+    status = models.CharField(max_length=20, choices=CreditControlStatus.choices)
+    credit_limit_snapshot = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True
+    )
+    outstanding_snapshot = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True
+    )
+    order_exposure_snapshot = models.DecimalField(max_digits=18, decimal_places=2)
+    source_available = models.BooleanField(default=False)
+    source_name = models.CharField(max_length=100)
+    evaluated_at = models.DateTimeField()
+    evaluated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="evaluated_sales_credit_controls",
+    )
+    override_reason = models.TextField(blank=True)
+    overridden_at = models.DateTimeField(null=True, blank=True)
+    overridden_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="overridden_sales_credit_controls",
+    )
+
+    class Meta:
+        permissions = [
+            ("override_salesorder_credit", "Can override Sales Order credit hold"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(order_exposure_snapshot__gte=0), name="sales_credit_order_nonneg"
+            ),
+            models.CheckConstraint(
+                condition=Q(credit_limit_snapshot__isnull=True) | Q(credit_limit_snapshot__gte=0),
+                name="sales_credit_limit_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=Q(outstanding_snapshot__isnull=True) | Q(outstanding_snapshot__gte=0),
+                name="sales_credit_outstanding_nonneg",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("customer", "status"), name="sales_credit_customer_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.sales_order.document_number} / {self.status}"
 
 
 class SalesDelivery(UUIDPrimaryKeyModel, TimeStampedModel):

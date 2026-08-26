@@ -50,6 +50,7 @@ from apps.sales.services import (
     create_draft_sales_order_invoice,
     create_proforma,
     hold_sales_order,
+    override_sales_order_credit_hold,
     post_delivery,
     release_sales_order,
     remove_draft_delivery_line,
@@ -153,6 +154,10 @@ def order_detail(request, pk):
             in {SalesOrderState.DRAFT, SalesOrderState.CONFIRMED, SalesOrderState.ON_HOLD},
             "can_hold": request.user.has_perm("sales.hold_salesorder")
             and order.state in {SalesOrderState.CONFIRMED, SalesOrderState.ON_HOLD},
+            "can_credit_override": request.user.has_perm("sales.override_salesorder_credit")
+            and order.state == SalesOrderState.ON_HOLD
+            and getattr(order, "credit_control", None)
+            and order.credit_control.status == "HELD",
         },
     )
 
@@ -287,6 +292,28 @@ def order_cancel(request, pk):
         request,
         "sales/transition_form.html",
         {"form": form, "order": order, "title": f"Cancel {order}", "submit_label": "Cancel order"},
+    )
+
+
+@login_required
+def order_credit_override(request, pk):
+    _require(request.user, "sales.override_salesorder_credit")
+    order = _order_or_404(request.user, pk)
+    form = SalesOrderTransitionForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            override_sales_order_credit_hold(
+                order, actor=request.user, reason=form.cleaned_data["reason"]
+            )
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, "Credit hold overridden with an audit reason.")
+            return redirect("sales:order-detail", pk=order.pk)
+    return render(
+        request,
+        "sales/transition_form.html",
+        {"form": form, "order": order, "title": "Override credit hold", "submit_label": "Override"},
     )
 
 
