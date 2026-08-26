@@ -63,7 +63,7 @@ def test_restricted_home_and_sidebar_only_show_permitted_modules(client):
 
     assert response.status_code == 200
     assert b"Partners" in response.content
-    assert b"Sales" not in response.content
+    assert b"Sales Order</a>" not in response.content
     assert b"Finance Configuration" not in response.content
     assert b"Surat Jalan" not in response.content
     assert client.get(reverse("sales:order-list")).status_code == 403
@@ -83,3 +83,67 @@ def test_master_workspace_remains_available_at_settings_for_authorized_user(clie
     assert response.status_code == 200
     assert response.request["PATH_INFO"] == "/settings/"
     assert b"Master Data Workspace" in response.content
+
+
+@pytest.mark.django_db
+def test_sidebar_sales_children_are_permission_aware_and_never_offer_payment(client):
+    entity = LegalEntity.objects.create(code="NAV-SALES", name="Sales Navigation")
+    user = User.objects.create_user("sales-nav@example.com", "password")
+    OrganizationMembership.objects.create(user=user, legal_entity=entity)
+    user.user_permissions.add(Permission.objects.get(codename="view_salesorder"))
+    client.force_login(user)
+
+    response = client.get(reverse("home:home"))
+
+    assert b"Sales" in response.content
+    assert b"Sales Order" in response.content
+    assert b'href="/sales/deliveries/"' not in response.content
+    assert b'href="/sales/invoices/"' not in response.content
+    assert b"Payment" not in response.content
+    assert client.get(reverse("sales:delivery-list")).status_code == 403
+
+
+@pytest.mark.django_db
+def test_sidebar_hides_sales_parent_without_visible_sales_children(client):
+    user = User.objects.create_user("no-sales-nav@example.com", "password")
+    client.force_login(user)
+
+    response = client.get(reverse("home:home"))
+
+    assert b"<summary>Sales</summary>" not in response.content
+
+
+@pytest.mark.django_db
+def test_sidebar_uses_invoice_label_and_opens_sales_for_active_route(client):
+    entity = LegalEntity.objects.create(code="NAV-ACTIVE", name="Active Navigation")
+    user = User.objects.create_user("active-nav@example.com", "password")
+    OrganizationMembership.objects.create(user=user, legal_entity=entity)
+    user.user_permissions.add(
+        Permission.objects.get(codename="view_salesinvoice"),
+        Permission.objects.get(codename="view_salesorder"),
+    )
+    client.force_login(user)
+
+    response = client.get(reverse("sales:invoice-list"))
+
+    assert response.status_code == 200
+    assert b">Invoice<" in response.content
+    assert b'<a class="is-active" href="/sales/invoices/">Invoice</a>' in response.content
+    assert b'nav-module is-active" open' in response.content
+
+
+@pytest.mark.django_db
+def test_superuser_sidebar_shows_current_modular_sections(client):
+    user = User.objects.create_superuser("sidebar-admin@example.com", "password")
+    client.force_login(user)
+
+    response = client.get(reverse("home:home"))
+
+    for label in (
+        b"<summary>Sales</summary>",
+        b"<summary>Projects &amp; Contracts</summary>",
+        b"<summary>Master Data</summary>",
+        b"<summary>Finance Configuration</summary>",
+        b"<summary>System Configuration</summary>",
+    ):
+        assert label in response.content
