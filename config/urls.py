@@ -15,5 +15,6 @@ urlpatterns = [
     path("settings/data-exchange/", include("apps.data_exchange.urls", namespace="data_exchange")),
     path("partners/", include("apps.partners.urls", namespace="partners")),
     path("catalog/", include("apps.catalog.urls", namespace="catalog")),
+    path("sales/", include("apps.sales.urls", namespace="sales")),
     path("", include("apps.organizations.urls", namespace="organizations")),
 ]

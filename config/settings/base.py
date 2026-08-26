@@ -75,6 +75,7 @@ INSTALLED_APPS = [
     "apps.finance.apps.FinanceConfig",
     "apps.tax.apps.TaxConfig",
     "apps.data_exchange.apps.DataExchangeConfig",
+    "apps.sales.apps.SalesConfig",
 ]
 
 MIDDLEWARE = [

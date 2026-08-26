@@ -92,6 +92,24 @@ td small { display: block; color: var(--muted); margin-top: 4px; }
 .master-form ul#id_roles { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 12px; }
 .master-form ul#id_roles label { font-weight: 500; }
 .form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 10px; padding-top: 18px; border-top: 1px solid var(--border); }
+.form-panel { display: grid; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 24px; }
+.field { min-width: 0; }
+.field-wide { grid-column: 1 / -1; }
+.field label { display: block; margin-bottom: 7px; font-size: 13px; font-weight: 700; }
+.field small { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
+.field-error { margin-top: 5px; color: var(--danger); font-size: 12px; }
+.button-danger { border-color: var(--danger); background: var(--danger); color: #fff; }
+.button-danger:hover { background: #8f1d13; border-color: #8f1d13; }
+.page-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.page-actions form { margin: 0; }
+.detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, .45fr); gap: 24px; }
+.detail-list, .total-list { margin: 0; }
+.detail-list > div, .total-list > div { display: flex; justify-content: space-between; gap: 18px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.detail-list dt, .total-list dt { color: var(--muted); }
+.detail-list dd, .total-list dd { margin: 0; text-align: right; }
+.total-list .grand { padding-top: 16px; border-bottom: 0; font-size: 17px; font-weight: 800; }
+.number { text-align: right; font-variant-numeric: tabular-nums; }
 .narrow { max-width: 650px; grid-template-columns: 1fr; }
 .role-list > div { display: grid; grid-template-columns: 180px 1fr auto; gap: 16px; align-items: center; padding: 12px 0; border-top: 1px solid var(--border); }
 .flag-list { display: flex; gap: 4px; }
@@ -129,6 +147,8 @@ td small { display: block; color: var(--muted); margin-top: 4px; }
   .filterbar { align-items: stretch; flex-wrap: wrap; }
   .search-field { flex-basis: 100%; }
   .master-form { grid-template-columns: 1fr; }
+  .form-grid, .detail-grid { grid-template-columns: 1fr; }
+  .page-actions { justify-content: flex-start; }
   .form-actions { grid-column: 1; }
   .role-list > div { grid-template-columns: 1fr; gap: 7px; }
 }

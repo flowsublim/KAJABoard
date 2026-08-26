@@ -30,7 +30,7 @@ def test_superuser_can_render_responsive_master_workspace_and_lists(client):
 
     assert workspace.status_code == 200
     assert b"Master Data Workspace" in workspace.content
-    assert b"Phase 2B" in workspace.content
+    assert b"Phase 3A" in workspace.content
     assert partners.status_code == 200
     assert items.status_code == 200
 
@@ -51,6 +51,16 @@ def test_superuser_can_render_phase_2c_settings_pages(client):
     for url in pages:
         response = client.get(url)
         assert response.status_code == 200
+
+
+@pytest.mark.django_db
+def test_superuser_can_render_sales_order_list(client):
+    user = User.objects.create_superuser("sales-admin@example.com", "password")
+    client.force_login(user)
+
+    response = client.get(reverse("sales:order-list"))
+
+    assert response.status_code == 200
 
 
 @pytest.mark.django_db

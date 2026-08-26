@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">{{ order.document_number }}</p><h1>{{ title }}</h1><p class="muted">This action is recorded in the Sales Order audit trail.</p></div></div>
+<form method="post" class="panel form-panel">{% csrf_token %}{% if form.non_field_errors %}<div class="alert alert-error">{{ form.non_field_errors }}</div>{% endif %}{% for field in form %}<div class="field field-wide"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% if field.errors %}<div class="field-error">{{ field.errors|join:", " }}</div>{% endif %}</div>{% endfor %}<div class="form-actions"><a class="button" href="{% url 'sales:order-detail' order.pk %}">Back</a><button class="button button-danger" type="submit">{{ submit_label }}</button></div></form>
+{% endblock %}
