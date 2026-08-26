@@ -5,7 +5,7 @@ from . import views
 app_name = "organizations"
 
 urlpatterns = [
-    path("", views.workspace, name="workspace"),
+    path("settings/", views.workspace, name="workspace"),
     path("organization/<str:master_type>/", views.master_list, name="master-list"),
     path("organization/<str:master_type>/new/", views.master_create, name="master-create"),
     path("organization/<str:master_type>/<uuid:pk>/edit/", views.master_edit, name="master-edit"),

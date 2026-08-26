@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Beranda · KAJABoard{% endblock %}
+{% block content %}
+<section class="home-hero">
+  <div>
+    <p class="eyebrow">KAJABoard</p>
+    <h1>Beranda</h1>
+    <p class="muted">{{ request.user.email }}{% if entity_count %} · {{ entity_count }} entitas legal dapat diakses{% endif %}</p>
+  </div>
+</section>
+
+{% if summary_cards %}
+<section aria-labelledby="activity-summary-title">
+  <div class="section-heading"><h2 id="activity-summary-title">Ringkasan operasional</h2></div>
+  <div class="home-summary-grid">
+    {% for summary in summary_cards %}<a class="home-summary" href="{{ summary.url }}"><span>{{ summary.label }}</span><strong>{{ summary.value }}</strong></a>{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if operational_modules %}
+<section aria-labelledby="operations-title">
+  <div class="section-heading"><h2 id="operations-title">Operasional</h2></div>
+  <div class="module-grid">
+    {% for module in operational_modules %}<a class="module-card" href="{{ module.url }}"><h3>{{ module.title }}</h3><p>{{ module.description }}</p><span>Open module</span></a>{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if configuration_modules %}
+<section aria-labelledby="configuration-title">
+  <div class="section-heading"><h2 id="configuration-title">Master &amp; Konfigurasi</h2></div>
+  <div class="module-grid">
+    {% for module in configuration_modules %}<a class="module-card" href="{{ module.url }}"><h3>{{ module.title }}</h3><p>{{ module.description }}</p><span>Open module</span></a>{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if not operational_modules and not configuration_modules %}
+<section class="panel home-empty"><h2>Belum ada modul yang dapat diakses</h2><p>Hubungi administrator untuk memberikan akses sesuai tanggung jawab Anda.</p></section>
+{% endif %}
+{% endblock %}
