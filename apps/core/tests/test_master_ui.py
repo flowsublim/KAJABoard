@@ -36,6 +36,24 @@ def test_superuser_can_render_responsive_master_workspace_and_lists(client):
 
 
 @pytest.mark.django_db
+def test_superuser_can_render_phase_2c_settings_pages(client):
+    user = User.objects.create_superuser("phase2c-admin@example.com", "password")
+    client.force_login(user)
+
+    pages = [
+        reverse("purchasing:category-list"),
+        reverse("finance:account-list"),
+        reverse("finance:mapping-list"),
+        reverse("tax:registration-list"),
+        reverse("data_exchange:import-list"),
+    ]
+
+    for url in pages:
+        response = client.get(url)
+        assert response.status_code == 200
+
+
+@pytest.mark.django_db
 def test_organization_list_is_limited_by_accepted_membership_scope(client):
     user = User.objects.create_user("member@example.com", "password")
     allowed = LegalEntity.objects.create(code="KAJA", name="PT KAJA")

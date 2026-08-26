@@ -12,6 +12,11 @@
   {% if perms.core.view_documentsequence %}<a class="metric-card" href="{% url 'numbering:list' %}"><span>Numbering Series</span><strong>{{ operational_counts.sequences }}</strong></a>{% endif %}
   {% if perms.channels.view_store %}<a class="metric-card" href="{% url 'channels:store-list' %}"><span>Stores / Channels</span><strong>{{ operational_counts.stores }}</strong></a>{% endif %}
   {% if perms.channels.view_externalskumap %}<a class="metric-card" href="{% url 'channels:mapping-list' %}"><span>External SKU Maps</span><strong>{{ operational_counts.mappings }}</strong></a>{% endif %}
+  {% if perms.purchasing.view_purchasecategory %}<a class="metric-card" href="{% url 'purchasing:category-list' %}"><span>Purchase Categories</span><strong>{{ operational_counts.purchase_categories }}</strong></a>{% endif %}
+  {% if perms.finance.view_coaaccount %}<a class="metric-card" href="{% url 'finance:account-list' %}"><span>COA</span><strong>{{ operational_counts.coa_accounts }}</strong></a>{% endif %}
+  {% if perms.finance.view_coamapping %}<a class="metric-card" href="{% url 'finance:mapping-list' %}"><span>COA Mapping</span><strong>{{ operational_counts.coa_mappings }}</strong></a>{% endif %}
+  {% if perms.tax.view_taxregistration %}<a class="metric-card" href="{% url 'tax:registration-list' %}"><span>Tax Registrations</span><strong>{{ operational_counts.tax_registrations }}</strong></a>{% endif %}
+  {% if perms.data_exchange.view_importbatch %}<a class="metric-card" href="{% url 'data_exchange:import-list' %}"><span>Import Batches</span><strong>{{ operational_counts.import_batches }}</strong></a>{% endif %}
 </div>
 <section class="panel">
   <div class="panel-heading"><div><h2>Foundation boundary</h2><p>These screens maintain master identity and eligibility only.</p></div></div>
@@ -19,7 +24,7 @@
     <div><span class="status status-info">Catalog</span><h3>No stock quantity</h3><p>Items, UOM, and warehouses do not create inventory balances or movements.</p></div>
     <div><span class="status status-info">Partners</span><h3>One identity, many roles</h3><p>Customer and vendor views share BusinessPartner as their source of truth.</p></div>
     <div><span class="status status-info">Operations</span><h3>Configuration only</h3><p>Numbering, Store, and external SKU mapping are ready without creating orders or postings.</p></div>
-    <div><span class="status status-warning">Deferred</span><h3>No transaction modules</h3><p>Sales, Purchasing, Production, Warehouse posting, Omnichannel import, POS, and Finance remain outside Phase 2B.</p></div>
+    <div><span class="status status-warning">Deferred</span><h3>No transaction modules</h3><p>Sales, Purchasing, Production, Warehouse posting, Omnichannel import, POS, Journal, and GL remain outside Phase 2C.</p></div>
   </div>
 </section>
 {% endblock %}

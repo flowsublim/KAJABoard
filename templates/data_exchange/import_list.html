@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Import Batches · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Data exchange</p><h1>Import Batches</h1><p class="muted">Preview and confirm pattern for non-transactional master imports.</p></div><div class="action-row">{% if can_add %}<a class="button" href="{% url 'data_exchange:coa-template' %}">Download COA Template</a><a class="button button-primary" href="{% url 'data_exchange:coa-import-upload' %}">Upload COA CSV</a>{% endif %}</div></div>
+<form method="get" class="filterbar"><label class="search-field"><span class="sr-only">Search</span><input type="search" name="q" value="{{ search }}" placeholder="Search filename or checksum"></label><label><span class="sr-only">Type</span><input type="search" name="type" value="{{ import_type }}" placeholder="Type"></label><button class="button" type="submit">Filter</button></form>
+<section class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>Batch</th><th>Entity</th><th>Status</th><th>Rows</th><th>Replay</th><th class="actions">Actions</th></tr></thead><tbody>{% for object in page %}<tr><td><strong>{{ object.import_type }}</strong><small>{{ object.source_filename }}</small></td><td>{{ object.legal_entity.code }}</td><td><span class="status status-info">{{ object.status }}</span></td><td>{{ object.total_rows }} total, {{ object.success_rows }} imported, {{ object.failed_rows }} failed</td><td>{{ object.replay_count }}</td><td class="actions"><a href="{% url 'data_exchange:import-detail' object.pk %}">Open</a></td></tr>{% empty %}<tr><td colspan="6" class="empty">No import batches found.</td></tr>{% endfor %}</tbody></table></div>{% include "master/_pagination.html" %}</section>
+{% endblock %}
+

@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Data exchange</p><h1>{{ title }}</h1></div><a class="button" href="{% url 'data_exchange:coa-template' %}">Download Template</a></div>
+<section class="panel"><form method="post" enctype="multipart/form-data" class="form-grid">{% csrf_token %}{{ form.as_p }}<div class="form-actions"><a class="button" href="{% url 'data_exchange:import-list' %}">Cancel</a><button class="button button-primary" type="submit">Preview</button></div></form></section>
+{% endblock %}
+

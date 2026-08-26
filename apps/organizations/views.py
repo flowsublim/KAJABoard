@@ -10,6 +10,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 from apps.channels.selectors import sku_mappings, stores
 from apps.core.selectors import document_sequences
+from apps.data_exchange.selectors import import_batches
+from apps.finance.selectors import coa_accounts, coa_mappings
 from apps.organizations.forms import (
     BusinessUnitForm,
     CostCenterForm,
@@ -34,6 +36,8 @@ from apps.organizations.services import (
     update_legal_entity,
     update_warehouse,
 )
+from apps.purchasing.selectors import purchase_categories
+from apps.tax.selectors import tax_registrations
 
 
 @dataclass(frozen=True)
@@ -111,6 +115,11 @@ def workspace(request):
         "sequences": document_sequences(request.user).count(),
         "stores": stores(request.user).count(),
         "mappings": sku_mappings(request.user).count(),
+        "purchase_categories": purchase_categories(request.user).count(),
+        "coa_accounts": coa_accounts(request.user).count(),
+        "coa_mappings": coa_mappings(request.user).count(),
+        "tax_registrations": tax_registrations(request.user).count(),
+        "import_batches": import_batches(request.user).count(),
     }
     return render(
         request,
