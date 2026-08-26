@@ -29,6 +29,8 @@
         {% if perms.catalog.view_uom %}<a href="{% url 'catalog:list' 'uoms' %}">Units of Measure</a>{% endif %}
         <p class="nav-label">Sales</p>
         {% if perms.sales.view_salesorder %}<a href="{% url 'sales:order-list' %}">Sales Orders</a>{% endif %}
+        {% if perms.sales.view_salesdelivery %}<a href="{% url 'sales:delivery-list' %}">Surat Jalan</a>{% endif %}
+        {% if perms.sales.view_salesinvoice %}<a href="{% url 'sales:invoice-list' %}">Invoice Sources</a>{% endif %}
         <p class="nav-label">Operational Settings</p>
         {% if perms.core.view_documentsequence %}<a href="{% url 'numbering:list' %}">Document Numbering</a>{% endif %}
         {% if perms.channels.view_store %}<a href="{% url 'channels:store-list' %}">Stores &amp; Channels</a>{% endif %}
@@ -38,7 +40,7 @@
     <div class="app-main">
       <header class="topbar">
         <a class="mobile-brand" href="{% url 'organizations:workspace' %}">KAJABoard</a>
-        <span class="phase-badge">Phase 3A · Sales Core</span>
+        <span class="phase-badge">Phase 3B · Delivery &amp; Invoice Source</span>
         <div class="user-menu">
           <span>{{ request.user.email }}</span>
           <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="link-button" type="submit">Keluar</button></form>

@@ -1,11 +1,11 @@
-from django.db.models import F, Prefetch, Q
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 
 from apps.catalog.selectors import effective_items
 from apps.organizations.selectors import accessible_legal_entities
 from apps.partners.models import PartnerRoleType
 from apps.partners.selectors import effective_business_partners
-from apps.sales.models import SalesOrder, SalesOrderLine, SalesOrderState
+from apps.sales.models import SalesOrder, SalesOrderLine
 
 
 def sales_orders(user, *, search="", state="", legal_entity=None):
@@ -58,30 +58,10 @@ def eligible_sales_items(user, *, legal_entity=None, business_date=None):
 
 
 def confirmed_sales_order_lines(user, *, legal_entity=None, requested_before=None):
-    """Read-only source contract for later delivery/procurement/project consumers.
+    """Read-only handoff contract with derived delivery fulfillment in Phase 3B."""
 
-    No downstream transaction exists in Phase 3A, so every confirmed line's full
-    quantity remains the downstream requirement.
-    """
+    from apps.sales.selectors.deliveries import confirmed_sales_order_lines_with_fulfillment
 
-    queryset = (
-        SalesOrderLine.objects.select_related(
-            "sales_order",
-            "sales_order__customer",
-            "sales_order__legal_entity",
-            "item",
-        )
-        .filter(
-            sales_order__legal_entity__in=accessible_legal_entities(user),
-            sales_order__state=SalesOrderState.CONFIRMED,
-        )
-        .annotate(remaining_downstream_quantity=F("quantity"))
-        .order_by(
-            "sales_order__requested_delivery_date", "sales_order__document_date", "line_number"
-        )
+    return confirmed_sales_order_lines_with_fulfillment(
+        user, legal_entity=legal_entity, requested_before=requested_before
     )
-    if legal_entity is not None:
-        queryset = queryset.filter(sales_order__legal_entity=legal_entity)
-    if requested_before is not None:
-        queryset = queryset.filter(sales_order__requested_delivery_date__lte=requested_before)
-    return queryset

@@ -33,7 +33,7 @@ def test_superuser_can_render_phase_2b_lists_and_preview(client):
     )
 
     assert all(response.status_code == 200 for response in responses)
-    assert b"Phase 3A" in responses[0].content
+    assert b"Phase 3B" in responses[0].content
     assert b"SO-" in responses[1].content
 
 

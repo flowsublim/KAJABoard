@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Sales</p><h1>{{ title }}</h1></div></div>
+<form method="post" class="panel form-panel">{% csrf_token %}
+  {% if form.non_field_errors %}<div class="alert alert-error">{{ form.non_field_errors }}</div>{% endif %}
+  <div class="form-grid">{% for field in form %}<div class="field {% if field.name == 'notes' or field.name == 'destination_snapshot' or field.name == 'source_exception_reason' or field.name == 'change_reason' %}field-wide{% endif %}"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% if field.errors %}<div class="field-error">{{ field.errors|join:", " }}</div>{% endif %}</div>{% endfor %}</div>
+  <div class="form-actions">{% if back_pk %}<a class="button" href="{% url back_url back_pk %}">Cancel</a>{% else %}<a class="button" href="{% url back_url %}">Cancel</a>{% endif %}<button class="button button-primary" type="submit">Save draft</button></div>
+</form>
+{% endblock %}

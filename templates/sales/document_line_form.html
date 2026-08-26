@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Sales</p><h1>{{ title }}</h1><p class="muted">{{ document.customer_name_snapshot }}</p></div></div>
+<form method="post" class="panel form-panel">{% csrf_token %}
+  {% if form.non_field_errors %}<div class="alert alert-error">{{ form.non_field_errors }}</div>{% endif %}
+  <div class="form-grid">{% for field in form %}<div class="field {% if field.name == 'notes' or field.name == 'change_reason' %}field-wide{% endif %}"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% if field.errors %}<div class="field-error">{{ field.errors|join:", " }}</div>{% endif %}</div>{% endfor %}</div>
+  <div class="form-actions">{% if kind == 'delivery' %}<a class="button" href="{% url 'sales:delivery-detail' document.pk %}">Cancel</a>{% else %}<a class="button" href="{% url 'sales:invoice-detail' document.pk %}">Cancel</a>{% endif %}<button class="button button-primary" type="submit">Save line</button></div>
+</form>
+{% endblock %}

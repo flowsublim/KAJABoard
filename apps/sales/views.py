@@ -5,16 +5,60 @@ from django.core.paginator import Paginator
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 
-from apps.sales.forms import SalesOrderForm, SalesOrderLineForm, SalesOrderTransitionForm
-from apps.sales.models import SalesOrder, SalesOrderLine, SalesOrderState
-from apps.sales.selectors import sales_order_detail, sales_orders
+from apps.sales.forms import (
+    SalesDeliveryForm,
+    SalesDeliveryLineForm,
+    SalesInvoiceForm,
+    SalesInvoiceLineForm,
+    SalesOrderForm,
+    SalesOrderLineForm,
+    SalesOrderTransitionForm,
+)
+from apps.sales.models import (
+    InvoiceSourceMode,
+    SalesDelivery,
+    SalesDeliveryLine,
+    SalesDeliveryState,
+    SalesInvoice,
+    SalesInvoiceDocumentKind,
+    SalesInvoiceLine,
+    SalesInvoiceState,
+    SalesOrder,
+    SalesOrderLine,
+    SalesOrderState,
+)
+from apps.sales.selectors import (
+    sales_deliveries,
+    sales_delivery_detail,
+    sales_invoice_detail,
+    sales_invoices,
+    sales_order_detail,
+    sales_orders,
+)
 from apps.sales.services import (
+    add_draft_delivery_invoice_line,
+    add_draft_delivery_line,
     add_draft_line,
+    add_draft_sales_order_invoice_line,
+    cancel_delivery,
+    cancel_invoice,
     cancel_sales_order,
+    confirm_invoice,
     confirm_sales_order,
+    create_draft_delivery,
+    create_draft_delivery_invoice,
+    create_draft_sales_order_invoice,
+    create_proforma,
     hold_sales_order,
+    post_delivery,
     release_sales_order,
+    remove_draft_delivery_line,
+    remove_draft_invoice_line,
     remove_draft_line,
+    update_draft_delivery,
+    update_draft_delivery_line,
+    update_draft_invoice,
+    update_draft_invoice_line,
     update_draft_line,
     update_draft_sales_order,
 )
@@ -270,4 +314,530 @@ def order_hold_release(request, pk):
             "title": f"{action.title()} {order}",
             "submit_label": f"{action.title()} order",
         },
+    )
+
+
+def _delivery_or_404(user, pk):
+    return get_object_or_404(sales_deliveries(user), pk=pk)
+
+
+def _invoice_or_404(user, pk):
+    return get_object_or_404(sales_invoices(user), pk=pk)
+
+
+@login_required
+def delivery_list(request):
+    _require(request.user, "sales.view_salesdelivery")
+    search = request.GET.get("q", "").strip()
+    state = request.GET.get("state", "").strip()
+    page = Paginator(sales_deliveries(request.user, search=search, state=state), 25).get_page(
+        request.GET.get("page")
+    )
+    return render(
+        request,
+        "sales/delivery_list.html",
+        {
+            "page": page,
+            "search": search,
+            "state": state,
+            "states": SalesDeliveryState.choices,
+            "can_add": request.user.has_perm("sales.add_salesdelivery"),
+        },
+    )
+
+
+@login_required
+def delivery_create(request):
+    _require(request.user, "sales.add_salesdelivery")
+    form = SalesDeliveryForm(request.POST or None, user=request.user)
+    if request.method == "POST" and form.is_valid():
+        try:
+            delivery = create_draft_delivery(actor=request.user, **_model_values(form))
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, f"{delivery.document_number} created as a draft.")
+            return redirect("sales:delivery-detail", pk=delivery.pk)
+    return render(
+        request,
+        "sales/document_form.html",
+        {"form": form, "title": "New Surat Jalan", "back_url": "sales:delivery-list"},
+    )
+
+
+@login_required
+def delivery_detail(request, pk):
+    _require(request.user, "sales.view_salesdelivery")
+    try:
+        delivery = sales_delivery_detail(request.user, pk=pk)
+    except SalesDelivery.DoesNotExist:
+        raise Http404 from None
+    return render(
+        request,
+        "sales/delivery_detail.html",
+        {
+            "delivery": delivery,
+            "can_change": request.user.has_perm("sales.change_salesdelivery")
+            and delivery.state == SalesDeliveryState.DRAFT,
+            "can_post": request.user.has_perm("sales.post_salesdelivery")
+            and delivery.state == SalesDeliveryState.DRAFT,
+            "can_cancel": request.user.has_perm("sales.cancel_salesdelivery")
+            and delivery.state in {SalesDeliveryState.DRAFT, SalesDeliveryState.POSTED},
+        },
+    )
+
+
+@login_required
+def delivery_edit(request, pk):
+    _require(request.user, "sales.change_salesdelivery")
+    delivery = _delivery_or_404(request.user, pk)
+    form = SalesDeliveryForm(request.POST or None, instance=delivery, user=request.user)
+    if request.method == "POST" and form.is_valid():
+        try:
+            update_draft_delivery(
+                delivery,
+                actor=request.user,
+                reason=form.cleaned_data["change_reason"],
+                **_model_values(form),
+            )
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            return redirect("sales:delivery-detail", pk=delivery.pk)
+    return render(
+        request,
+        "sales/document_form.html",
+        {
+            "form": form,
+            "title": f"Edit {delivery.document_number}",
+            "back_url": "sales:delivery-detail",
+            "back_pk": delivery.pk,
+        },
+    )
+
+
+@login_required
+def delivery_line_add(request, pk):
+    _require(request.user, "sales.change_salesdelivery")
+    delivery = _delivery_or_404(request.user, pk)
+    form = SalesDeliveryLineForm(request.POST or None, user=request.user, delivery=delivery)
+    if request.method == "POST" and form.is_valid():
+        try:
+            add_draft_delivery_line(
+                delivery,
+                actor=request.user,
+                source_sales_order_line=form.cleaned_data["source_sales_order_line"],
+                quantity=form.cleaned_data["quantity"],
+                notes=form.cleaned_data["notes"],
+                reason=form.cleaned_data.get("change_reason", ""),
+            )
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            return redirect("sales:delivery-detail", pk=delivery.pk)
+    return render(
+        request,
+        "sales/document_line_form.html",
+        {
+            "form": form,
+            "document": delivery,
+            "title": f"Add line to {delivery.document_number}",
+            "kind": "delivery",
+        },
+    )
+
+
+@login_required
+def delivery_line_edit(request, pk, line_pk):
+    _require(request.user, "sales.change_salesdelivery")
+    delivery = _delivery_or_404(request.user, pk)
+    line = get_object_or_404(SalesDeliveryLine.objects.filter(sales_delivery=delivery), pk=line_pk)
+    form = SalesDeliveryLineForm(
+        request.POST or None, instance=line, user=request.user, delivery=delivery
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            update_draft_delivery_line(
+                line,
+                actor=request.user,
+                quantity=form.cleaned_data["quantity"],
+                notes=form.cleaned_data["notes"],
+                reason=form.cleaned_data["change_reason"],
+            )
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            return redirect("sales:delivery-detail", pk=delivery.pk)
+    return render(
+        request,
+        "sales/document_line_form.html",
+        {
+            "form": form,
+            "document": delivery,
+            "title": f"Edit line {line.line_number}",
+            "kind": "delivery",
+        },
+    )
+
+
+@login_required
+def delivery_line_remove(request, pk, line_pk):
+    _require(request.user, "sales.change_salesdelivery")
+    delivery = _delivery_or_404(request.user, pk)
+    line = get_object_or_404(SalesDeliveryLine.objects.filter(sales_delivery=delivery), pk=line_pk)
+    form = SalesOrderTransitionForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            remove_draft_delivery_line(line, actor=request.user, reason=form.cleaned_data["reason"])
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            return redirect("sales:delivery-detail", pk=delivery.pk)
+    return render(
+        request,
+        "sales/document_transition_form.html",
+        {
+            "form": form,
+            "document": delivery,
+            "title": "Remove delivery line",
+            "submit_label": "Remove line",
+            "danger": True,
+            "kind": "delivery",
+        },
+    )
+
+
+@login_required
+def delivery_post(request, pk):
+    _require(request.user, "sales.post_salesdelivery")
+    delivery = _delivery_or_404(request.user, pk)
+    if request.method == "POST":
+        try:
+            post_delivery(delivery, actor=request.user)
+        except ValidationError as error:
+            messages.error(request, "; ".join(error.messages))
+        else:
+            messages.success(
+                request, f"{delivery.document_number} posted as a Warehouse issue candidate."
+            )
+    return redirect("sales:delivery-detail", pk=delivery.pk)
+
+
+@login_required
+def delivery_cancel(request, pk):
+    _require(request.user, "sales.cancel_salesdelivery")
+    delivery = _delivery_or_404(request.user, pk)
+    form = SalesOrderTransitionForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            cancel_delivery(delivery, actor=request.user, reason=form.cleaned_data["reason"])
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            return redirect("sales:delivery-detail", pk=delivery.pk)
+    return render(
+        request,
+        "sales/document_transition_form.html",
+        {
+            "form": form,
+            "document": delivery,
+            "title": f"Cancel {delivery.document_number}",
+            "submit_label": "Cancel delivery",
+            "danger": True,
+            "kind": "delivery",
+        },
+    )
+
+
+@login_required
+def delivery_print(request, pk):
+    _require(request.user, "sales.view_salesdelivery")
+    return render(
+        request,
+        "sales/delivery_print.html",
+        {"delivery": sales_delivery_detail(request.user, pk=pk)},
+    )
+
+
+@login_required
+def invoice_list(request):
+    _require(request.user, "sales.view_salesinvoice")
+    search = request.GET.get("q", "").strip()
+    state = request.GET.get("state", "").strip()
+    page = Paginator(sales_invoices(request.user, search=search, state=state), 25).get_page(
+        request.GET.get("page")
+    )
+    return render(
+        request,
+        "sales/invoice_list.html",
+        {
+            "page": page,
+            "search": search,
+            "state": state,
+            "states": SalesInvoiceState.choices,
+            "can_add": request.user.has_perm("sales.add_salesinvoice"),
+            "can_exception": request.user.has_perm("sales.create_salesorder_invoice"),
+        },
+    )
+
+
+def _invoice_create(request, *, source_mode, document_kind, title):
+    _require(request.user, "sales.add_salesinvoice")
+    if (
+        source_mode == InvoiceSourceMode.SALES_ORDER
+        and document_kind == SalesInvoiceDocumentKind.INVOICE
+    ):
+        _require(request.user, "sales.create_salesorder_invoice")
+    form = SalesInvoiceForm(request.POST or None, user=request.user, source_mode=source_mode)
+    if request.method == "POST" and form.is_valid():
+        try:
+            if document_kind == SalesInvoiceDocumentKind.PROFORMA:
+                invoice = create_proforma(actor=request.user, **_model_values(form))
+            elif source_mode == InvoiceSourceMode.DELIVERY:
+                invoice = create_draft_delivery_invoice(actor=request.user, **_model_values(form))
+            else:
+                invoice = create_draft_sales_order_invoice(
+                    actor=request.user, **_model_values(form)
+                )
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, f"{invoice.document_number} created as a draft.")
+            return redirect("sales:invoice-detail", pk=invoice.pk)
+    return render(
+        request,
+        "sales/document_form.html",
+        {"form": form, "title": title, "back_url": "sales:invoice-list"},
+    )
+
+
+@login_required
+def invoice_create_delivery(request):
+    return _invoice_create(
+        request,
+        source_mode=InvoiceSourceMode.DELIVERY,
+        document_kind=SalesInvoiceDocumentKind.INVOICE,
+        title="New delivery-based Invoice Source",
+    )
+
+
+@login_required
+def invoice_create_sales_order(request):
+    return _invoice_create(
+        request,
+        source_mode=InvoiceSourceMode.SALES_ORDER,
+        document_kind=SalesInvoiceDocumentKind.INVOICE,
+        title="New Sales Order invoice exception",
+    )
+
+
+@login_required
+def proforma_create(request):
+    return _invoice_create(
+        request,
+        source_mode=InvoiceSourceMode.SALES_ORDER,
+        document_kind=SalesInvoiceDocumentKind.PROFORMA,
+        title="New Proforma",
+    )
+
+
+@login_required
+def invoice_detail(request, pk):
+    _require(request.user, "sales.view_salesinvoice")
+    try:
+        invoice = sales_invoice_detail(request.user, pk=pk)
+    except SalesInvoice.DoesNotExist:
+        raise Http404 from None
+    return render(
+        request,
+        "sales/invoice_detail.html",
+        {
+            "invoice": invoice,
+            "can_change": request.user.has_perm("sales.change_salesinvoice")
+            and invoice.state == SalesInvoiceState.DRAFT,
+            "can_confirm": request.user.has_perm("sales.confirm_salesinvoice")
+            and invoice.state == SalesInvoiceState.DRAFT,
+            "can_cancel": request.user.has_perm("sales.cancel_salesinvoice")
+            and invoice.state in {SalesInvoiceState.DRAFT, SalesInvoiceState.CONFIRMED},
+        },
+    )
+
+
+@login_required
+def invoice_edit(request, pk):
+    _require(request.user, "sales.change_salesinvoice")
+    invoice = _invoice_or_404(request.user, pk)
+    form = SalesInvoiceForm(request.POST or None, instance=invoice, user=request.user)
+    if request.method == "POST" and form.is_valid():
+        try:
+            update_draft_invoice(
+                invoice,
+                actor=request.user,
+                reason=form.cleaned_data["change_reason"],
+                **_model_values(form),
+            )
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            return redirect("sales:invoice-detail", pk=invoice.pk)
+    return render(
+        request,
+        "sales/document_form.html",
+        {
+            "form": form,
+            "title": f"Edit {invoice.document_number}",
+            "back_url": "sales:invoice-detail",
+            "back_pk": invoice.pk,
+        },
+    )
+
+
+@login_required
+def invoice_line_add(request, pk):
+    _require(request.user, "sales.change_salesinvoice")
+    invoice = _invoice_or_404(request.user, pk)
+    form = SalesInvoiceLineForm(request.POST or None, user=request.user, invoice=invoice)
+    if request.method == "POST" and form.is_valid():
+        try:
+            if invoice.source_mode == InvoiceSourceMode.DELIVERY:
+                add_draft_delivery_invoice_line(
+                    invoice,
+                    actor=request.user,
+                    source_sales_delivery_line=form.cleaned_data["source_sales_delivery_line"],
+                    quantity=form.cleaned_data["quantity"],
+                    notes=form.cleaned_data["notes"],
+                    reason=form.cleaned_data.get("change_reason", ""),
+                )
+            else:
+                add_draft_sales_order_invoice_line(
+                    invoice,
+                    actor=request.user,
+                    source_sales_order_line=form.cleaned_data["source_sales_order_line"],
+                    quantity=form.cleaned_data["quantity"],
+                    notes=form.cleaned_data["notes"],
+                    reason=form.cleaned_data.get("change_reason", ""),
+                )
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            return redirect("sales:invoice-detail", pk=invoice.pk)
+    return render(
+        request,
+        "sales/document_line_form.html",
+        {
+            "form": form,
+            "document": invoice,
+            "title": f"Add source line to {invoice.document_number}",
+            "kind": "invoice",
+        },
+    )
+
+
+@login_required
+def invoice_line_edit(request, pk, line_pk):
+    _require(request.user, "sales.change_salesinvoice")
+    invoice = _invoice_or_404(request.user, pk)
+    line = get_object_or_404(SalesInvoiceLine.objects.filter(sales_invoice=invoice), pk=line_pk)
+    form = SalesInvoiceLineForm(
+        request.POST or None, instance=line, user=request.user, invoice=invoice
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            update_draft_invoice_line(
+                line,
+                actor=request.user,
+                quantity=form.cleaned_data["quantity"],
+                notes=form.cleaned_data["notes"],
+                reason=form.cleaned_data["change_reason"],
+            )
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            return redirect("sales:invoice-detail", pk=invoice.pk)
+    return render(
+        request,
+        "sales/document_line_form.html",
+        {
+            "form": form,
+            "document": invoice,
+            "title": f"Edit line {line.line_number}",
+            "kind": "invoice",
+        },
+    )
+
+
+@login_required
+def invoice_line_remove(request, pk, line_pk):
+    _require(request.user, "sales.change_salesinvoice")
+    invoice = _invoice_or_404(request.user, pk)
+    line = get_object_or_404(SalesInvoiceLine.objects.filter(sales_invoice=invoice), pk=line_pk)
+    form = SalesOrderTransitionForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            remove_draft_invoice_line(line, actor=request.user, reason=form.cleaned_data["reason"])
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            return redirect("sales:invoice-detail", pk=invoice.pk)
+    return render(
+        request,
+        "sales/document_transition_form.html",
+        {
+            "form": form,
+            "document": invoice,
+            "title": "Remove invoice line",
+            "submit_label": "Remove line",
+            "danger": True,
+            "kind": "invoice",
+        },
+    )
+
+
+@login_required
+def invoice_confirm(request, pk):
+    _require(request.user, "sales.confirm_salesinvoice")
+    invoice = _invoice_or_404(request.user, pk)
+    if request.method == "POST":
+        try:
+            confirm_invoice(invoice, actor=request.user)
+        except ValidationError as error:
+            messages.error(request, "; ".join(error.messages))
+        else:
+            messages.success(
+                request, f"{invoice.document_number} confirmed as a commercial source."
+            )
+    return redirect("sales:invoice-detail", pk=invoice.pk)
+
+
+@login_required
+def invoice_cancel(request, pk):
+    _require(request.user, "sales.cancel_salesinvoice")
+    invoice = _invoice_or_404(request.user, pk)
+    form = SalesOrderTransitionForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            cancel_invoice(invoice, actor=request.user, reason=form.cleaned_data["reason"])
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            return redirect("sales:invoice-detail", pk=invoice.pk)
+    return render(
+        request,
+        "sales/document_transition_form.html",
+        {
+            "form": form,
+            "document": invoice,
+            "title": f"Cancel {invoice.document_number}",
+            "submit_label": "Cancel invoice",
+            "danger": True,
+            "kind": "invoice",
+        },
+    )
+
+
+@login_required
+def invoice_print(request, pk):
+    _require(request.user, "sales.view_salesinvoice")
+    return render(
+        request, "sales/invoice_print.html", {"invoice": sales_invoice_detail(request.user, pk=pk)}
     )

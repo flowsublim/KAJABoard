@@ -30,7 +30,7 @@ def test_superuser_can_render_responsive_master_workspace_and_lists(client):
 
     assert workspace.status_code == 200
     assert b"Master Data Workspace" in workspace.content
-    assert b"Phase 3A" in workspace.content
+    assert b"Phase 3B" in workspace.content
     assert partners.status_code == 200
     assert items.status_code == 200
 
