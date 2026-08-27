@@ -7,10 +7,18 @@ from django.contrib.auth.models import Permission
 from django.core.exceptions import ValidationError
 from django.urls import reverse
 
+from apps.accounts.models import Employee
 from apps.catalog.models import UOM, Item
 from apps.core.services.numbering import create_document_sequence
 from apps.organizations.models import LegalEntity, OrganizationMembership
-from apps.production.models import ProductionEntryState, ProductionStage
+from apps.production.models import (
+    ProductionDirectExtraCost,
+    ProductionEntryState,
+    ProductionLaborCost,
+    ProductionStage,
+    ProductionTariff,
+    ProductionWageMethod,
+)
 from apps.production.selectors.wip import (
     material_issue_candidates,
     output_wip,
@@ -21,12 +29,15 @@ from apps.production.services.production import (
     add_draft_reject_line,
     add_draft_work_line,
     add_handover_line,
+    create_direct_extra_cost,
     create_draft_reject_entry,
     create_draft_work_entry,
     create_handover_draft,
     mark_handover_ready,
+    post_direct_extra_cost,
     post_reject_entry,
     post_work_entry,
+    reverse_direct_extra_cost,
     reverse_handover_line,
     reverse_reject_line,
     reverse_work_line,
@@ -390,3 +401,71 @@ def test_qc_reject_and_handover_share_the_same_available_wip():
     assert output_wip(output_a).available_handover == Decimal("0")
     with pytest.raises(ValidationError):
         _ready_handover(entity, user, order, [(output_a, "1")], "handover-over")
+
+
+@pytest.mark.django_db
+def test_piece_rate_labor_is_snapshotted_and_missing_tariff_is_blocked():
+    entity, user, order, (output_a, _) = _foundation("COST")
+    employee = Employee.objects.create(
+        legal_entity=entity, employee_code="OP-1", display_name="Operator"
+    )
+    entry = create_draft_work_entry(
+        legal_entity=entity,
+        work_order=order,
+        production_date=date(2026, 8, 27),
+        stage=ProductionStage.CUT,
+        actor=user,
+    )
+    entry.employee = employee
+    entry.wage_method = ProductionWageMethod.PIECE_RATE
+    entry.save(update_fields=("employee", "wage_method"))
+    add_draft_work_line(entry, output=output_a, quantity="10", actor=user)
+    with pytest.raises(ValidationError):
+        post_work_entry(entry, actor=user, idempotency_key="missing-tariff")
+    tariff = ProductionTariff.objects.create(
+        legal_entity=entity,
+        stage=ProductionStage.CUT,
+        item=output_a.item,
+        wage_method=ProductionWageMethod.PIECE_RATE,
+        rate_per_unit="2500",
+        effective_from=date(2026, 1, 1),
+    )
+    post_work_entry(entry, actor=user, idempotency_key="labor")
+    labor = ProductionLaborCost.objects.get(source_line=entry.lines.get())
+    assert labor.amount == Decimal("25000") and labor.tariff_id == tariff.pk
+    tariff.rate_per_unit = Decimal("9999")
+    tariff.save(update_fields=("rate_per_unit",))
+    labor.refresh_from_db()
+    assert labor.amount == Decimal("25000")
+
+
+@pytest.mark.django_db
+def test_direct_extra_cost_is_output_specific_posted_and_reversible():
+    entity, user, order, (output_a, output_b) = _foundation("EXTRA")
+    cost = create_direct_extra_cost(
+        legal_entity=entity,
+        work_order=order,
+        output=output_a,
+        cost_date=date(2026, 8, 27),
+        category="MEAL_OPERATOR",
+        description="Meal",
+        amount=Decimal("50000"),
+        actor=user,
+    )
+    post_direct_extra_cost(cost, actor=user, idempotency_key="extra-post")
+    assert (
+        ProductionDirectExtraCost.objects.filter(output=output_a, reversed_at__isnull=True).count()
+        == 1
+    )
+    assert ProductionDirectExtraCost.objects.filter(output=output_b).count() == 0
+    reversal = reverse_direct_extra_cost(
+        cost, reason="Correction", actor=user, idempotency_key="extra-reverse"
+    )
+    assert reversal.original_id == cost.pk
+    assert ProductionDirectExtraCost.objects.get(pk=cost.pk).reversed_at is not None
+    assert (
+        reverse_direct_extra_cost(
+            cost, reason="Correction", actor=user, idempotency_key="extra-reverse"
+        )
+        == reversal
+    )

@@ -108,9 +108,16 @@ def production_overhead_sources(user):
                         "treatment": line.accounting_treatment_snapshot,
                         "cost_center_id": str(line.cost_center_snapshot_id),
                         "active": True,
+                        "readiness": "ELIGIBLE_COMMITMENT",
+                        "actual_hpp_status": "NOT_POSTED",
                     }
                 )
     return tuple(result)
+
+
+def production_overhead_eligibility_candidates(user):
+    """Confirmed PO eligibility only; never an actual posted HPP source."""
+    return production_overhead_sources(user)
 
 
 def vendor_analytics(user):

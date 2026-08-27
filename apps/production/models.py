@@ -15,6 +15,18 @@ class ProductionEntryState(models.TextChoices):
     POSTED = "POSTED", "Posted"
 
 
+class ProductionWageMethod(models.TextChoices):
+    PIECE_RATE = "PIECE_RATE", "Borongan"
+    NO_WAGE = "NO_WAGE", "Tanpa Upah"
+
+
+class ProductionExtraCostCategory(models.TextChoices):
+    MEAL_OPERATOR = "MEAL_OPERATOR", "Makan Operator"
+    DAILY_WAGE = "DAILY_WAGE", "Upah Harian"
+    ACCESSORY_ADVANCE = "ACCESSORY_ADVANCE", "Uang Muka Aksesoris"
+    OTHER_DIRECT = "OTHER_DIRECT", "Lainnya Langsung"
+
+
 class ProductionHandoverState(models.TextChoices):
     DRAFT = "DRAFT", "Draft"
     READY_FOR_GUDANG = "READY_FOR_GUDANG", "Siap Gudang"
@@ -28,6 +40,12 @@ class ProductionWorkEntry(UUIDPrimaryKeyModel, TimeStampedModel):
     production_date = models.DateField()
     stage = models.CharField(max_length=16, choices=ProductionStage.choices)
     notes = models.TextField(blank=True)
+    employee = models.ForeignKey(
+        "accounts.Employee", null=True, blank=True, on_delete=models.PROTECT
+    )
+    wage_method = models.CharField(
+        max_length=16, choices=ProductionWageMethod.choices, default=ProductionWageMethod.NO_WAGE
+    )
     state = models.CharField(
         max_length=12, choices=ProductionEntryState.choices, default=ProductionEntryState.DRAFT
     )
@@ -264,3 +282,198 @@ class ProductionWarehouseHandoverLineReversal(UUIDPrimaryKeyModel):
 
     class Meta:
         indexes = [models.Index(fields=("reversed_at",), name="prod_hand_rev_time_idx")]
+
+
+class ProductionTariff(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey("organizations.LegalEntity", on_delete=models.PROTECT)
+    stage = models.CharField(max_length=16, choices=ProductionStage.choices)
+    item = models.ForeignKey("catalog.Item", on_delete=models.PROTECT)
+    wage_method = models.CharField(max_length=16, choices=ProductionWageMethod.choices)
+    rate_per_unit = models.DecimalField(max_digits=18, decimal_places=2)
+    currency = models.CharField(max_length=3, default="IDR")
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("legal_entity", "stage", "item"), name="prod_tariff_lookup_idx")
+        ]
+        constraints = [
+            models.CheckConstraint(condition=Q(rate_per_unit__gte=0), name="prod_tariff_rate_valid")
+        ]
+
+
+class ProductionLaborCost(UUIDPrimaryKeyModel, TimeStampedModel):
+    source_line = models.ForeignKey(
+        ProductionWorkLine, on_delete=models.PROTECT, related_name="labor_costs"
+    )
+    legal_entity = models.ForeignKey("organizations.LegalEntity", on_delete=models.PROTECT)
+    work_order = models.ForeignKey("purchasing.WorkOrder", on_delete=models.PROTECT)
+    output = models.ForeignKey("purchasing.WorkOrderOutput", on_delete=models.PROTECT)
+    employee = models.ForeignKey(
+        "accounts.Employee", null=True, blank=True, on_delete=models.PROTECT
+    )
+    employee_code_snapshot = models.CharField(max_length=64, blank=True)
+    employee_name_snapshot = models.CharField(max_length=255, blank=True)
+    stage_snapshot = models.CharField(max_length=16, choices=ProductionStage.choices)
+    item_code_snapshot = models.CharField(max_length=64)
+    quantity_snapshot = models.DecimalField(max_digits=18, decimal_places=6)
+    wage_method = models.CharField(max_length=16, choices=ProductionWageMethod.choices)
+    tariff = models.ForeignKey(ProductionTariff, null=True, blank=True, on_delete=models.PROTECT)
+    tariff_rate_snapshot = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True
+    )
+    amount = models.DecimalField(max_digits=18, decimal_places=2)
+    production_date = models.DateField()
+    reversed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=("output", "reversed_at"), name="prod_labor_output_idx")]
+
+
+class ProductionLaborCostReversal(UUIDPrimaryKeyModel):
+    original = models.OneToOneField(
+        ProductionLaborCost, on_delete=models.PROTECT, related_name="reversal"
+    )
+    replacement = models.ForeignKey(
+        ProductionLaborCost,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="reversal_sources",
+    )
+    reason = models.TextField()
+    reversed_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.PROTECT
+    )
+    reversed_at = models.DateTimeField(auto_now_add=True)
+
+
+class ProductionDirectExtraCost(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey("organizations.LegalEntity", on_delete=models.PROTECT)
+    work_order = models.ForeignKey("purchasing.WorkOrder", on_delete=models.PROTECT)
+    output = models.ForeignKey("purchasing.WorkOrderOutput", on_delete=models.PROTECT)
+    cost_date = models.DateField()
+    category = models.CharField(max_length=24, choices=ProductionExtraCostCategory.choices)
+    employee = models.ForeignKey(
+        "accounts.Employee", null=True, blank=True, on_delete=models.PROTECT
+    )
+    description = models.TextField()
+    amount = models.DecimalField(max_digits=18, decimal_places=2)
+    notes = models.TextField(blank=True)
+    state = models.CharField(
+        max_length=12, choices=ProductionEntryState.choices, default=ProductionEntryState.DRAFT
+    )
+    created_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_production_extra_costs",
+    )
+    posted_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="posted_production_extra_costs",
+    )
+    posted_at = models.DateTimeField(null=True, blank=True)
+    reversed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(amount__gt=0), name="prod_extra_amount_pos")
+        ]
+        permissions = [("post_productiondirectextracost", "Can post production direct extra cost")]
+
+
+class ProductionDirectExtraCostReversal(UUIDPrimaryKeyModel):
+    original = models.OneToOneField(
+        ProductionDirectExtraCost, on_delete=models.PROTECT, related_name="reversal"
+    )
+    replacement = models.ForeignKey(
+        ProductionDirectExtraCost,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="reversal_sources",
+    )
+    reason = models.TextField()
+    reversed_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.PROTECT
+    )
+    reversed_at = models.DateTimeField(auto_now_add=True)
+
+
+class ProductionOverheadSnapshot(UUIDPrimaryKeyModel):
+    source_key = models.CharField(max_length=255, unique=True)
+    legal_entity = models.ForeignKey("organizations.LegalEntity", on_delete=models.PROTECT)
+    source_module = models.CharField(max_length=64)
+    source_type = models.CharField(max_length=64)
+    source_document_id = models.CharField(max_length=64)
+    source_line_id = models.CharField(max_length=64)
+    category_snapshot = models.CharField(max_length=128, blank=True)
+    accounting_treatment_snapshot = models.CharField(max_length=16, blank=True)
+    cost_center_snapshot = models.CharField(max_length=128, blank=True)
+    amount = models.DecimalField(max_digits=18, decimal_places=2)
+    posting_date = models.DateField()
+    source_status = models.CharField(max_length=32)
+    source_reversal_status = models.CharField(max_length=32, default="ACTIVE")
+    metadata_snapshot = models.JSONField(default=dict)
+    captured_at = models.DateTimeField(auto_now_add=True)
+    captured_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="captured_production_overheads",
+    )
+
+
+class ProductionCostAllocationRun(UUIDPrimaryKeyModel):
+    legal_entity = models.ForeignKey("organizations.LegalEntity", on_delete=models.PROTECT)
+    allocation_month = models.DateField()
+    rule_code = models.CharField(max_length=32, default="CUT_QTY_MONTHLY")
+    status = models.CharField(max_length=32, default="READY")
+    created_at = models.DateTimeField(auto_now_add=True)
+    supersedes = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT)
+
+
+class ProductionCostAllocationLine(UUIDPrimaryKeyModel):
+    run = models.ForeignKey(
+        ProductionCostAllocationRun, on_delete=models.PROTECT, related_name="lines"
+    )
+    source = models.ForeignKey(ProductionOverheadSnapshot, on_delete=models.PROTECT)
+    output = models.ForeignKey("purchasing.WorkOrderOutput", on_delete=models.PROTECT)
+    driver_quantity = models.DecimalField(max_digits=18, decimal_places=6)
+    driver_total = models.DecimalField(max_digits=18, decimal_places=6)
+    ratio = models.DecimalField(max_digits=24, decimal_places=12)
+    source_amount = models.DecimalField(max_digits=18, decimal_places=2)
+    allocated_amount = models.DecimalField(max_digits=18, decimal_places=2)
+
+
+class ProductionCostSnapshot(UUIDPrimaryKeyModel):
+    work_order = models.ForeignKey("purchasing.WorkOrder", on_delete=models.PROTECT)
+    output = models.ForeignKey("purchasing.WorkOrderOutput", on_delete=models.PROTECT)
+    version = models.PositiveIntegerField()
+    as_of_date = models.DateField()
+    material_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    labor_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    direct_extra_amount = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True
+    )
+    overhead_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    total_cogm = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    unit_hpp = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    status = models.CharField(max_length=32, default="INCOMPLETE")
+    component_status = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    supersedes = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("output", "version"), name="prod_cost_snapshot_ver_uq")
+        ]

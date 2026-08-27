@@ -248,6 +248,113 @@ def warehouse_receipt_candidates(user, *, work_order=None):
     )
 
 
+def finance_cost_candidates(user):
+    """Production cost facts only; Finance remains the posting owner."""
+    from apps.production.models import ProductionDirectExtraCost, ProductionLaborCost
+
+    entities = accessible_legal_entities(user)
+    labor = ProductionLaborCost.objects.filter(
+        legal_entity__in=entities, reversed_at__isnull=True
+    ).select_related("work_order")
+    extra = ProductionDirectExtraCost.objects.filter(
+        legal_entity__in=entities, state=ProductionEntryState.POSTED, reversed_at__isnull=True
+    ).select_related("work_order")
+    return tuple(
+        [
+            {
+                "source_key": f"PROD_LABOR|{row.pk}",
+                "event_code": "PROD_DIRECT_LABOR",
+                "legal_entity_id": row.legal_entity_id,
+                "work_order_id": row.work_order_id,
+                "output_id": row.output_id,
+                "project_id": row.work_order.project_id,
+                "sales_order_id": row.work_order.sales_order_id,
+                "transaction_date": row.production_date,
+                "amount": row.amount,
+                "active": True,
+                "mapping_status": "BLOCKED_MAPPING",
+            }
+            for row in labor
+        ]
+        + [
+            {
+                "source_key": f"PROD_EXTRA_COST|{row.pk}",
+                "event_code": "PROD_EXTRA_OPERATOR_COST",
+                "legal_entity_id": row.legal_entity_id,
+                "work_order_id": row.work_order_id,
+                "output_id": row.output_id,
+                "project_id": row.work_order.project_id,
+                "sales_order_id": row.work_order.sales_order_id,
+                "transaction_date": row.cost_date,
+                "amount": row.amount,
+                "active": True,
+                "mapping_status": "BLOCKED_MAPPING",
+            }
+            for row in extra
+        ]
+    )
+
+
+def jasa_umum_allocations(receipt):
+    """Allocate shared subcontract service per accepted receipt, item-safely.
+
+    This is a read contract; Purchasing receipt history is never mutated.
+    """
+    from apps.purchasing.models import SubcontractCostType, SubcontractReceiptState
+
+    if receipt.state != SubcontractReceiptState.ACCEPTED:
+        return tuple()
+    lines = list(receipt.output_lines.order_by("line_number"))
+    driver_total = sum((line.accepted_quantity for line in lines), Decimal("0"))
+    shared = list(
+        receipt.cost_lines.filter(cost_type=SubcontractCostType.SHARED_SERVICE).order_by(
+            "line_number"
+        )
+    )
+    if not shared:
+        return tuple()
+    if not driver_total:
+        return tuple({"status": "BLOCKED_NO_DRIVER", "receipt_id": receipt.pk} for _ in shared)
+    results = []
+    for source in shared:
+        remaining = source.amount
+        for index, line in enumerate(lines):
+            allocated = (
+                remaining
+                if index == len(lines) - 1
+                else (source.amount * line.accepted_quantity / driver_total).quantize(
+                    Decimal("0.01")
+                )
+            )
+            remaining -= allocated
+            results.append(
+                {
+                    "status": "READY",
+                    "receipt_id": receipt.pk,
+                    "source_cost_line_id": source.pk,
+                    "output_id": line.output_id,
+                    "accepted_quantity": line.accepted_quantity,
+                    "driver_total": driver_total,
+                    "ratio": line.accepted_quantity / driver_total,
+                    "source_amount": source.amount,
+                    "allocated_amount": allocated,
+                }
+            )
+    return tuple(results)
+
+
+def production_cost_snapshots(user, *, work_order=None):
+    """Persisted HPP/COGM read model; this selector never builds snapshots."""
+    from apps.production.models import ProductionCostSnapshot
+
+    qs = ProductionCostSnapshot.objects.filter(
+        work_order__legal_entity__in=accessible_legal_entities(user)
+    ).select_related("work_order", "output", "output__item")
+    if work_order is not None:
+        qs = qs.filter(work_order=work_order)
+    return qs.order_by("work_order_id", "output_id", "-version")
+
+
 def material_issue_candidates(user, *, work_order=None):
     """Read-only future Warehouse source contract; it creates no stock effect."""
     orders = eligible_internal_work_orders(user)

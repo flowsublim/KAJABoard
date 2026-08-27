@@ -56,6 +56,9 @@ def _module_cards(user) -> tuple[HomeModule, ...]:
     production_choices = (
         ("production.view_productionworkentry", "production:wip-list"),
         ("production.view_productionwarehousehandover", "production:handover-list"),
+        ("production.view_productiontariff", "production:tariff-list"),
+        ("production.view_productiondirectextracost", "production:extra-cost-list"),
+        ("production.view_productioncostsnapshot", "production:cost-list"),
     )
     if _has_any_permission(user, *(permission for permission, _ in production_choices)):
         modules.append(

@@ -5,6 +5,7 @@ from .categories import (
 )
 from .closure import (
     procurement_finance_sources,
+    production_overhead_eligibility_candidates,
     production_overhead_sources,
     vendor_analytics,
     vendor_analytics_detail,
@@ -58,6 +59,7 @@ __all__ = [
     "warehouse_subcontract_receipt_candidates",
     "procurement_finance_sources",
     "production_overhead_sources",
+    "production_overhead_eligibility_candidates",
     "vendor_analytics",
     "vendor_analytics_detail",
 ]
