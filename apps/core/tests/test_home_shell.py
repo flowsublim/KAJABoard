@@ -111,6 +111,8 @@ def test_sidebar_hides_sales_parent_without_visible_sales_children(client):
     response = client.get(reverse("home:home"))
 
     assert b"<summary>Sales</summary>" not in response.content
+    assert b"<summary>Purchasing</summary>" not in response.content
+    assert client.get(reverse("purchasing_operations:order-list")).status_code == 403
 
 
 @pytest.mark.django_db
@@ -147,3 +149,55 @@ def test_superuser_sidebar_shows_current_modular_sections(client):
         b"<summary>System Configuration</summary>",
     ):
         assert label in response.content
+
+
+@pytest.mark.django_db
+def test_purchasing_operational_and_configuration_namespaces_coexist(client):
+    assert reverse("purchasing_operations:order-list") == "/purchasing/"
+    assert reverse("purchasing_operations:work-order-list") == "/purchasing/spk/"
+    assert reverse("purchasing_operations:dispatch-list") == "/purchasing/kirim-bahan/"
+    assert reverse("purchasing_operations:receipt-list") == "/purchasing/terima-maklun/"
+    assert reverse("purchasing_operations:vendor-analytics") == "/purchasing/analitik-vendor/"
+    assert reverse("purchasing:category-list") == "/settings/purchasing/purchase-categories/"
+
+
+@pytest.mark.django_db
+def test_home_renders_purchasing_sidebar_for_operational_permissions(client):
+    entity = LegalEntity.objects.create(code="HOME-PO", name="Home Purchasing")
+    user = User.objects.create_user("home-purchase@example.com", "password")
+    OrganizationMembership.objects.create(user=user, legal_entity=entity)
+    user.user_permissions.add(
+        Permission.objects.get(codename="view_purchaseorder"),
+        Permission.objects.get(codename="view_workorder"),
+        Permission.objects.get(codename="view_subcontractmaterialdispatch"),
+        Permission.objects.get(codename="view_subcontractreceipt"),
+    )
+    client.force_login(user)
+    response = client.get(reverse("home:home"))
+    assert response.status_code == 200
+    for label in (b"Pembelian", b"SPK", b"Kirim Bahan", b"Terima Maklun"):
+        assert label in response.content
+
+
+@pytest.mark.django_db
+def test_purchasing_operational_pages_render_with_registered_namespace(client):
+    entity = LegalEntity.objects.create(code="PURCH-SMOKE", name="Purchasing Smoke")
+    user = User.objects.create_user("purchasing-smoke@example.com", "password")
+    OrganizationMembership.objects.create(user=user, legal_entity=entity)
+    user.user_permissions.add(
+        Permission.objects.get(codename="view_purchaseorder"),
+        Permission.objects.get(codename="view_workorder"),
+        Permission.objects.get(codename="view_subcontractmaterialdispatch"),
+        Permission.objects.get(codename="view_subcontractreceipt"),
+    )
+    client.force_login(user)
+
+    for route_name in (
+        "purchasing_operations:order-list",
+        "purchasing_operations:work-order-list",
+        "purchasing_operations:dispatch-list",
+        "purchasing_operations:receipt-list",
+        "purchasing_operations:vendor-analytics",
+    ):
+        response = client.get(reverse(route_name))
+        assert response.status_code == 200, route_name
