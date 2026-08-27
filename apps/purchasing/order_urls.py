@@ -44,4 +44,19 @@ urlpatterns = [
     path("spk/<uuid:pk>/approve/", views.work_order_approve, name="work-order-approve"),
     path("spk/<uuid:pk>/void/", views.work_order_void, name="work-order-void"),
     path("spk/<uuid:pk>/print/", views.work_order_print, name="work-order-print"),
+    path("kirim-bahan/", views.dispatch_list, name="dispatch-list"),
+    path("kirim-bahan/new/", views.dispatch_create, name="dispatch-create"),
+    path("kirim-bahan/<uuid:pk>/", views.dispatch_detail, name="dispatch-detail"),
+    path("kirim-bahan/<uuid:pk>/lines/new/", views.dispatch_line_add, name="dispatch-line-add"),
+    path("kirim-bahan/<uuid:pk>/confirm/", views.dispatch_confirm, name="dispatch-confirm"),
+    path("kirim-bahan/<uuid:pk>/cancel/", views.dispatch_cancel, name="dispatch-cancel"),
+    path("terima-maklun/", views.receipt_list, name="receipt-list"),
+    path("terima-maklun/new/", views.receipt_create, name="receipt-create"),
+    path("terima-maklun/<uuid:pk>/", views.receipt_detail, name="receipt-detail"),
+    path(
+        "terima-maklun/<uuid:pk>/outputs/new/", views.receipt_output_add, name="receipt-output-add"
+    ),
+    path("terima-maklun/<uuid:pk>/costs/new/", views.receipt_cost_add, name="receipt-cost-add"),
+    path("terima-maklun/<uuid:pk>/accept/", views.receipt_accept, name="receipt-accept"),
+    path("terima-maklun/<uuid:pk>/cancel/", views.receipt_cancel, name="receipt-cancel"),
 ]

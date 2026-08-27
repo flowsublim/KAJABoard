@@ -9,6 +9,11 @@ from apps.purchasing.models import (
     PurchaseCategory,
     PurchaseOrder,
     PurchaseOrderLine,
+    SubcontractMaterialDispatch,
+    SubcontractMaterialDispatchLine,
+    SubcontractReceipt,
+    SubcontractReceiptCostLine,
+    SubcontractReceiptOutputLine,
     WorkOrder,
     WorkOrderMaterialAllocation,
     WorkOrderOutput,
@@ -165,3 +170,35 @@ class WorkOrderMaterialAllocationForm(forms.ModelForm):
         if self.instance.pk:
             self.fields["output"].disabled = True
             self.fields["material_item"].disabled = True
+
+
+class SubcontractMaterialDispatchForm(forms.ModelForm):
+    class Meta:
+        model = SubcontractMaterialDispatch
+        fields = ("work_order", "dispatch_date", "notes")
+        widgets = {"dispatch_date": forms.DateInput(attrs={"type": "date"})}
+
+
+class DispatchLineForm(forms.ModelForm):
+    class Meta:
+        model = SubcontractMaterialDispatchLine
+        fields = ("allocation", "quantity", "notes")
+
+
+class SubcontractReceiptForm(forms.ModelForm):
+    class Meta:
+        model = SubcontractReceipt
+        fields = ("work_order", "receipt_date", "notes")
+        widgets = {"receipt_date": forms.DateInput(attrs={"type": "date"})}
+
+
+class ReceiptOutputForm(forms.ModelForm):
+    class Meta:
+        model = SubcontractReceiptOutputLine
+        fields = ("output", "accepted_quantity", "notes")
+
+
+class ReceiptCostForm(forms.ModelForm):
+    class Meta:
+        model = SubcontractReceiptCostLine
+        fields = ("cost_type", "output", "amount", "notes")

@@ -10,6 +10,17 @@ from .orders import (
     purchase_orders,
     treatment_candidates,
 )
+from .subcontract import (
+    approved_subcontract_sources,
+    dispatch_allowance,
+    material_dispatches,
+    output_remaining,
+    subcontract_fulfillment,
+    subcontract_hpp_sources,
+    subcontract_receipts,
+    warehouse_material_issue_candidates,
+    warehouse_subcontract_receipt_candidates,
+)
 from .work_orders import (
     approved_internal_work_orders,
     approved_subcontract_work_orders,
@@ -30,4 +41,13 @@ __all__ = [
     "approved_subcontract_work_orders",
     "work_order_detail",
     "work_orders",
+    "approved_subcontract_sources",
+    "dispatch_allowance",
+    "material_dispatches",
+    "output_remaining",
+    "subcontract_fulfillment",
+    "subcontract_hpp_sources",
+    "subcontract_receipts",
+    "warehouse_material_issue_candidates",
+    "warehouse_subcontract_receipt_candidates",
 ]

@@ -5,10 +5,15 @@ from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
 
 from apps.purchasing.forms import (
+    DispatchLineForm,
     LifecycleReasonForm,
     PurchaseCategoryForm,
     PurchaseOrderForm,
     PurchaseOrderLineForm,
+    ReceiptCostForm,
+    ReceiptOutputForm,
+    SubcontractMaterialDispatchForm,
+    SubcontractReceiptForm,
     WorkOrderForm,
     WorkOrderMaterialAllocationForm,
     WorkOrderOutputForm,
@@ -18,26 +23,39 @@ from apps.purchasing.models import (
     PurchaseCategory,
     PurchaseOrder,
     PurchaseOrderState,
+    SubcontractMaterialDispatch,
+    SubcontractReceipt,
     WorkOrder,
     WorkOrderState,
 )
 from apps.purchasing.selectors import (
+    material_dispatches,
     purchase_categories,
     purchase_order_detail,
     purchase_orders,
+    subcontract_receipts,
     work_orders,
 )
 from apps.purchasing.selectors import (
     work_order_detail as select_work_order_detail,
 )
 from apps.purchasing.services import (
+    accept_subcontract_receipt,
+    add_dispatch_line,
     add_material_allocation,
     add_purchase_order_line,
+    add_receipt_cost_line,
+    add_receipt_output_line,
     add_work_order_output,
     approve_work_order,
+    cancel_material_dispatch,
     cancel_purchase_order,
+    cancel_subcontract_receipt,
+    confirm_material_dispatch,
     confirm_purchase_order,
+    create_draft_material_dispatch,
     create_draft_purchase_order,
+    create_draft_subcontract_receipt,
     create_draft_work_order,
     create_purchase_category,
     deactivate_purchase_category,
@@ -532,3 +550,250 @@ def work_order_print(request, pk):
     _require(request.user, "view", WorkOrder)
     work_order = select_work_order_detail(request.user, pk=pk)
     return render(request, "purchasing/work_order_print.html", {"work_order": work_order})
+
+
+@login_required
+def dispatch_list(request):
+    _require(request.user, "view", SubcontractMaterialDispatch)
+    page = Paginator(material_dispatches(request.user), 25).get_page(request.GET.get("page"))
+    return render(
+        request,
+        "purchasing/subcontract_list.html",
+        {
+            "page": page,
+            "title": "Kirim Bahan",
+            "create_url": "purchasing_operations:dispatch-create",
+            "can_add": request.user.has_perm("purchasing.add_subcontractmaterialdispatch"),
+        },
+    )
+
+
+@login_required
+def dispatch_create(request):
+    _require(request.user, "add", SubcontractMaterialDispatch)
+    form = SubcontractMaterialDispatchForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            obj = create_draft_material_dispatch(actor=request.user, **form.cleaned_data)
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, "Kirim Bahan berhasil disimpan.")
+            return redirect("purchasing_operations:dispatch-detail", pk=obj.pk)
+    return render(
+        request, "purchasing/subcontract_form.html", {"form": form, "title": "Tambah Kirim Bahan"}
+    )
+
+
+@login_required
+def dispatch_detail(request, pk):
+    _require(request.user, "view", SubcontractMaterialDispatch)
+    obj = get_object_or_404(
+        material_dispatches(request.user).prefetch_related("lines__allocation__output"), pk=pk
+    )
+    return render(
+        request,
+        "purchasing/subcontract_detail.html",
+        {
+            "obj": obj,
+            "kind": "dispatch",
+            "can_change": request.user.has_perm("purchasing.change_subcontractmaterialdispatch")
+            and obj.state == "DRAFT",
+            "can_confirm": request.user.has_perm("purchasing.confirm_subcontractmaterialdispatch")
+            and obj.state == "DRAFT",
+            "can_cancel": request.user.has_perm("purchasing.cancel_subcontractmaterialdispatch")
+            and obj.state != "CANCELLED",
+        },
+    )
+
+
+@login_required
+def dispatch_line_add(request, pk):
+    _require(request.user, "change", SubcontractMaterialDispatch)
+    obj = get_object_or_404(material_dispatches(request.user), pk=pk)
+    form = DispatchLineForm(request.POST or None)
+    form.fields["allocation"].queryset = obj.work_order.material_allocations.all()
+    if request.method == "POST" and form.is_valid():
+        try:
+            add_dispatch_line(obj, actor=request.user, **form.cleaned_data)
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, "Bahan ditambahkan.")
+            return redirect("purchasing_operations:dispatch-detail", pk=obj.pk)
+    return render(
+        request, "purchasing/subcontract_form.html", {"form": form, "title": "Tambah Bahan Kirim"}
+    )
+
+
+@login_required
+def dispatch_confirm(request, pk):
+    _require_permission(request.user, "purchasing.confirm_subcontractmaterialdispatch")
+    obj = get_object_or_404(material_dispatches(request.user), pk=pk)
+    if request.method == "POST":
+        try:
+            confirm_material_dispatch(obj, actor=request.user)
+        except ValidationError as error:
+            messages.error(request, "; ".join(error.messages))
+        else:
+            messages.success(request, "Kirim Bahan dikonfirmasi.")
+        return redirect("purchasing_operations:dispatch-detail", pk=obj.pk)
+    return render(
+        request,
+        "purchasing/work_order_action.html",
+        {
+            "work_order": obj.work_order,
+            "action_title": "Konfirmasi Kirim Bahan",
+            "action_label": "Konfirmasi",
+        },
+    )
+
+
+@login_required
+def dispatch_cancel(request, pk):
+    _require_permission(request.user, "purchasing.cancel_subcontractmaterialdispatch")
+    obj = get_object_or_404(material_dispatches(request.user), pk=pk)
+    form = LifecycleReasonForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            cancel_material_dispatch(obj, actor=request.user, reason=form.cleaned_data["reason"])
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, "Kirim Bahan dibatalkan.")
+            return redirect("purchasing_operations:dispatch-detail", pk=obj.pk)
+    return render(
+        request, "purchasing/subcontract_form.html", {"form": form, "title": "Batalkan Kirim Bahan"}
+    )
+
+
+@login_required
+def receipt_list(request):
+    _require(request.user, "view", SubcontractReceipt)
+    page = Paginator(subcontract_receipts(request.user), 25).get_page(request.GET.get("page"))
+    return render(
+        request,
+        "purchasing/subcontract_list.html",
+        {
+            "page": page,
+            "title": "Terima Maklun",
+            "create_url": "purchasing_operations:receipt-create",
+            "can_add": request.user.has_perm("purchasing.add_subcontractreceipt"),
+        },
+    )
+
+
+@login_required
+def receipt_create(request):
+    _require(request.user, "add", SubcontractReceipt)
+    form = SubcontractReceiptForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            obj = create_draft_subcontract_receipt(actor=request.user, **form.cleaned_data)
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, "Terima Maklun berhasil disimpan.")
+            return redirect("purchasing_operations:receipt-detail", pk=obj.pk)
+    return render(
+        request, "purchasing/subcontract_form.html", {"form": form, "title": "Tambah Terima Maklun"}
+    )
+
+
+@login_required
+def receipt_detail(request, pk):
+    _require(request.user, "view", SubcontractReceipt)
+    obj = get_object_or_404(
+        subcontract_receipts(request.user).prefetch_related("output_lines", "cost_lines"), pk=pk
+    )
+    return render(
+        request,
+        "purchasing/subcontract_detail.html",
+        {
+            "obj": obj,
+            "kind": "receipt",
+            "can_change": request.user.has_perm("purchasing.change_subcontractreceipt")
+            and obj.state == "DRAFT",
+            "can_confirm": request.user.has_perm("purchasing.accept_subcontractreceipt")
+            and obj.state == "DRAFT",
+            "can_cancel": request.user.has_perm("purchasing.cancel_subcontractreceipt")
+            and obj.state != "CANCELLED",
+        },
+    )
+
+
+@login_required
+def receipt_output_add(request, pk):
+    _require(request.user, "change", SubcontractReceipt)
+    obj = get_object_or_404(subcontract_receipts(request.user), pk=pk)
+    form = ReceiptOutputForm(request.POST or None)
+    form.fields["output"].queryset = obj.work_order.outputs.all()
+    if request.method == "POST" and form.is_valid():
+        try:
+            add_receipt_output_line(obj, actor=request.user, **form.cleaned_data)
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, "Hasil Maklun ditambahkan.")
+            return redirect("purchasing_operations:receipt-detail", pk=obj.pk)
+    return render(
+        request, "purchasing/subcontract_form.html", {"form": form, "title": "Tambah Hasil Maklun"}
+    )
+
+
+@login_required
+def receipt_cost_add(request, pk):
+    _require(request.user, "change", SubcontractReceipt)
+    obj = get_object_or_404(subcontract_receipts(request.user), pk=pk)
+    form = ReceiptCostForm(request.POST or None)
+    form.fields["output"].queryset = obj.work_order.outputs.all()
+    if request.method == "POST" and form.is_valid():
+        try:
+            add_receipt_cost_line(obj, actor=request.user, **form.cleaned_data)
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, "Biaya jasa ditambahkan.")
+            return redirect("purchasing_operations:receipt-detail", pk=obj.pk)
+    return render(
+        request, "purchasing/subcontract_form.html", {"form": form, "title": "Tambah Biaya Jasa"}
+    )
+
+
+@login_required
+def receipt_accept(request, pk):
+    _require_permission(request.user, "purchasing.accept_subcontractreceipt")
+    obj = get_object_or_404(subcontract_receipts(request.user), pk=pk)
+    if request.method == "POST":
+        try:
+            accept_subcontract_receipt(obj, actor=request.user)
+        except ValidationError as error:
+            messages.error(request, "; ".join(error.messages))
+        else:
+            messages.success(request, "Terima Maklun diterima.")
+        return redirect("purchasing_operations:receipt-detail", pk=obj.pk)
+    return render(
+        request,
+        "purchasing/work_order_action.html",
+        {"work_order": obj.work_order, "action_title": "Terima Maklun", "action_label": "Terima"},
+    )
+
+
+@login_required
+def receipt_cancel(request, pk):
+    _require_permission(request.user, "purchasing.cancel_subcontractreceipt")
+    obj = get_object_or_404(subcontract_receipts(request.user), pk=pk)
+    form = LifecycleReasonForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            cancel_subcontract_receipt(obj, actor=request.user, reason=form.cleaned_data["reason"])
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, "Terima Maklun dibatalkan.")
+            return redirect("purchasing_operations:receipt-detail", pk=obj.pk)
+    return render(
+        request,
+        "purchasing/subcontract_form.html",
+        {"form": form, "title": "Batalkan Terima Maklun"},
+    )

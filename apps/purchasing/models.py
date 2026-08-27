@@ -357,3 +357,212 @@ class WorkOrderMaterialAllocation(UUIDPrimaryKeyModel, TimeStampedModel):
             )
         ]
         indexes = [models.Index(fields=("work_order", "output"), name="wo_material_output_idx")]
+
+
+class SubcontractDispatchState(models.TextChoices):
+    DRAFT = "DRAFT", "Draft"
+    CONFIRMED = "CONFIRMED", "Confirmed"
+    CANCELLED = "CANCELLED", "Cancelled"
+
+
+class SubcontractReceiptState(models.TextChoices):
+    DRAFT = "DRAFT", "Draft"
+    ACCEPTED = "ACCEPTED", "Accepted"
+    CANCELLED = "CANCELLED", "Cancelled"
+
+
+class SubcontractCostType(models.TextChoices):
+    SPECIFIC_SERVICE = "JASA_SPESIFIK_VARIAN", "Jasa spesifik varian"
+    SHARED_SERVICE = "JASA_UMUM", "Jasa umum"
+
+
+class SubcontractMaterialDispatch(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT)
+    document_allocation = models.OneToOneField(DocumentNumberAllocation, on_delete=models.PROTECT)
+    document_number = models.CharField(max_length=120)
+    work_order = models.ForeignKey(WorkOrder, on_delete=models.PROTECT, related_name="dispatches")
+    vendor = models.ForeignKey(
+        BusinessPartner, on_delete=models.PROTECT, related_name="material_dispatches"
+    )
+    vendor_code_snapshot = models.CharField(max_length=40)
+    vendor_name_snapshot = models.CharField(max_length=255)
+    dispatch_date = models.DateField()
+    state = models.CharField(
+        max_length=16, choices=SubcontractDispatchState.choices, default="DRAFT"
+    )
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_material_dispatches",
+    )
+    confirmed_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="confirmed_material_dispatches",
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="cancelled_material_dispatches",
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancellation_reason = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        permissions = [
+            ("confirm_subcontractmaterialdispatch", "Can confirm material dispatch"),
+            ("cancel_subcontractmaterialdispatch", "Can cancel material dispatch"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "document_number"), name="subdisp_entity_doc_unique"
+            )
+        ]
+        indexes = [
+            models.Index(fields=("legal_entity", "state", "dispatch_date"), name="subdisp_list_idx")
+        ]
+
+
+class SubcontractMaterialDispatchLine(UUIDPrimaryKeyModel, TimeStampedModel):
+    dispatch = models.ForeignKey(
+        SubcontractMaterialDispatch, on_delete=models.PROTECT, related_name="lines"
+    )
+    line_number = models.PositiveIntegerField()
+    allocation = models.ForeignKey(
+        WorkOrderMaterialAllocation, on_delete=models.PROTECT, related_name="dispatch_lines"
+    )
+    material_item = models.ForeignKey(Item, on_delete=models.PROTECT)
+    material_code_snapshot = models.CharField(max_length=64)
+    material_name_snapshot = models.CharField(max_length=255)
+    uom_code_snapshot = models.CharField(max_length=20)
+    quantity = models.DecimalField(max_digits=18, decimal_places=6)
+    reference_cost_snapshot = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True
+    )
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("dispatch", "line_number"), name="subdisp_line_unique"),
+            models.CheckConstraint(condition=Q(quantity__gt=0), name="subdisp_qty_positive"),
+        ]
+        indexes = [models.Index(fields=("allocation", "dispatch"), name="subdisp_allocation_idx")]
+
+
+class SubcontractReceipt(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT)
+    document_allocation = models.OneToOneField(DocumentNumberAllocation, on_delete=models.PROTECT)
+    document_number = models.CharField(max_length=120)
+    work_order = models.ForeignKey(
+        WorkOrder, on_delete=models.PROTECT, related_name="subcontract_receipts"
+    )
+    vendor = models.ForeignKey(
+        BusinessPartner, on_delete=models.PROTECT, related_name="subcontract_receipts"
+    )
+    vendor_code_snapshot = models.CharField(max_length=40)
+    vendor_name_snapshot = models.CharField(max_length=255)
+    receipt_date = models.DateField()
+    state = models.CharField(
+        max_length=16, choices=SubcontractReceiptState.choices, default="DRAFT"
+    )
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_subcontract_receipts",
+    )
+    accepted_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="accepted_subcontract_receipts",
+    )
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="cancelled_subcontract_receipts",
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancellation_reason = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        permissions = [
+            ("accept_subcontractreceipt", "Can accept subcontract receipt"),
+            ("cancel_subcontractreceipt", "Can cancel subcontract receipt"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "document_number"), name="subrec_entity_doc_unique"
+            )
+        ]
+        indexes = [
+            models.Index(fields=("legal_entity", "state", "receipt_date"), name="subrec_list_idx")
+        ]
+
+
+class SubcontractReceiptOutputLine(UUIDPrimaryKeyModel, TimeStampedModel):
+    receipt = models.ForeignKey(
+        SubcontractReceipt, on_delete=models.PROTECT, related_name="output_lines"
+    )
+    line_number = models.PositiveIntegerField()
+    output = models.ForeignKey(
+        WorkOrderOutput, on_delete=models.PROTECT, related_name="receipt_lines"
+    )
+    item = models.ForeignKey(Item, on_delete=models.PROTECT)
+    item_code_snapshot = models.CharField(max_length=64)
+    item_name_snapshot = models.CharField(max_length=255)
+    uom_code_snapshot = models.CharField(max_length=20)
+    accepted_quantity = models.DecimalField(max_digits=18, decimal_places=6)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("receipt", "line_number"), name="subrec_output_line_unique"
+            ),
+            models.CheckConstraint(
+                condition=Q(accepted_quantity__gt=0), name="subrec_qty_positive"
+            ),
+        ]
+        indexes = [models.Index(fields=("output", "receipt"), name="subrec_output_idx")]
+
+
+class SubcontractReceiptCostLine(UUIDPrimaryKeyModel, TimeStampedModel):
+    receipt = models.ForeignKey(
+        SubcontractReceipt, on_delete=models.PROTECT, related_name="cost_lines"
+    )
+    line_number = models.PositiveIntegerField()
+    cost_type = models.CharField(max_length=24, choices=SubcontractCostType.choices)
+    output = models.ForeignKey(
+        WorkOrderOutput,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="subcontract_cost_lines",
+    )
+    amount = models.DecimalField(max_digits=18, decimal_places=2)
+    currency = models.CharField(max_length=3, default="IDR")
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("receipt", "line_number"), name="subrec_cost_line_unique"
+            ),
+            models.CheckConstraint(condition=Q(amount__gte=0), name="subrec_cost_nonnegative"),
+        ]
+        indexes = [models.Index(fields=("receipt", "cost_type"), name="subrec_cost_type_idx")]

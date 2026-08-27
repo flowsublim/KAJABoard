@@ -10,6 +10,20 @@ from .orders import (
     confirm_purchase_order,
     create_draft_purchase_order,
 )
+from .subcontract import (
+    accept_subcontract_receipt,
+    add_dispatch_line,
+    add_receipt_cost_line,
+    add_receipt_output_line,
+    cancel_material_dispatch,
+    cancel_subcontract_receipt,
+    confirm_material_dispatch,
+    create_draft_material_dispatch,
+    create_draft_subcontract_receipt,
+    remove_dispatch_line,
+    remove_receipt_cost_line,
+    remove_receipt_output_line,
+)
 from .work_orders import (
     add_material_allocation,
     add_work_order_output,
@@ -44,4 +58,16 @@ __all__ = [
     "update_material_allocation",
     "update_work_order_output",
     "void_work_order",
+    "accept_subcontract_receipt",
+    "add_dispatch_line",
+    "add_receipt_cost_line",
+    "add_receipt_output_line",
+    "cancel_material_dispatch",
+    "cancel_subcontract_receipt",
+    "confirm_material_dispatch",
+    "create_draft_material_dispatch",
+    "create_draft_subcontract_receipt",
+    "remove_dispatch_line",
+    "remove_receipt_cost_line",
+    "remove_receipt_output_line",
 ]
