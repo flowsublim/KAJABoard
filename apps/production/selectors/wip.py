@@ -211,6 +211,47 @@ def production_completion_readiness(work_order):
     }
 
 
+def warehouse_accepted_quantity(output):
+    """Read-only Warehouse result; Production never writes this quantity."""
+    from django.db.models import Sum
+
+    from apps.warehouse.models import WarehouseDocumentState, WarehouseReceiptLine
+
+    return WarehouseReceiptLine.objects.filter(
+        output=output, receipt__state=WarehouseDocumentState.POSTED
+    ).aggregate(total=Sum("accepted_quantity"))["total"] or Decimal("0")
+
+
+def production_completion_with_warehouse(work_order):
+    summaries = output_wip_summaries(work_order)
+    outputs = []
+    for summary in summaries:
+        output = work_order.outputs.get(pk=summary.output_id)
+        accepted = warehouse_accepted_quantity(output)
+        target = output.target_quantity
+        outputs.append(
+            {
+                "output_id": summary.output.pk,
+                "target_quantity": target,
+                "ready_handover_quantity": summary.handover_quantity,
+                "warehouse_accepted_quantity": accepted,
+                "remaining_warehouse_acceptance": max(
+                    summary.handover_quantity - accepted, Decimal("0")
+                ),
+                "warehouse_accepted_complete": accepted >= summary.handover_quantity,
+            }
+        )
+    return {
+        "work_order_id": work_order.pk,
+        "production_conservation_ready": production_completion_readiness(work_order)[
+            "is_production_ready"
+        ],
+        "warehouse_accepted_complete": bool(outputs)
+        and all(row["warehouse_accepted_complete"] for row in outputs),
+        "outputs": tuple(outputs),
+    }
+
+
 def warehouse_receipt_candidates(user, *, work_order=None):
     """Read-only Warehouse receipt source contract; Production creates no stock receipt."""
     lines = active_handover_lines().select_related(

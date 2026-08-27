@@ -69,6 +69,19 @@ def _module_cards(user) -> tuple[HomeModule, ...]:
                 "OPERASIONAL",
             )
         )
+    warehouse_choices = (
+        ("warehouse.view_inventoryvaluationstate", "warehouse:dashboard"),
+        ("warehouse.view_stockmovement", "warehouse:movement-list"),
+    )
+    if _has_any_permission(user, *(permission for permission, _ in warehouse_choices)):
+        modules.append(
+            HomeModule(
+                "Warehouse",
+                "Stok fisik, pergerakan, dan penerimaan Produksi.",
+                _first_permitted_url(user, warehouse_choices),
+                "OPERASIONAL",
+            )
+        )
 
     master_permissions = (
         ("organizations.view_legalentity", "organizations:master-list"),

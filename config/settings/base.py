@@ -78,6 +78,7 @@ INSTALLED_APPS = [
     "apps.data_exchange.apps.DataExchangeConfig",
     "apps.sales.apps.SalesConfig",
     "apps.projects.apps.ProjectsConfig",
+    "apps.warehouse.apps.WarehouseConfig",
 ]
 
 MIDDLEWARE = [

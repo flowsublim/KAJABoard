@@ -278,10 +278,26 @@ def test_confirmed_line_source_contract_scope_audit_and_no_ledger_effects(
     assert AuditEvent.objects.filter(
         target_id=str(order.pk), action="sales.salesorder.confirmed"
     ).exists()
-    assert not any(
-        model._meta.label_lower in {"warehouse.stockmovement", "finance.journalentry"}
-        for model in SalesOrder._meta.apps.get_models()
+    # Physical/accounting ledger models may exist in later phases; confirming
+    # a Sales Order must not create any rows in them.
+    warehouse_model = next(
+        (
+            model
+            for model in SalesOrder._meta.apps.get_models()
+            if model._meta.label_lower == "warehouse.stockmovement"
+        ),
+        None,
     )
+    finance_model = next(
+        (
+            model
+            for model in SalesOrder._meta.apps.get_models()
+            if model._meta.label_lower == "finance.journalentry"
+        ),
+        None,
+    )
+    assert warehouse_model is None or warehouse_model.objects.count() == 0
+    assert finance_model is None or finance_model.objects.count() == 0
 
 
 @pytest.mark.django_db

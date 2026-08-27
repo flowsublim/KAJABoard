@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<div class="page-header"><div><p class="eyebrow">Warehouse</p><h1>Ringkasan Gudang</h1></div></div><section class="panel"><p>Stok aktif: {{ balances|length }}</p><p>Permintaan bahan Produksi: {{ pending_material|length }}</p><p>Siap diterima: {{ pending_receipts|length }}</p></section>{% endblock %}
