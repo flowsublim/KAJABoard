@@ -53,6 +53,15 @@ def _module_cards(user) -> tuple[HomeModule, ...]:
                 "OPERASIONAL",
             )
         )
+    if user.has_perm("production.view_productionworkentry"):
+        modules.append(
+            HomeModule(
+                "Produksi",
+                "WIP internal, Potong, Jahit, dan QC & Packing.",
+                reverse("production:wip-list"),
+                "OPERASIONAL",
+            )
+        )
 
     master_permissions = (
         ("organizations.view_legalentity", "organizations:master-list"),

@@ -72,6 +72,7 @@ INSTALLED_APPS = [
     "apps.catalog.apps.CatalogConfig",
     "apps.channels.apps.ChannelsConfig",
     "apps.purchasing.apps.PurchasingConfig",
+    "apps.production.apps.ProductionConfig",
     "apps.finance.apps.FinanceConfig",
     "apps.tax.apps.TaxConfig",
     "apps.data_exchange.apps.DataExchangeConfig",
