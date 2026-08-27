@@ -10,6 +10,7 @@ urlpatterns = [
     path("<uuid:pk>/lines/new/", views.order_line_add, name="order-line-add"),
     path("<uuid:pk>/confirm/", views.order_confirm, name="order-confirm"),
     path("<uuid:pk>/cancel/", views.order_cancel, name="order-cancel"),
+    path("<uuid:pk>/print/", views.order_print, name="order-print"),
     path("spk/", views.work_order_list, name="work-order-list"),
     path("spk/new/", views.work_order_create, name="work-order-create"),
     path("spk/<uuid:pk>/", views.work_order_detail, name="work-order-detail"),
@@ -50,6 +51,7 @@ urlpatterns = [
     path("kirim-bahan/<uuid:pk>/lines/new/", views.dispatch_line_add, name="dispatch-line-add"),
     path("kirim-bahan/<uuid:pk>/confirm/", views.dispatch_confirm, name="dispatch-confirm"),
     path("kirim-bahan/<uuid:pk>/cancel/", views.dispatch_cancel, name="dispatch-cancel"),
+    path("kirim-bahan/<uuid:pk>/print/", views.dispatch_print, name="dispatch-print"),
     path("terima-maklun/", views.receipt_list, name="receipt-list"),
     path("terima-maklun/new/", views.receipt_create, name="receipt-create"),
     path("terima-maklun/<uuid:pk>/", views.receipt_detail, name="receipt-detail"),
@@ -59,4 +61,9 @@ urlpatterns = [
     path("terima-maklun/<uuid:pk>/costs/new/", views.receipt_cost_add, name="receipt-cost-add"),
     path("terima-maklun/<uuid:pk>/accept/", views.receipt_accept, name="receipt-accept"),
     path("terima-maklun/<uuid:pk>/cancel/", views.receipt_cancel, name="receipt-cancel"),
+    path("terima-maklun/<uuid:pk>/print/", views.receipt_print, name="receipt-print"),
+    path("analitik-vendor/", views.vendor_analytics_list, name="vendor-analytics"),
+    path(
+        "analitik-vendor/<uuid:pk>/", views.vendor_analytics_detail, name="vendor-analytics-detail"
+    ),
 ]

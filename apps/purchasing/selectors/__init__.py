@@ -3,6 +3,12 @@ from .categories import (
     purchase_categories,
     resolve_purchase_category,
 )
+from .closure import (
+    procurement_finance_sources,
+    production_overhead_sources,
+    vendor_analytics,
+    vendor_analytics_detail,
+)
 from .orders import (
     committed_cost_sources,
     eligible_vendors,
@@ -50,4 +56,8 @@ __all__ = [
     "subcontract_receipts",
     "warehouse_material_issue_candidates",
     "warehouse_subcontract_receipt_candidates",
+    "procurement_finance_sources",
+    "production_overhead_sources",
+    "vendor_analytics",
+    "vendor_analytics_detail",
 ]

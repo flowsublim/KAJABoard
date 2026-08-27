@@ -1,7 +1,8 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.core.paginator import Paginator
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 
 from apps.purchasing.forms import (
@@ -34,7 +35,11 @@ from apps.purchasing.selectors import (
     purchase_order_detail,
     purchase_orders,
     subcontract_receipts,
+    vendor_analytics,
     work_orders,
+)
+from apps.purchasing.selectors import (
+    vendor_analytics_detail as select_vendor_analytics_detail,
 )
 from apps.purchasing.selectors import (
     work_order_detail as select_work_order_detail,
@@ -797,3 +802,48 @@ def receipt_cancel(request, pk):
         "purchasing/subcontract_form.html",
         {"form": form, "title": "Batalkan Terima Maklun"},
     )
+
+
+@login_required
+def vendor_analytics_list(request):
+    _require(request.user, "view", PurchaseOrder)
+    page = Paginator(vendor_analytics(request.user), 25).get_page(request.GET.get("page"))
+    return render(request, "purchasing/vendor_analytics_list.html", {"page": page})
+
+
+@login_required
+def vendor_analytics_detail(request, pk):
+    _require(request.user, "view", PurchaseOrder)
+    try:
+        data = select_vendor_analytics_detail(request.user, vendor_id=pk)
+    except ObjectDoesNotExist as error:
+        raise Http404 from error
+    return render(request, "purchasing/vendor_analytics_detail.html", data)
+
+
+@login_required
+def order_print(request, pk):
+    _require(request.user, "view", PurchaseOrder)
+    return render(
+        request,
+        "purchasing/order_print.html",
+        {"order": purchase_order_detail(request.user, pk=pk)},
+    )
+
+
+@login_required
+def dispatch_print(request, pk):
+    _require(request.user, "view", SubcontractMaterialDispatch)
+    obj = get_object_or_404(
+        material_dispatches(request.user).prefetch_related("lines__allocation__output"), pk=pk
+    )
+    return render(request, "purchasing/dispatch_print.html", {"obj": obj})
+
+
+@login_required
+def receipt_print(request, pk):
+    _require(request.user, "view", SubcontractReceipt)
+    obj = get_object_or_404(
+        subcontract_receipts(request.user).prefetch_related("output_lines", "cost_lines"), pk=pk
+    )
+    return render(request, "purchasing/receipt_print.html", {"obj": obj})

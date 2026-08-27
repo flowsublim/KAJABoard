@@ -93,17 +93,27 @@ def project_profitability(project) -> ProjectProfitability:
     ).values("sales_invoice_id").distinct().aggregate(value=Sum("sales_invoice__grand_total"))[
         "value"
     ] or Decimal("0")
+    from apps.purchasing.models import PurchaseOrder, PurchaseOrderState
+
+    committed_orders = PurchaseOrder.objects.filter(
+        project=project, state=PurchaseOrderState.CONFIRMED
+    )
+    committed_cost = (
+        committed_orders.aggregate(value=Sum("lines__line_total"))["value"]
+        if committed_orders.exists()
+        else None
+    )
     return ProjectProfitability(
         commercial_order_value=commercial_order_value,
         commercial_invoice_source_value=commercial_invoice_source_value,
         budget_value=project.budget_total,
-        committed_cost=None,
+        committed_cost=committed_cost,
         actual_cost=None,
         forecast_cost=None,
         projected_profit=None,
         projected_margin_percent=None,
         data_complete=False,
-        missing_sources=("purchasing", "production", "warehouse", "finance", "incentives"),
+        missing_sources=("production", "warehouse", "finance", "incentives"),
     )
 
 
