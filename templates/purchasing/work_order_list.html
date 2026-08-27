@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Purchasing</p><h1>SPK</h1></div>{% if can_add %}<a class="button button-primary" data-modal href="{% url 'purchasing_operations:work-order-create' %}">Tambah SPK</a>{% endif %}</div>
+<section class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>Nomor</th><th>Tipe</th><th>Pemasok</th><th>Jatuh Tempo</th><th>Status</th></tr></thead><tbody>{% for work_order in page %}<tr><td><a href="{% url 'purchasing_operations:work-order-detail' work_order.pk %}">{{ work_order.document_number }}</a></td><td>{{ work_order.get_work_order_type_display }}</td><td>{{ work_order.vendor|default:"-" }}</td><td>{{ work_order.due_date|default:"-" }}</td><td>{{ work_order.get_state_display }}</td></tr>{% empty %}<tr><td colspan="5" class="empty">Belum ada SPK.</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

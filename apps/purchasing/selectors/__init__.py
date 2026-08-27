@@ -10,6 +10,12 @@ from .orders import (
     purchase_orders,
     treatment_candidates,
 )
+from .work_orders import (
+    approved_internal_work_orders,
+    approved_subcontract_work_orders,
+    work_order_detail,
+    work_orders,
+)
 
 __all__ = [
     "committed_cost_sources",
@@ -20,4 +26,8 @@ __all__ = [
     "purchase_orders",
     "resolve_purchase_category",
     "treatment_candidates",
+    "approved_internal_work_orders",
+    "approved_subcontract_work_orders",
+    "work_order_detail",
+    "work_orders",
 ]

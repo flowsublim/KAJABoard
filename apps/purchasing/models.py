@@ -212,3 +212,148 @@ class PurchaseOrderLine(UUIDPrimaryKeyModel, TimeStampedModel):
                 name="po_line_treatment_idx",
             )
         ]
+
+
+class WorkOrderType(models.TextChoices):
+    INTERNAL = "INTERNAL", "Internal"
+    SUBCONTRACT = "SUBCONTRACT", "Subcontract"
+
+
+class WorkOrderState(models.TextChoices):
+    DRAFT = "DRAFT", "Draft"
+    SUBMITTED = "SUBMITTED", "Submitted"
+    APPROVED = "APPROVED", "Approved"
+    VOID = "VOID", "Void"
+
+
+class WorkOrder(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(
+        LegalEntity, on_delete=models.PROTECT, related_name="work_orders"
+    )
+    document_allocation = models.OneToOneField(
+        DocumentNumberAllocation, on_delete=models.PROTECT, related_name="work_order"
+    )
+    document_number = models.CharField(max_length=120)
+    document_date = models.DateField()
+    work_order_type = models.CharField(max_length=16, choices=WorkOrderType.choices)
+    vendor = models.ForeignKey(
+        BusinessPartner, null=True, blank=True, on_delete=models.PROTECT, related_name="work_orders"
+    )
+    sales_order = models.ForeignKey(
+        "sales.SalesOrder",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="work_orders",
+    )
+    project = models.ForeignKey(
+        "projects.Project",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="work_orders",
+    )
+    due_date = models.DateField(null=True, blank=True)
+    instructions = models.TextField(blank=True)
+    notes = models.TextField(blank=True)
+    state = models.CharField(
+        max_length=16, choices=WorkOrderState.choices, default=WorkOrderState.DRAFT
+    )
+    created_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_work_orders",
+    )
+    submitted_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="submitted_work_orders",
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="approved_work_orders",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    voided_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="voided_work_orders",
+    )
+    voided_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        permissions = [
+            ("submit_workorder", "Can submit work order"),
+            ("approve_workorder", "Can approve work order"),
+            ("void_workorder", "Can void work order"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "document_number"), name="wo_entity_doc_unique"
+            )
+        ]
+        indexes = [
+            models.Index(fields=("legal_entity", "state", "document_date"), name="wo_list_idx")
+        ]
+
+    def __str__(self) -> str:
+        return self.document_number
+
+
+class WorkOrderOutput(UUIDPrimaryKeyModel, TimeStampedModel):
+    work_order = models.ForeignKey(WorkOrder, on_delete=models.PROTECT, related_name="outputs")
+    line_number = models.PositiveIntegerField()
+    item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name="work_order_outputs")
+    item_code_snapshot = models.CharField(max_length=64)
+    item_name_snapshot = models.CharField(max_length=255)
+    uom_code_snapshot = models.CharField(max_length=20)
+    target_quantity = models.DecimalField(max_digits=18, decimal_places=6)
+    due_date = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("work_order", "line_number"), name="wo_output_line_unique"
+            ),
+            models.CheckConstraint(
+                condition=Q(target_quantity__gt=0), name="wo_output_qty_positive"
+            ),
+        ]
+        indexes = [models.Index(fields=("work_order", "item"), name="wo_output_item_idx")]
+
+
+class WorkOrderMaterialAllocation(UUIDPrimaryKeyModel, TimeStampedModel):
+    work_order = models.ForeignKey(
+        WorkOrder, on_delete=models.PROTECT, related_name="material_allocations"
+    )
+    output = models.ForeignKey(
+        WorkOrderOutput, on_delete=models.PROTECT, related_name="material_allocations"
+    )
+    material_item = models.ForeignKey(
+        Item, on_delete=models.PROTECT, related_name="work_order_material_allocations"
+    )
+    material_code_snapshot = models.CharField(max_length=64)
+    material_name_snapshot = models.CharField(max_length=255)
+    uom_code_snapshot = models.CharField(max_length=20)
+    planned_quantity = models.DecimalField(max_digits=18, decimal_places=6)
+    reference_cost = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(planned_quantity__gt=0), name="wo_material_qty_positive"
+            )
+        ]
+        indexes = [models.Index(fields=("work_order", "output"), name="wo_material_output_idx")]

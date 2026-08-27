@@ -8,7 +8,7 @@
   const toasts = document.getElementById("toast-container");
   let lastFocused;
 
-  const autoModal = (url) => /\/(new|edit|lines|confirm|cancel|post|hold-release|credit-override|activate|release|complete|lifecycle)\//.test(url);
+  const autoModal = (url) => /\/(new|edit|lines|confirm|cancel|post|hold-release|credit-override|activate|release|complete|lifecycle|submit|approve|void|remove)\//.test(url);
   const isPreview = (url) => /\/print\/$/.test(url);
   const closeModal = () => {
     modal?.setAttribute("aria-hidden", "true");

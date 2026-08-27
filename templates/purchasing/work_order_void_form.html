@@ -1,0 +1,2 @@
+{% extends "base.html" %}
+{% block content %}<div class="page-header"><h1>Void SPK</h1></div><form method="post" class="panel master-form">{% csrf_token %}<p>{{ work_order.document_number }}</p>{{ form.as_div }}<div class="form-actions"><button class="button button-danger" type="submit">Void</button><button class="button" type="button" data-modal-close>Batal</button></div></form>{% endblock %}
