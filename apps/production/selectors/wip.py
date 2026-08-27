@@ -6,8 +6,10 @@ from django.db.models import Sum
 from apps.organizations.selectors import accessible_legal_entities
 from apps.production.models import (
     ProductionEntryState,
+    ProductionHandoverState,
     ProductionRejectLine,
     ProductionStage,
+    ProductionWarehouseHandoverLine,
     ProductionWorkLine,
 )
 from apps.purchasing.models import WorkOrder, WorkOrderState, WorkOrderType
@@ -25,6 +27,7 @@ class OutputWIP:
     reject_cut_quantity: Decimal
     reject_sew_quantity: Decimal
     reject_qc_quantity: Decimal
+    handover_quantity: Decimal
 
     @property
     def available_sewing(self):
@@ -37,6 +40,40 @@ class OutputWIP:
     @property
     def qc_ready_quantity(self):
         return self.qc_quantity - self.reject_qc_quantity
+
+    @property
+    def available_handover(self):
+        return self.qc_quantity - self.handover_quantity - self.reject_qc_quantity
+
+    @property
+    def production_conserved(self):
+        return (
+            self.cut_quantity
+            == self.handover_quantity
+            + self.reject_cut_quantity
+            + self.reject_sew_quantity
+            + self.reject_qc_quantity
+        )
+
+    @property
+    def production_ready(self):
+        return (
+            self.production_conserved
+            and self.available_sewing == ZERO
+            and self.available_qc == ZERO
+            and self.available_handover == ZERO
+        )
+
+    @property
+    def target_variance(self):
+        """Production disposition less the planning target; never used to offset another output."""
+        return (
+            self.handover_quantity
+            + self.reject_cut_quantity
+            + self.reject_sew_quantity
+            + self.reject_qc_quantity
+            - self.target_quantity
+        )
 
 
 def _sum(queryset):
@@ -65,6 +102,16 @@ def active_reject_lines(*, output=None, stage=None):
     return queryset
 
 
+def active_handover_lines(*, output=None):
+    queryset = ProductionWarehouseHandoverLine.objects.filter(
+        handover__state=ProductionHandoverState.READY_FOR_GUDANG,
+        reversal__isnull=True,
+    )
+    if output is not None:
+        queryset = queryset.filter(output=output)
+    return queryset
+
+
 def output_wip(output) -> OutputWIP:
     return OutputWIP(
         output_id=output.pk,
@@ -77,6 +124,7 @@ def output_wip(output) -> OutputWIP:
         reject_qc_quantity=_sum(
             active_reject_lines(output=output, stage=ProductionStage.QC_PACKING)
         ),
+        handover_quantity=_sum(active_handover_lines(output=output)),
     )
 
 
@@ -86,6 +134,19 @@ def output_wip_summaries(work_order):
 
 def work_order_progress(work_order):
     summaries = output_wip_summaries(work_order)
+    if summaries and all(summary.production_ready for summary in summaries):
+        return "HANDED_OVER"
+    if (
+        summaries
+        and all(
+            summary.available_handover == ZERO
+            and summary.available_sewing == ZERO
+            and summary.available_qc == ZERO
+            for summary in summaries
+        )
+        and any(summary.handover_quantity for summary in summaries)
+    ):
+        return "READY_FOR_WAREHOUSE"
     return (
         "IN_PROGRESS"
         if any(
@@ -126,6 +187,64 @@ def production_reject_entries(user):
         ProductionRejectEntry.objects.filter(legal_entity__in=accessible_legal_entities(user))
         .select_related("legal_entity", "work_order")
         .order_by("-production_date", "-created_at")
+    )
+
+
+def production_handovers(user):
+    from apps.production.models import ProductionWarehouseHandover
+
+    return (
+        ProductionWarehouseHandover.objects.filter(legal_entity__in=accessible_legal_entities(user))
+        .select_related("legal_entity", "work_order")
+        .order_by("-handover_date", "-created_at")
+    )
+
+
+def production_completion_readiness(work_order):
+    summaries = output_wip_summaries(work_order)
+    return {
+        "work_order_id": work_order.pk,
+        "progress": work_order_progress(work_order),
+        "outputs": summaries,
+        "is_production_ready": bool(summaries)
+        and all(summary.production_ready for summary in summaries),
+    }
+
+
+def warehouse_receipt_candidates(user, *, work_order=None):
+    """Read-only Warehouse receipt source contract; Production creates no stock receipt."""
+    lines = active_handover_lines().select_related(
+        "handover__legal_entity",
+        "handover__work_order__project",
+        "handover__work_order__sales_order",
+        "output",
+        "item",
+    )
+    lines = lines.filter(handover__legal_entity__in=accessible_legal_entities(user))
+    if work_order is not None:
+        lines = lines.filter(handover__work_order=work_order)
+    return tuple(
+        {
+            "source_key": f"PROD_HANDOVER|{line.pk}",
+            "handover_id": line.handover_id,
+            "handover_line_id": line.pk,
+            "legal_entity_id": line.handover.legal_entity_id,
+            "work_order_id": line.handover.work_order_id,
+            "work_order_number": line.handover.work_order.document_number,
+            "output_id": line.output_id,
+            "project_id": line.handover.work_order.project_id,
+            "sales_order_id": line.handover.work_order.sales_order_id,
+            "item_id": line.item_id,
+            "item_code_snapshot": line.item_code_snapshot,
+            "item_name_snapshot": line.item_name_snapshot,
+            "uom_code_snapshot": line.uom_code_snapshot,
+            "quantity": line.quantity,
+            "handover_date": line.handover.handover_date,
+            "state": line.handover.state,
+            "unit_cost": None,
+            "cost_status": "UNAVAILABLE",
+        }
+        for line in lines
     )
 
 

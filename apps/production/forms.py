@@ -3,6 +3,8 @@ from django import forms
 from apps.production.models import (
     ProductionRejectEntry,
     ProductionRejectLine,
+    ProductionWarehouseHandover,
+    ProductionWarehouseHandoverLine,
     ProductionWorkEntry,
     ProductionWorkLine,
 )
@@ -46,3 +48,19 @@ class ProductionRejectLineForm(forms.ModelForm):
 class CorrectionForm(forms.Form):
     reason = forms.CharField(widget=forms.Textarea)
     idempotency_key = forms.CharField(widget=forms.HiddenInput)
+
+
+class ConfirmationForm(forms.Form):
+    pass
+
+
+class ProductionWarehouseHandoverForm(_EntryForm):
+    class Meta(_EntryForm.Meta):
+        model = ProductionWarehouseHandover
+        fields = ("legal_entity", "work_order", "handover_date", "notes")
+
+
+class ProductionWarehouseHandoverLineForm(forms.ModelForm):
+    class Meta:
+        model = ProductionWarehouseHandoverLine
+        fields = ("output", "quantity", "notes")

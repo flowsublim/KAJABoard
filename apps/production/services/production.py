@@ -10,15 +10,24 @@ from apps.core.services.audit import record_audit_event
 from apps.core.services.idempotency import claim_idempotency, complete_idempotency
 from apps.production.models import (
     ProductionEntryState,
+    ProductionHandoverState,
     ProductionRejectEntry,
     ProductionRejectLine,
     ProductionRejectLineReversal,
     ProductionStage,
+    ProductionWarehouseHandover,
+    ProductionWarehouseHandoverLine,
+    ProductionWarehouseHandoverLineReversal,
     ProductionWorkEntry,
     ProductionWorkLine,
     ProductionWorkLineReversal,
 )
-from apps.production.selectors.wip import active_reject_lines, active_work_lines, output_wip
+from apps.production.selectors.wip import (
+    active_handover_lines,
+    active_reject_lines,
+    active_work_lines,
+    output_wip,
+)
 from apps.purchasing.models import WorkOrder, WorkOrderOutput, WorkOrderState, WorkOrderType
 
 
@@ -87,6 +96,7 @@ def _lock_output(output_id):
     )
     list(active_work_lines(output=output).select_for_update())
     list(active_reject_lines(output=output).select_for_update())
+    list(active_handover_lines(output=output).select_for_update())
     return output
 
 
@@ -307,7 +317,10 @@ def reverse_work_line(line, *, reason, actor=None, idempotency_key):
         - line.quantity
         - wip.qc_quantity
         - wip.reject_sew_quantity,
-        ProductionStage.QC_PACKING: wip.qc_quantity - line.quantity - wip.reject_qc_quantity,
+        ProductionStage.QC_PACKING: wip.qc_quantity
+        - line.quantity
+        - wip.reject_qc_quantity
+        - wip.handover_quantity,
     }[line.entry.stage]
     if remaining < 0:
         raise ValidationError("Reversal would make downstream WIP overconsumed.")
@@ -463,7 +476,9 @@ def post_reject_entry(entry, *, actor=None, idempotency_key):
         available = {
             ProductionStage.CUT: wip.cut_quantity - wip.sew_quantity - wip.reject_cut_quantity,
             ProductionStage.SEW: wip.sew_quantity - wip.qc_quantity - wip.reject_sew_quantity,
-            ProductionStage.QC_PACKING: wip.qc_quantity - wip.reject_qc_quantity,
+            ProductionStage.QC_PACKING: wip.qc_quantity
+            - wip.reject_qc_quantity
+            - wip.handover_quantity,
         }[stage]
         if requested > available:
             raise ValidationError(
@@ -501,6 +516,220 @@ def reverse_reject_line(line, *, reason, actor=None, idempotency_key):
         original_line=line, reason=str(reason).strip(), reversed_by=actor
     )
     _audit(reversal, "production.reject_line.reversed", actor, reason=reason, key=idempotency_key)
+    complete_idempotency(
+        claim.record.pk,
+        result_reference=str(reversal.pk),
+        response={"reversal_id": str(reversal.pk)},
+    )
+    return reversal
+
+
+@transaction.atomic
+def create_handover_draft(*, legal_entity, work_order, handover_date, notes="", actor=None):
+    entity = legal_entity.__class__.objects.select_for_update().get(pk=legal_entity.pk)
+    order = WorkOrder.objects.select_for_update().get(pk=work_order.pk)
+    _eligible_work_order(order, entity)
+    handover = ProductionWarehouseHandover.objects.create(
+        legal_entity=entity,
+        work_order=order,
+        handover_date=handover_date,
+        notes=str(notes or "").strip(),
+        created_by=actor,
+    )
+    _audit(handover, "production.handover_draft.created", actor)
+    return handover
+
+
+@transaction.atomic
+def update_handover_draft(handover, *, actor=None, handover_date=None, notes=None):
+    handover = (
+        ProductionWarehouseHandover.objects.select_for_update()
+        .select_related("work_order", "legal_entity")
+        .get(pk=handover.pk)
+    )
+    if handover.state != ProductionHandoverState.DRAFT:
+        raise ValidationError("Only DRAFT handovers can be edited.")
+    _eligible_work_order(handover.work_order, handover.legal_entity)
+    before = {"handover_date": handover.handover_date.isoformat(), "notes": handover.notes}
+    if handover_date is not None:
+        handover.handover_date = handover_date
+    if notes is not None:
+        handover.notes = str(notes).strip()
+    handover.full_clean()
+    handover.save()
+    _audit(
+        handover,
+        "production.handover_draft.updated",
+        actor,
+        before=before,
+        after={"handover_date": handover.handover_date.isoformat(), "notes": handover.notes},
+    )
+    return handover
+
+
+def _handover_line_values(handover, output, quantity, sequence, notes):
+    if output.work_order_id != handover.work_order_id:
+        raise ValidationError({"output": "Output must belong to the handover SPK."})
+    if output.work_order.legal_entity_id != handover.legal_entity_id:
+        raise ValidationError({"output": "Output legal entity is invalid."})
+    return {
+        "handover": handover,
+        "output": output,
+        "item": output.item,
+        "item_code_snapshot": output.item_code_snapshot,
+        "item_name_snapshot": output.item_name_snapshot,
+        "uom_code_snapshot": output.uom_code_snapshot,
+        "quantity": _positive(quantity),
+        "sequence": sequence,
+        "notes": str(notes or "").strip(),
+    }
+
+
+@transaction.atomic
+def add_handover_line(handover, *, output, quantity, notes="", actor=None):
+    handover = (
+        ProductionWarehouseHandover.objects.select_for_update()
+        .select_related("work_order", "legal_entity")
+        .get(pk=handover.pk)
+    )
+    if handover.state != ProductionHandoverState.DRAFT:
+        raise ValidationError("Only DRAFT handovers can be edited.")
+    output = _lock_output(output.pk)
+    sequence = handover.lines.order_by("-sequence").values_list("sequence", flat=True).first() or 0
+    line = ProductionWarehouseHandoverLine.objects.create(
+        **_handover_line_values(handover, output, quantity, sequence + 1, notes)
+    )
+    _audit(line, "production.handover_line.added", actor)
+    return line
+
+
+@transaction.atomic
+def update_handover_line(line, *, output=None, quantity=None, notes=None, actor=None):
+    line = (
+        ProductionWarehouseHandoverLine.objects.select_for_update()
+        .select_related("handover__work_order", "handover__legal_entity")
+        .get(pk=line.pk)
+    )
+    if line.handover.state != ProductionHandoverState.DRAFT:
+        raise ValidationError("Only DRAFT handover lines can be edited.")
+    target = _lock_output((output or line.output).pk)
+    before = {"output": str(line.output_id), "quantity": str(line.quantity), "notes": line.notes}
+    values = _handover_line_values(
+        line.handover,
+        target,
+        quantity if quantity is not None else line.quantity,
+        line.sequence,
+        notes if notes is not None else line.notes,
+    )
+    for field, value in values.items():
+        setattr(line, field, value)
+    line.full_clean()
+    line.save()
+    _audit(
+        line,
+        "production.handover_line.updated",
+        actor,
+        before=before,
+        after={"output": str(line.output_id), "quantity": str(line.quantity), "notes": line.notes},
+    )
+    return line
+
+
+@transaction.atomic
+def remove_handover_line(line, *, actor=None):
+    line = (
+        ProductionWarehouseHandoverLine.objects.select_for_update()
+        .select_related("handover")
+        .get(pk=line.pk)
+    )
+    if line.handover.state != ProductionHandoverState.DRAFT:
+        raise ValidationError("Only DRAFT handover lines can be removed.")
+    _audit(line, "production.handover_line.removed", actor)
+    line.delete()
+
+
+@transaction.atomic
+def mark_handover_ready(handover, *, actor=None, idempotency_key):
+    handover = (
+        ProductionWarehouseHandover.objects.select_for_update()
+        .select_related("work_order", "legal_entity")
+        .get(pk=handover.pk)
+    )
+    claim = _claim(
+        "production.handover.ready",
+        idempotency_key,
+        {"handover": str(handover.pk), "lines": _line_payload(handover)},
+        actor,
+    )
+    replay = _replay(claim, ProductionWarehouseHandover)
+    if replay:
+        return replay
+    if handover.state != ProductionHandoverState.DRAFT:
+        raise ValidationError("Only DRAFT handovers can be marked Siap Gudang.")
+    _eligible_work_order(handover.work_order, handover.legal_entity)
+    lines = list(handover.lines.select_related("output").order_by("sequence"))
+    if not lines:
+        raise ValidationError("Handover needs at least one output line.")
+    requested_by_output = defaultdict(Decimal)
+    for line in lines:
+        requested_by_output[line.output_id] += line.quantity
+    for output_id, requested in requested_by_output.items():
+        output = _lock_output(output_id)
+        if output.work_order_id != handover.work_order_id:
+            raise ValidationError("Output must belong to the handover SPK.")
+        available = output_wip(output).available_handover
+        if requested > available:
+            raise ValidationError(
+                f"{output.item_code_snapshot}: requested {requested} exceeds "
+                f"available handover WIP {available}."
+            )
+    handover.state = ProductionHandoverState.READY_FOR_GUDANG
+    handover.ready_by = actor
+    handover.ready_at = timezone.now()
+    handover.save(update_fields=("state", "ready_by", "ready_at", "updated_at"))
+    _audit(handover, "production.handover.ready", actor, key=idempotency_key)
+    complete_idempotency(
+        claim.record.pk,
+        result_reference=str(handover.pk),
+        response={"handover_id": str(handover.pk)},
+    )
+    return handover
+
+
+@transaction.atomic
+def reverse_handover_line(line, *, reason, actor=None, idempotency_key):
+    if not str(reason).strip():
+        raise ValidationError({"reason": "Correction reason is required."})
+    line = (
+        ProductionWarehouseHandoverLine.objects.select_for_update()
+        .select_related("handover", "output")
+        .get(pk=line.pk)
+    )
+    claim = _claim(
+        "production.handover_line.reverse",
+        idempotency_key,
+        {"line": str(line.pk), "reason": str(reason).strip()},
+        actor,
+    )
+    replay = _replay(claim, ProductionWarehouseHandoverLineReversal)
+    if replay:
+        return replay
+    if line.handover.state != ProductionHandoverState.READY_FOR_GUDANG or hasattr(line, "reversal"):
+        raise ValidationError("Only active Siap Gudang lines can be reversed.")
+    _lock_output(line.output_id)
+    # Phase 6 may inject a durable Warehouse-result guard here before reversal.
+    reversal = ProductionWarehouseHandoverLineReversal.objects.create(
+        original_line=line,
+        reason=str(reason).strip(),
+        reversed_by=actor,
+    )
+    _audit(
+        reversal,
+        "production.handover_line.reversed",
+        actor,
+        reason=reason,
+        key=idempotency_key,
+    )
     complete_idempotency(
         claim.record.pk,
         result_reference=str(reversal.pk),

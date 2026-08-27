@@ -8,19 +8,25 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 from apps.organizations.selectors import user_can_access_entity
 from apps.production.forms import (
+    ConfirmationForm,
     CorrectionForm,
     ProductionRejectEntryForm,
     ProductionRejectLineForm,
+    ProductionWarehouseHandoverForm,
+    ProductionWarehouseHandoverLineForm,
     ProductionWorkEntryForm,
     ProductionWorkLineForm,
 )
 from apps.production.models import (
     ProductionEntryState,
+    ProductionHandoverState,
     ProductionRejectLine,
+    ProductionWarehouseHandoverLine,
     ProductionWorkLine,
 )
 from apps.production.selectors.wip import (
     output_wip_summaries,
+    production_handovers,
     production_reject_entries,
     production_work_entries,
     work_order_progress,
@@ -28,13 +34,20 @@ from apps.production.selectors.wip import (
 from apps.production.services.production import (
     add_draft_reject_line,
     add_draft_work_line,
+    add_handover_line,
     create_draft_reject_entry,
     create_draft_work_entry,
+    create_handover_draft,
+    mark_handover_ready,
     post_reject_entry,
     post_work_entry,
+    remove_handover_line,
+    reverse_handover_line,
     reverse_reject_line,
     reverse_work_line,
     update_draft_work_entry,
+    update_handover_draft,
+    update_handover_line,
 )
 
 
@@ -64,6 +77,179 @@ def wip_list(request):
             "can_add": request.user.has_perm("production.add_productionworkentry"),
         },
     )
+
+
+@login_required
+@permission_required("production.view_productionwarehousehandover", raise_exception=True)
+def handover_list(request):
+    return render(
+        request,
+        "production/handover_list.html",
+        {
+            "handovers": production_handovers(request.user)[:50],
+            "can_add": request.user.has_perm("production.add_productionwarehousehandover"),
+        },
+    )
+
+
+@login_required
+@permission_required("production.view_productionwarehousehandover", raise_exception=True)
+def handover_detail(request, pk):
+    handover = get_object_or_404(
+        production_handovers(request.user).prefetch_related("lines__output"), pk=pk
+    )
+    return render(
+        request,
+        "production/handover_detail.html",
+        {
+            "handover": handover,
+            "summaries": output_wip_summaries(handover.work_order),
+            "can_change": request.user.has_perm("production.change_productionwarehousehandover")
+            and handover.state == ProductionHandoverState.DRAFT,
+            "can_ready": request.user.has_perm("production.ready_productionwarehousehandover")
+            and handover.state == ProductionHandoverState.DRAFT,
+        },
+    )
+
+
+@login_required
+@permission_required("production.view_productionwarehousehandover", raise_exception=True)
+def handover_print(request, pk):
+    handover = get_object_or_404(
+        production_handovers(request.user).select_related("legal_entity", "work_order"), pk=pk
+    )
+    return render(request, "production/handover_print.html", {"handover": handover})
+
+
+@login_required
+@permission_required("production.add_productionwarehousehandover", raise_exception=True)
+def handover_create(request):
+    form = ProductionWarehouseHandoverForm(request.POST or None, user=request.user)
+    if request.method == "POST" and form.is_valid():
+        try:
+            handover = create_handover_draft(actor=request.user, **form.cleaned_data)
+        except ValidationError as error:
+            _errors(form, error)
+        else:
+            messages.success(request, "Draft Setor Gudang dibuat.")
+            return redirect("production:handover-detail", pk=handover.pk)
+    return render(request, "production/form.html", {"form": form, "title": "Setor Gudang"})
+
+
+@login_required
+@permission_required("production.change_productionwarehousehandover", raise_exception=True)
+def handover_edit(request, pk):
+    handover = get_object_or_404(production_handovers(request.user), pk=pk)
+    form = ProductionWarehouseHandoverForm(
+        request.POST or None, instance=handover, user=request.user
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            update_handover_draft(handover, actor=request.user, **form.cleaned_data)
+        except ValidationError as error:
+            _errors(form, error)
+        else:
+            messages.success(request, "Draft Setor Gudang diperbarui.")
+            return redirect("production:handover-detail", pk=handover.pk)
+    return render(request, "production/form.html", {"form": form, "title": "Edit Setor Gudang"})
+
+
+@login_required
+@permission_required("production.change_productionwarehousehandover", raise_exception=True)
+def handover_line_add(request, pk):
+    handover = get_object_or_404(production_handovers(request.user), pk=pk)
+    form = ProductionWarehouseHandoverLineForm(request.POST or None)
+    form.fields["output"].queryset = handover.work_order.outputs.all()
+    if request.method == "POST" and form.is_valid():
+        try:
+            add_handover_line(handover, actor=request.user, **form.cleaned_data)
+        except ValidationError as error:
+            _errors(form, error)
+        else:
+            messages.success(request, "Output handover ditambahkan.")
+            return redirect("production:handover-detail", pk=handover.pk)
+    return render(
+        request, "production/form.html", {"form": form, "title": "Tambah Output Handover"}
+    )
+
+
+@login_required
+@permission_required("production.change_productionwarehousehandover", raise_exception=True)
+def handover_line_edit(request, pk):
+    line = get_object_or_404(
+        ProductionWarehouseHandoverLine.objects.select_related("handover__legal_entity"), pk=pk
+    )
+    if not user_can_access_entity(request.user, line.handover.legal_entity_id):
+        return HttpResponseForbidden()
+    form = ProductionWarehouseHandoverLineForm(request.POST or None, instance=line)
+    form.fields["output"].queryset = line.handover.work_order.outputs.all()
+    if request.method == "POST" and form.is_valid():
+        try:
+            update_handover_line(line, actor=request.user, **form.cleaned_data)
+        except ValidationError as error:
+            _errors(form, error)
+        else:
+            messages.success(request, "Output handover diperbarui.")
+            return redirect("production:handover-detail", pk=line.handover_id)
+    return render(request, "production/form.html", {"form": form, "title": "Edit Output Handover"})
+
+
+@login_required
+@permission_required("production.change_productionwarehousehandover", raise_exception=True)
+def handover_line_remove(request, pk):
+    line = get_object_or_404(
+        ProductionWarehouseHandoverLine.objects.select_related("handover__legal_entity"), pk=pk
+    )
+    if not user_can_access_entity(request.user, line.handover.legal_entity_id):
+        return HttpResponseForbidden()
+    form = ConfirmationForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            remove_handover_line(line, actor=request.user)
+        except ValidationError as error:
+            _errors(form, error)
+        else:
+            messages.success(request, "Output handover dihapus dari draft.")
+            return redirect("production:handover-detail", pk=line.handover_id)
+    return render(request, "production/form.html", {"form": form, "title": "Hapus Output Handover"})
+
+
+@login_required
+@permission_required("production.ready_productionwarehousehandover", raise_exception=True)
+def handover_ready(request, pk):
+    handover = get_object_or_404(production_handovers(request.user), pk=pk)
+    form = CorrectionForm(request.POST or None, initial={"idempotency_key": str(uuid.uuid4())})
+    if request.method == "POST" and form.is_valid():
+        try:
+            mark_handover_ready(
+                handover, actor=request.user, idempotency_key=form.cleaned_data["idempotency_key"]
+            )
+        except ValidationError as error:
+            _errors(form, error)
+        else:
+            messages.success(request, "Handover Siap Gudang. Menunggu proses Warehouse.")
+            return redirect("production:handover-detail", pk=handover.pk)
+    return render(request, "production/form.html", {"form": form, "title": "Siap Gudang"})
+
+
+@login_required
+@permission_required("production.reverse_productionhandoverline", raise_exception=True)
+def handover_line_reverse(request, pk):
+    line = get_object_or_404(
+        ProductionWarehouseHandoverLine.objects.select_related("handover__legal_entity"), pk=pk
+    )
+    if not user_can_access_entity(request.user, line.handover.legal_entity_id):
+        return HttpResponseForbidden()
+    form = CorrectionForm(request.POST or None, initial={"idempotency_key": str(uuid.uuid4())})
+    if request.method == "POST" and form.is_valid():
+        try:
+            reverse_handover_line(line, actor=request.user, **form.cleaned_data)
+        except ValidationError as error:
+            _errors(form, error)
+        else:
+            messages.success(request, "Baris handover dikoreksi.")
+            return redirect("production:handover-detail", pk=line.handover_id)
+    return render(request, "production/form.html", {"form": form, "title": "Koreksi Handover"})
 
 
 @login_required

@@ -53,12 +53,16 @@ def _module_cards(user) -> tuple[HomeModule, ...]:
                 "OPERASIONAL",
             )
         )
-    if user.has_perm("production.view_productionworkentry"):
+    production_choices = (
+        ("production.view_productionworkentry", "production:wip-list"),
+        ("production.view_productionwarehousehandover", "production:handover-list"),
+    )
+    if _has_any_permission(user, *(permission for permission, _ in production_choices)):
         modules.append(
             HomeModule(
                 "Produksi",
                 "WIP internal, Potong, Jahit, dan QC & Packing.",
-                reverse("production:wip-list"),
+                _first_permitted_url(user, production_choices),
                 "OPERASIONAL",
             )
         )

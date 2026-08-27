@@ -11,14 +11,23 @@ from apps.catalog.models import UOM, Item
 from apps.core.services.numbering import create_document_sequence
 from apps.organizations.models import LegalEntity, OrganizationMembership
 from apps.production.models import ProductionEntryState, ProductionStage
-from apps.production.selectors.wip import material_issue_candidates, output_wip
+from apps.production.selectors.wip import (
+    material_issue_candidates,
+    output_wip,
+    production_completion_readiness,
+    warehouse_receipt_candidates,
+)
 from apps.production.services.production import (
     add_draft_reject_line,
     add_draft_work_line,
+    add_handover_line,
     create_draft_reject_entry,
     create_draft_work_entry,
+    create_handover_draft,
+    mark_handover_ready,
     post_reject_entry,
     post_work_entry,
+    reverse_handover_line,
     reverse_reject_line,
     reverse_work_line,
 )
@@ -105,6 +114,18 @@ def _post_reject(entity, user, order, output_quantities, key):
             entry, output=output, stage=stage, quantity=quantity, reason="Defect", actor=user
         )
     return post_reject_entry(entry, actor=user, idempotency_key=key)
+
+
+def _ready_handover(entity, user, order, output_quantities, key):
+    handover = create_handover_draft(
+        legal_entity=entity,
+        work_order=order,
+        handover_date=date(2026, 8, 27),
+        actor=user,
+    )
+    for output, quantity in output_quantities:
+        add_handover_line(handover, output=output, quantity=quantity, actor=user)
+    return mark_handover_ready(handover, actor=user, idempotency_key=key)
 
 
 @pytest.mark.django_db
@@ -244,3 +265,128 @@ def test_superuser_home_renders_production_sidebar(client):
     response = client.get(reverse("home:home"))
     assert response.status_code == 200
     assert b"<summary>Produksi</summary>" in response.content
+
+
+@pytest.mark.django_db
+def test_partial_handover_is_item_safe_and_exposes_costless_warehouse_candidate():
+    entity, user, order, (output_a, output_b) = _foundation("HO")
+    _post_work(
+        entity, user, order, [(output_a, "100"), (output_b, "20")], ProductionStage.CUT, "cut"
+    )
+    _post_work(
+        entity, user, order, [(output_a, "100"), (output_b, "20")], ProductionStage.SEW, "sew"
+    )
+    _post_work(
+        entity, user, order, [(output_a, "100"), (output_b, "20")], ProductionStage.QC_PACKING, "qc"
+    )
+    _post_reject(entity, user, order, [(output_a, ProductionStage.QC_PACKING, "10")], "rej-qc")
+    _ready_handover(entity, user, order, [(output_a, "30")], "handover-1")
+    assert output_wip(output_a).available_handover == Decimal("60")
+    _ready_handover(entity, user, order, [(output_a, "40")], "handover-2")
+    assert output_wip(output_a).available_handover == Decimal("20")
+    with pytest.raises(ValidationError):
+        _ready_handover(entity, user, order, [(output_a, "21")], "handover-over")
+    with pytest.raises(ValidationError):
+        _ready_handover(entity, user, order, [(output_b, "21")], "handover-item-safe")
+    candidate = warehouse_receipt_candidates(user, work_order=order)[0]
+    assert candidate["source_key"].startswith("PROD_HANDOVER|")
+    assert candidate["unit_cost"] is None
+    assert candidate["cost_status"] == "UNAVAILABLE"
+
+
+@pytest.mark.django_db
+def test_handover_multiline_aggregate_is_atomic_and_sibling_reversal_is_safe():
+    entity, user, order, (output_a, output_b) = _foundation("HOREV")
+    _post_work(
+        entity, user, order, [(output_a, "20"), (output_b, "30")], ProductionStage.CUT, "cut"
+    )
+    _post_work(
+        entity, user, order, [(output_a, "20"), (output_b, "30")], ProductionStage.SEW, "sew"
+    )
+    _post_work(
+        entity, user, order, [(output_a, "20"), (output_b, "30")], ProductionStage.QC_PACKING, "qc"
+    )
+    draft = create_handover_draft(
+        legal_entity=entity, work_order=order, handover_date=date(2026, 8, 27), actor=user
+    )
+    add_handover_line(draft, output=output_a, quantity="12", actor=user)
+    add_handover_line(draft, output=output_a, quantity="10", actor=user)
+    with pytest.raises(ValidationError):
+        mark_handover_ready(draft, actor=user, idempotency_key="handover-bad")
+    assert draft.state == "DRAFT"
+    ready = _ready_handover(entity, user, order, [(output_a, "20"), (output_b, "30")], "ready")
+    first, sibling = ready.lines.order_by("sequence")
+    reversal = reverse_handover_line(
+        first, reason="Koreksi output A", actor=user, idempotency_key="reverse-handover-a"
+    )
+    assert reversal.original_line_id == first.pk
+    assert ready.lines.filter(pk=sibling.pk).exists()
+    assert output_wip(output_a).available_handover == Decimal("20")
+    assert output_wip(output_b).available_handover == Decimal("0")
+    assert (
+        reverse_handover_line(
+            first, reason="Koreksi output A", actor=user, idempotency_key="reverse-handover-a"
+        )
+        == reversal
+    )
+
+
+@pytest.mark.django_db
+def test_completion_readiness_is_per_output_and_qc_reversal_respects_handover():
+    entity, user, order, (output_a, output_b) = _foundation("COMP")
+    _post_work(
+        entity, user, order, [(output_a, "100"), (output_b, "50")], ProductionStage.CUT, "cut"
+    )
+    _post_work(
+        entity, user, order, [(output_a, "100"), (output_b, "50")], ProductionStage.SEW, "sew"
+    )
+    qc = _post_work(
+        entity, user, order, [(output_a, "100"), (output_b, "50")], ProductionStage.QC_PACKING, "qc"
+    )
+    _ready_handover(entity, user, order, [(output_a, "100"), (output_b, "49")], "handover")
+    readiness = production_completion_readiness(order)
+    assert not readiness["is_production_ready"]
+    assert readiness["progress"] == "IN_PROGRESS"
+    assert output_wip(output_b).target_variance == Decimal("-51")
+    with pytest.raises(ValidationError):
+        reverse_work_line(
+            qc.lines.order_by("sequence").first(),
+            reason="Terlalu besar",
+            actor=user,
+            idempotency_key="qc-unsafe",
+        )
+    _ready_handover(entity, user, order, [(output_b, "1")], "handover-last")
+    assert production_completion_readiness(order)["is_production_ready"]
+
+
+@pytest.mark.django_db
+def test_handover_routes_and_sidebar_are_permission_aware(client):
+    entity, user, order, _ = _foundation("HOSMOKE")
+    handover = create_handover_draft(
+        legal_entity=entity, work_order=order, handover_date=date(2026, 8, 27), actor=user
+    )
+    assert reverse("production:wip-list") == "/production/"
+    assert reverse("production:handover-list") == "/production/handover/"
+    assert reverse("production:handover-detail", args=[handover.pk]).endswith(f"/{handover.pk}/")
+    client.force_login(user)
+    assert client.get(reverse("production:handover-list")).status_code == 403
+    user.user_permissions.add(Permission.objects.get(codename="view_productionwarehousehandover"))
+    response = client.get(reverse("home:home"))
+    assert response.status_code == 200
+    assert b"Setor Gudang" in response.content
+    assert b"WIP Produksi" not in response.content
+    assert client.get(reverse("production:handover-list")).status_code == 200
+    assert client.get(reverse("production:handover-detail", args=[handover.pk])).status_code == 200
+
+
+@pytest.mark.django_db
+def test_qc_reject_and_handover_share_the_same_available_wip():
+    entity, user, order, (output_a, _) = _foundation("HOREJ")
+    _post_work(entity, user, order, [(output_a, "100")], ProductionStage.CUT, "cut")
+    _post_work(entity, user, order, [(output_a, "100")], ProductionStage.SEW, "sew")
+    _post_work(entity, user, order, [(output_a, "100")], ProductionStage.QC_PACKING, "qc")
+    _ready_handover(entity, user, order, [(output_a, "90")], "handover")
+    _post_reject(entity, user, order, [(output_a, ProductionStage.QC_PACKING, "10")], "reject")
+    assert output_wip(output_a).available_handover == Decimal("0")
+    with pytest.raises(ValidationError):
+        _ready_handover(entity, user, order, [(output_a, "1")], "handover-over")
