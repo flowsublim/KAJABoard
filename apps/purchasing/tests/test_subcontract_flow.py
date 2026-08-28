@@ -35,7 +35,9 @@ from .test_work_orders import _foundation
 def _approved_subcontract():
     entity, user, output_item, material = _foundation("B2")
     vendor = BusinessPartner.objects.create(legal_entity=entity, code="B2V", display_name="Maklun")
-    PartnerRole.objects.create(partner=vendor, role_type=PartnerRoleType.SUBCONTRACTOR)
+    PartnerRole.objects.create(
+        partner=vendor, role_type=PartnerRoleType.SUBCONTRACTOR, effective_from=date(2026, 1, 1)
+    )
     work_order = create_draft_work_order(
         legal_entity=entity,
         document_date=date(2026, 8, 27),
@@ -65,6 +67,7 @@ def _approved_subcontract():
         prefix="KB",
         format_template="{prefix}-{yyyymmdd}-{seq}",
         padding=3,
+        effective_from=date(2026, 1, 1),
     )
     create_document_sequence(
         legal_entity=entity,
@@ -73,6 +76,7 @@ def _approved_subcontract():
         prefix="TM",
         format_template="{prefix}-{yyyymmdd}-{seq}",
         padding=3,
+        effective_from=date(2026, 1, 1),
     )
     return entity, user, work_order, output, allocation
 

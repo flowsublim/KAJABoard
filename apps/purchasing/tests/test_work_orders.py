@@ -32,13 +32,16 @@ def _foundation(code="WO"):
     entity = LegalEntity.objects.create(code=code, name=f"{code} Entity")
     user = User.objects.create_user(f"{code.lower()}@example.com", "password")
     OrganizationMembership.objects.create(user=user, legal_entity=entity)
-    uom = UOM.objects.create(code=f"{code}PCS", name="Pieces", dimension="COUNT")
+    uom = UOM.objects.create(
+        code=f"{code}PCS", name="Pieces", dimension="COUNT", effective_from=date(2026, 1, 1)
+    )
     output = Item.objects.create(
         legal_entity=entity,
         code=f"{code}OUT",
         name="Output",
         uom=uom,
         production_eligible=True,
+        effective_from=date(2026, 1, 1),
     )
     material = Item.objects.create(
         legal_entity=entity,
@@ -46,6 +49,7 @@ def _foundation(code="WO"):
         name="Material",
         uom=uom,
         inventory_eligible=True,
+        effective_from=date(2026, 1, 1),
     )
     create_document_sequence(
         legal_entity=entity,
@@ -54,6 +58,7 @@ def _foundation(code="WO"):
         prefix="SPK",
         format_template="{prefix}-{yyyymmdd}-{seq}",
         padding=3,
+        effective_from=date(2026, 1, 1),
     )
     return entity, user, output, material
 
@@ -107,7 +112,9 @@ def test_subcontract_requires_effective_same_entity_vendor():
             work_order_type=WorkOrderType.SUBCONTRACT,
             vendor=vendor,
         )
-    PartnerRole.objects.create(partner=vendor, role_type=PartnerRoleType.SUBCONTRACTOR)
+    PartnerRole.objects.create(
+        partner=vendor, role_type=PartnerRoleType.SUBCONTRACTOR, effective_from=date(2026, 1, 1)
+    )
     work_order = create_draft_work_order(
         legal_entity=entity,
         document_date=date(2026, 8, 27),
@@ -149,7 +156,9 @@ def test_void_requires_reason_and_removes_approved_subcontract_source():
     vendor = BusinessPartner.objects.create(
         legal_entity=entity, code="VOIDV", display_name="Vendor"
     )
-    PartnerRole.objects.create(partner=vendor, role_type=PartnerRoleType.VENDOR)
+    PartnerRole.objects.create(
+        partner=vendor, role_type=PartnerRoleType.VENDOR, effective_from=date(2026, 1, 1)
+    )
     work_order = create_draft_work_order(
         legal_entity=entity,
         document_date=date(2026, 8, 27),

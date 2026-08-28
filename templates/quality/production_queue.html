@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Antrian Quality Production · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Quality / Production</p><h1>Antrian Produksi</h1></div></div>
+<section class="panel table-panel"><table><thead><tr><th>SPK</th><th>Item</th><th>Handover line</th><th>Ready</th><th>Inspected</th><th>Pending</th><th>PASS</th><th>HOLD</th><th>REJECT</th><th>REWORK</th><th>Warehouse</th><th></th></tr></thead><tbody>{% for row in queue %}<tr><td>{{ row.work_order_number }}</td><td>{{ row.item_code_snapshot }}</td><td>{{ row.source_line_id }}</td><td>{{ row.presented_quantity }}</td><td>{{ row.posted_inspected_quantity }}</td><td>{{ row.pending_inspection_quantity }}</td><td>{{ row.posted_pass_quantity }}</td><td>{{ row.posted_hold_quantity }}</td><td>{{ row.posted_reject_quantity }}</td><td>{{ row.posted_rework_quantity }}</td><td>{{ row.warehouse_accepted_pass_quantity }}</td><td><a data-modal href="{% url 'quality:production-inspection-create' row.handover_line.pk %}">Inspeksi</a></td></tr>{% empty %}<tr><td colspan="12">Tidak ada pending inspection.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

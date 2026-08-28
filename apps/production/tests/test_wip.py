@@ -58,7 +58,9 @@ def _foundation(code="PROD", outputs=2):
     entity = LegalEntity.objects.create(code=code, name=f"{code} Entity")
     user = User.objects.create_user(f"{code.lower()}@example.com", "password")
     OrganizationMembership.objects.create(user=user, legal_entity=entity)
-    uom = UOM.objects.create(code=f"{code}PCS", name="Pieces", dimension="COUNT")
+    uom = UOM.objects.create(
+        code=f"{code}PCS", name="Pieces", dimension="COUNT", effective_from=date(2026, 1, 1)
+    )
     items = [
         Item.objects.create(
             legal_entity=entity,
@@ -66,11 +68,17 @@ def _foundation(code="PROD", outputs=2):
             name=f"Output {i}",
             uom=uom,
             production_eligible=True,
+            effective_from=date(2026, 1, 1),
         )
         for i in range(outputs)
     ]
     material = Item.objects.create(
-        legal_entity=entity, code=f"{code}MAT", name="Material", uom=uom, inventory_eligible=True
+        legal_entity=entity,
+        code=f"{code}MAT",
+        name="Material",
+        uom=uom,
+        inventory_eligible=True,
+        effective_from=date(2026, 1, 1),
     )
     create_document_sequence(
         legal_entity=entity,
@@ -79,6 +87,7 @@ def _foundation(code="PROD", outputs=2):
         prefix="SPK",
         format_template="{prefix}-{yyyymmdd}-{seq}",
         padding=3,
+        effective_from=date(2026, 1, 1),
     )
     work_order = create_draft_work_order(
         legal_entity=entity,

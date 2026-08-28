@@ -4,9 +4,15 @@ from decimal import Decimal
 import pytest
 from django.core.exceptions import ValidationError
 
+from apps.accounts.models import Employee
 from apps.organizations.models import Warehouse
 from apps.production.models import ProductionStage
 from apps.production.tests.test_wip import _foundation, _post_work, _ready_handover
+from apps.quality.services import (
+    create_from_production_handover,
+    post_inspection,
+    update_draft_line,
+)
 from apps.warehouse.models import (
     InventoryValuationState,
     MovementDirection,
@@ -136,6 +142,14 @@ def test_production_receipt_accepts_ready_handover_with_pending_valuation():
     _post_work(entity, user, order, [(output, 10)], ProductionStage.SEW, "rec-sew")
     _post_work(entity, user, order, [(output, 10)], ProductionStage.QC_PACKING, "rec-qc")
     handover = _ready_handover(entity, user, order, [(output, 10)], "rec-hand")
+    inspector = Employee.objects.create(
+        legal_entity=entity, employee_code="WH-QC", display_name="Warehouse QC"
+    )
+    inspection = create_from_production_handover(
+        handover.lines.first(), inspector=inspector, actor=user, inspection_date=date(2026, 8, 27)
+    )
+    update_draft_line(inspection.lines.get(), qty_inspected=10, qty_pass=10, actor=user)
+    post_inspection(inspection, actor=user, idempotency_key="rec-qc")
     warehouse = Warehouse.objects.create(legal_entity=entity, code="FG2", name="Finished")
     receipt = create_production_receipt(
         legal_entity=entity,

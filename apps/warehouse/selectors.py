@@ -69,6 +69,7 @@ def production_material_issue_candidates(user, *, work_order=None):
 
 def production_receipt_candidates(user, *, work_order=None):
     from apps.production.selectors.wip import warehouse_receipt_candidates
+    from apps.quality.selectors import quality_pass_authorization
 
     candidates = []
     for row in warehouse_receipt_candidates(user, work_order=work_order):
@@ -78,8 +79,19 @@ def production_receipt_candidates(user, *, work_order=None):
         row = dict(row)
         row["accepted_quantity"] = accepted
         row["remaining_quantity"] = row["quantity"] - accepted
+        authorization = quality_pass_authorization(row["handover_line_id"])
+        row["quality_pass_quantity"] = authorization["posted_pass_quantity"]
+        row["quality_remaining_pass_quantity"] = authorization["remaining_pass_quantity"]
+        row["pending_inspection_quantity"] = authorization["pending_inspection_quantity"]
+        row["remaining_quantity"] = min(
+            row["remaining_quantity"], authorization["remaining_pass_quantity"]
+        )
         candidates.append(row)
-    return tuple(row for row in candidates if row["remaining_quantity"] > 0)
+    return tuple(
+        row
+        for row in candidates
+        if row["remaining_quantity"] > 0 and row["quality_remaining_pass_quantity"] > 0
+    )
 
 
 def production_material_actual_cost(*, output):
@@ -92,3 +104,11 @@ def production_material_actual_cost(*, output):
     return rows.filter(valuation_status=ValuationStatus.READY).aggregate(total=Sum("total_value"))[
         "total"
     ]
+
+
+def posted_production_receipt_quantity(handover_line):
+    """Public read contract used by Quality's downstream dependency guard."""
+    return WarehouseReceiptLine.objects.filter(
+        handover_line=handover_line,
+        receipt__state="POSTED",
+    ).aggregate(total=Sum("accepted_quantity"))["total"] or Decimal("0")

@@ -34,6 +34,7 @@ from apps.production.selectors.wip import (
     output_wip_summaries,
     production_cost_snapshots,
     production_handovers,
+    production_quality_reconciliation,
     production_reject_entries,
     production_work_entries,
     work_order_progress,
@@ -118,6 +119,7 @@ def handover_detail(request, pk):
         {
             "handover": handover,
             "summaries": output_wip_summaries(handover.work_order),
+            "quality_reconciliation": production_quality_reconciliation(handover.work_order),
             "can_change": request.user.has_perm("production.change_productionwarehousehandover")
             and handover.state == ProductionHandoverState.DRAFT,
             "can_ready": request.user.has_perm("production.ready_productionwarehousehandover")

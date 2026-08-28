@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Inspeksi Quality · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Quality</p><h1>Inspeksi</h1></div><div class="page-actions"><a class="button button-primary" data-modal href="{% url 'quality:inspection-create' %}">Inspeksi Baru</a><a class="button" href="{% url 'quality:production-queue' %}">Antrian Production</a></div></div>
+<section class="panel table-panel"><table><thead><tr><th>Tanggal</th><th>Tipe</th><th>Sumber</th><th>Inspector</th><th>Status</th><th>Ringkasan</th></tr></thead><tbody>{% for inspection in inspections %}<tr><td>{{ inspection.inspection_date }}</td><td>{{ inspection.get_inspection_type_display }}</td><td><a href="{% url 'quality:inspection-detail' inspection.pk %}">{{ inspection.source_key }}</a></td><td>{{ inspection.inspector_name_snapshot|default:inspection.inspector.display_name|default:"—" }}</td><td>{{ inspection.get_state_display }}</td><td>{{ inspection.summary_status }}</td></tr>{% empty %}<tr><td colspan="6">Belum ada inspeksi.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

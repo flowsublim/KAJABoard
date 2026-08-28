@@ -20,7 +20,9 @@ from .test_work_orders import _foundation
 def test_vendor_analytics_scope_and_document_print_modal_routes(client):
     entity, user, item, _ = _foundation("P4CU")
     vendor = BusinessPartner.objects.create(legal_entity=entity, code="P4CV", display_name="Vendor")
-    PartnerRole.objects.create(partner=vendor, role_type=PartnerRoleType.SUBCONTRACTOR)
+    PartnerRole.objects.create(
+        partner=vendor, role_type=PartnerRoleType.SUBCONTRACTOR, effective_from=date(2026, 1, 1)
+    )
     work_order = create_draft_work_order(
         legal_entity=entity,
         document_date=date(2026, 8, 27),

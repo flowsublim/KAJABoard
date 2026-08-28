@@ -409,15 +409,24 @@ def add_production_receipt_line(receipt, *, handover_line, accepted_quantity, ac
         raise ValidationError("Only DRAFT receipt can be edited.")
     if handover_line.handover_id != receipt.handover_id:
         raise ValidationError("Handover line must belong to the receipt handover.")
+    handover_line = (
+        type(handover_line)
+        .objects.select_for_update()
+        .select_related("handover", "item", "output")
+        .get(pk=handover_line.pk)
+    )
     quantity = _positive(accepted_quantity, "accepted_quantity")
-    accepted = WarehouseReceiptLine.objects.filter(
-        handover_line=handover_line, receipt__state=WarehouseDocumentState.POSTED
-    ).aggregate(total=Sum("accepted_quantity"))["total"] or Decimal("0")
     drafted = receipt.lines.filter(handover_line=handover_line).aggregate(
         total=Sum("accepted_quantity")
     )["total"] or Decimal("0")
-    if accepted + drafted + quantity > handover_line.quantity:
-        raise ValidationError("Accepted quantity exceeds remaining Production handover.")
+    from apps.quality.selectors import quality_pass_authorization
+
+    authorization = quality_pass_authorization(handover_line)
+    if drafted + quantity > authorization["remaining_pass_quantity"]:
+        raise ValidationError(
+            "Accepted quantity exceeds remaining Quality PASS authorization. "
+            "Production finished goods require Quality PASS before Warehouse receipt."
+        )
     sequence = receipt.lines.order_by("-sequence").values_list("sequence", flat=True).first() or 0
     line = WarehouseReceiptLine.objects.create(
         receipt=receipt,
@@ -447,7 +456,22 @@ def post_production_receipt(receipt, *, actor=None, idempotency_key):
         return replay
     if receipt.state != WarehouseDocumentState.DRAFT or not receipt.lines.exists():
         raise ValidationError("Receipt must be a non-empty DRAFT.")
+    from apps.production.models import ProductionWarehouseHandoverLine
+    from apps.quality.selectors import quality_pass_authorization
+
+    posted_by_source = {}
     for line in receipt.lines.select_related("item"):
+        handover_line = ProductionWarehouseHandoverLine.objects.select_for_update().get(
+            pk=line.handover_line_id
+        )
+        authorization = quality_pass_authorization(handover_line)
+        posted_by_source[handover_line.pk] = (
+            posted_by_source.get(handover_line.pk, Decimal("0")) + line.accepted_quantity
+        )
+        if posted_by_source[handover_line.pk] > authorization["remaining_pass_quantity"]:
+            raise ValidationError(
+                "Warehouse receipt exceeds active Quality PASS authorization for a handover line."
+            )
         _post_movement(
             entity=receipt.legal_entity,
             warehouse=receipt.warehouse,

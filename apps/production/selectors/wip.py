@@ -224,21 +224,33 @@ def warehouse_accepted_quantity(output):
 
 def production_completion_with_warehouse(work_order):
     summaries = output_wip_summaries(work_order)
+    quality_rows = {row["output_id"]: row for row in production_quality_reconciliation(work_order)}
     outputs = []
     for summary in summaries:
         output = work_order.outputs.get(pk=summary.output_id)
         accepted = warehouse_accepted_quantity(output)
         target = output.target_quantity
+        quality = quality_rows[summary.output_id]
+        quality_complete = (
+            quality["quality_inspected_quantity"] >= quality["handover_ready_quantity"]
+        )
         outputs.append(
             {
-                "output_id": summary.output.pk,
+                "output_id": summary.output_id,
                 "target_quantity": target,
                 "ready_handover_quantity": summary.handover_quantity,
+                "quality_pass_quantity": quality["quality_pass_quantity"],
+                "quality_hold_quantity": quality["quality_hold_quantity"],
+                "quality_reject_quantity": quality["quality_reject_quantity"],
+                "quality_rework_quantity": quality["quality_rework_quantity"],
+                "quality_pending_inspection_quantity": quality["remaining_pending_inspection"],
                 "warehouse_accepted_quantity": accepted,
                 "remaining_warehouse_acceptance": max(
-                    summary.handover_quantity - accepted, Decimal("0")
+                    quality["quality_pass_quantity"] - accepted, Decimal("0")
                 ),
-                "warehouse_accepted_complete": accepted >= summary.handover_quantity,
+                "quality_complete": quality_complete,
+                "warehouse_accepted_complete": quality_complete
+                and accepted >= quality["quality_pass_quantity"],
             }
         )
     return {
@@ -250,6 +262,51 @@ def production_completion_with_warehouse(work_order):
         and all(row["warehouse_accepted_complete"] for row in outputs),
         "outputs": tuple(outputs),
     }
+
+
+def production_quality_reconciliation(work_order):
+    """Per-output Production view of Quality decisions and Warehouse acceptance."""
+    from apps.quality.selectors import quality_pass_authorization
+
+    outputs = []
+    for output in work_order.outputs.order_by("line_number"):
+        handovers = active_handover_lines(output=output).select_related("handover", "item")
+        rows = [quality_pass_authorization(line) for line in handovers]
+        outputs.append(
+            {
+                "output_id": output.pk,
+                "item_id": output.item_id,
+                "target_quantity": output.target_quantity,
+                "handover_ready_quantity": sum(
+                    (row["presented_quantity"] for row in rows), Decimal("0")
+                ),
+                "quality_inspected_quantity": sum(
+                    (row["posted_inspected_quantity"] for row in rows), Decimal("0")
+                ),
+                "quality_pass_quantity": sum(
+                    (row["posted_pass_quantity"] for row in rows), Decimal("0")
+                ),
+                "quality_hold_quantity": sum(
+                    (row["posted_hold_quantity"] for row in rows), Decimal("0")
+                ),
+                "quality_reject_quantity": sum(
+                    (row["posted_reject_quantity"] for row in rows), Decimal("0")
+                ),
+                "quality_rework_quantity": sum(
+                    (row["posted_rework_quantity"] for row in rows), Decimal("0")
+                ),
+                "warehouse_accepted_quantity": sum(
+                    (row["warehouse_accepted_pass_quantity"] for row in rows), Decimal("0")
+                ),
+                "remaining_pending_inspection": sum(
+                    (row["pending_inspection_quantity"] for row in rows), Decimal("0")
+                ),
+                "remaining_pass_acceptance": sum(
+                    (row["remaining_pass_quantity"] for row in rows), Decimal("0")
+                ),
+            }
+        )
+    return tuple(outputs)
 
 
 def warehouse_receipt_candidates(user, *, work_order=None):

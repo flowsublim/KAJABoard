@@ -82,6 +82,15 @@ def _module_cards(user) -> tuple[HomeModule, ...]:
                 "OPERASIONAL",
             )
         )
+    if user.has_perm("quality.view_qualityinspection"):
+        modules.append(
+            HomeModule(
+                "Quality",
+                "Inspeksi, keputusan mutu, dan antrian Quality.",
+                reverse("quality:dashboard"),
+                "OPERASIONAL",
+            )
+        )
 
     master_permissions = (
         ("organizations.view_legalentity", "organizations:master-list"),
