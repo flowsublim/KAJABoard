@@ -125,12 +125,20 @@ def quality_pass_authorization(handover_line):
 
 def subcontract_pass_authorization(receipt_line):
     from apps.purchasing.models import SubcontractReceiptOutputLine
+    from apps.warehouse.models import WarehouseDocumentState, WarehouseSubcontractReceiptLine
 
     if not hasattr(receipt_line, "receipt_id"):
         receipt_line = SubcontractReceiptOutputLine.objects.select_related(
             "receipt", "output", "item"
         ).get(pk=receipt_line)
     totals = quality_disposition_totals(subcontract_receipt_line=receipt_line)
+    warehouse_accepted = _sum(
+        WarehouseSubcontractReceiptLine.objects.filter(
+            subcontract_receipt_line=receipt_line,
+            receipt__state=WarehouseDocumentState.POSTED,
+        ),
+        "quantity",
+    )
     return {
         "source_key": f"QUALITY_PASS|SUBCONTRACT|{receipt_line.pk}",
         "source_module": "quality",
@@ -148,12 +156,15 @@ def subcontract_pass_authorization(receipt_line):
         "posted_hold_quantity": totals["hold_quantity"],
         "posted_reject_quantity": totals["reject_quantity"],
         "posted_rework_quantity": totals["rework_quantity"],
-        "remaining_pass_quantity": totals["pass_quantity"],
+        "warehouse_accepted_pass_quantity": warehouse_accepted,
+        "remaining_pass_quantity": max(totals["pass_quantity"] - warehouse_accepted, ZERO),
         "pending_inspection_quantity": max(
             receipt_line.accepted_quantity - totals["inspected_quantity"], ZERO
         ),
+        # Kept as a compatibility marker for the Phase 6B source contract;
+        # Phase 6C consumes this authorization through Warehouse services.
         "warehouse_posting": "NOT_IMPLEMENTED",
-        "active": totals["pass_quantity"] > ZERO,
+        "active": max(totals["pass_quantity"] - warehouse_accepted, ZERO) > ZERO,
     }
 
 
