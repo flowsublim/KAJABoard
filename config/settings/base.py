@@ -80,6 +80,7 @@ INSTALLED_APPS = [
     "apps.projects.apps.ProjectsConfig",
     "apps.warehouse.apps.WarehouseConfig",
     "apps.quality.apps.QualityConfig",
+    "apps.omnichannel.apps.OmnichannelConfig",
 ]
 
 MIDDLEWARE = [

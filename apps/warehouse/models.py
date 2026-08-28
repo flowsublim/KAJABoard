@@ -20,6 +20,7 @@ class MovementType(models.TextChoices):
     INVENTORY_ADJUSTMENT = "INVENTORY_ADJUSTMENT", "Penyesuaian Stok"
     INTERNAL_CONSUMPTION = "INTERNAL_CONSUMPTION", "Pemakaian Internal"
     SUPPLIER_RETURN = "SUPPLIER_RETURN", "Retur Supplier"
+    OMNI_PACKING = "OMNI_PACKING", "Packing Omnichannel"
 
 
 class WarehouseDocumentState(models.TextChoices):

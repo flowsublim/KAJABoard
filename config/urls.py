@@ -22,5 +22,6 @@ urlpatterns = [
     path("production/", include("apps.production.urls", namespace="production")),
     path("warehouse/", include("apps.warehouse.urls", namespace="warehouse")),
     path("quality/", include("apps.quality.urls", namespace="quality")),
+    path("omnichannel/", include("apps.omnichannel.urls", namespace="omnichannel")),
     path("", include("apps.organizations.urls", namespace="organizations")),
 ]
