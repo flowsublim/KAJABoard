@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Omni Revenue{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Omnichannel</p><h1>Revenue source</h1></div></div>
+<section class="panel"><p class="muted">Sumber revenue berdasarkan Completion Date; belum merupakan jurnal Finance.</p><table><thead><tr><th>Store</th><th>Order</th><th>Order Date</th><th>Completion Date</th><th>Status</th><th>Gross</th><th>Settlement</th><th>Mapping</th></tr></thead><tbody>{% for event in events %}<tr><td>{{ event.store.code }}</td><td>{{ event.external_order_number }}</td><td>{{ event.order.order_date }}</td><td>{{ event.completion_date }}</td><td>{{ event.state }}</td><td>{{ event.gross_eligible_amount|default_if_none:"Review" }}</td><td>{{ event.settlements.count }}</td><td>{{ event.mapping_status }}</td></tr>{% empty %}<tr><td colspan="8">Belum ada revenue source.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

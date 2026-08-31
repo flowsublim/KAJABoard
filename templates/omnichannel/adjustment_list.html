@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Omni Adjustment{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Omnichannel</p><h1>Adjustment source</h1></div></div>
+<section class="panel"><table><thead><tr><th>Date</th><th>Store</th><th>Marketplace</th><th>Order</th><th>Type</th><th>Amount</th><th>Status</th></tr></thead><tbody>{% for adjustment in adjustments %}<tr><td>{{ adjustment.transaction_date }}</td><td>{{ adjustment.store.code|default_if_none:"Review" }}</td><td>{{ adjustment.marketplace }}</td><td>{{ adjustment.external_order_number }}</td><td>{{ adjustment.adjustment_type }}</td><td>{{ adjustment.amount|default_if_none:"Review" }}</td><td>{{ adjustment.reconciliation_status }}</td></tr>{% empty %}<tr><td colspan="7">Belum ada adjustment source.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

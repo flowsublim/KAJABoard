@@ -17,4 +17,10 @@ urlpatterns = [
     path("packing/<uuid:pk>/", views.packing_detail, name="packing-detail"),
     path("packing/<uuid:pk>/post/", views.packing_post, name="packing-post"),
     path("exceptions/", views.exception_list, name="exception-list"),
+    path("revenue/", views.revenue_list, name="revenue"),
+    path("settlement/", views.settlement_list, name="settlement"),
+    path("returns/", views.return_list, name="return-list"),
+    path("adjustments/", views.adjustment_list, name="adjustment-list"),
+    path("reconciliation/", views.reconciliation, name="reconciliation"),
+    path("payout/", views.payout_list, name="payout"),
 ]

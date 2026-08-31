@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Omni Settlement{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Omnichannel</p><h1>Settlement source</h1></div></div>
+<section class="panel"><table><thead><tr><th>Source</th><th>Store</th><th>Order / Reference</th><th>Settlement Date</th><th>Gross</th><th>Net</th><th>Fees</th><th>Match</th></tr></thead><tbody>{% for settlement in settlements %}<tr><td>{{ settlement.batch.source_filename }}</td><td>{{ settlement.store.code|default_if_none:"Review" }}</td><td>{{ settlement.external_order_number }} / {{ settlement.settlement_reference }}</td><td>{{ settlement.settlement_date }}</td><td>{{ settlement.gross_amount|default_if_none:"Review" }}</td><td>{{ settlement.net_amount|default_if_none:"Review" }}</td><td>{{ settlement.fee_amount|default_if_none:"Review" }}</td><td>{{ settlement.reconciliation_status }}</td></tr>{% empty %}<tr><td colspan="8">Belum ada settlement source.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

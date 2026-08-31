@@ -5,12 +5,18 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 from apps.omnichannel.forms import OmniImportUploadForm, OmniPackingForm
 from apps.omnichannel.selectors import (
+    adjustment_sources,
     import_batches,
     omni_exceptions,
     omni_orders,
     operational_summary,
     order_daily_store_summary,
     packing_documents,
+    payout_sources,
+    reconciliation_dashboard,
+    return_sources,
+    revenue_events,
+    settlement_sources,
     warehouse_demand,
 )
 from apps.omnichannel.services import (
@@ -199,4 +205,74 @@ def exception_list(request):
     _require(request, "view_omniexception")
     return render(
         request, "omnichannel/exception_list.html", {"exceptions": omni_exceptions(request.user)}
+    )
+
+
+def _source_list(request, codename, template_name, context_name, selector):
+    _require(request, codename)
+    return render(request, template_name, {context_name: selector(request.user)})
+
+
+@login_required
+def revenue_list(request):
+    return _source_list(
+        request,
+        "view_omnirevenueevent",
+        "omnichannel/revenue_list.html",
+        "events",
+        revenue_events,
+    )
+
+
+@login_required
+def settlement_list(request):
+    return _source_list(
+        request,
+        "view_omnisettlement",
+        "omnichannel/settlement_list.html",
+        "settlements",
+        settlement_sources,
+    )
+
+
+@login_required
+def return_list(request):
+    return _source_list(
+        request,
+        "view_omnireturnsource",
+        "omnichannel/return_list.html",
+        "returns",
+        return_sources,
+    )
+
+
+@login_required
+def adjustment_list(request):
+    return _source_list(
+        request,
+        "view_omniadjustmentsource",
+        "omnichannel/adjustment_list.html",
+        "adjustments",
+        adjustment_sources,
+    )
+
+
+@login_required
+def reconciliation(request):
+    _require(request, "view_omniorder")
+    return render(
+        request,
+        "omnichannel/reconciliation.html",
+        reconciliation_dashboard(request.user),
+    )
+
+
+@login_required
+def payout_list(request):
+    return _source_list(
+        request,
+        "view_omnipayoutsource",
+        "omnichannel/payout_list.html",
+        "payouts",
+        payout_sources,
     )

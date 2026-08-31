@@ -1998,6 +1998,119 @@ def reverse_subcontract_warehouse_receipt(receipt, *, reason, actor=None, idempo
     return receipt
 
 
+@transaction.atomic
+def post_marketplace_return_in(
+    return_source,
+    *,
+    quantity,
+    actor=None,
+    idempotency_key,
+    warehouse=None,
+):
+    """Post only Quality-PASS return quantity as Warehouse-owned RETURN_IN."""
+
+    from apps.omnichannel.models import OmniReturnLinkageStatus, OmniReturnSource
+    from apps.quality.models import QualityDocumentState, QualityResult
+
+    source = (
+        OmniReturnSource.objects.select_for_update()
+        .select_related("legal_entity", "store", "resolved_item", "original_order_line")
+        .get(pk=return_source.pk)
+    )
+    quality_line = source.quality_inspection_line
+    if (
+        source.linkage_status != OmniReturnLinkageStatus.MATCHED
+        or source.resolved_item_id is None
+        or quality_line is None
+    ):
+        raise ValidationError(
+            "Only an unambiguous mapped return with a Quality candidate can post."
+        )
+    quality_line = (
+        quality_line.__class__.objects.select_for_update()
+        .select_related("inspection", "item")
+        .get(pk=quality_line.pk)
+    )
+    claim = _claim(
+        "warehouse.marketplace_return_in",
+        idempotency_key,
+        {
+            "return_source": str(source.pk),
+            "quality_line": str(quality_line.pk),
+            "quantity": str(quantity),
+        },
+        actor,
+    )
+    replay = _replay(claim, StockMovement)
+    if replay:
+        return replay
+    if quality_line.inspection.state != QualityDocumentState.POSTED:
+        raise ValidationError("Return Quality inspection must be POSTED before Warehouse receipt.")
+    if quality_line.result != QualityResult.PASS:
+        raise ValidationError("Only Quality PASS can authorize Warehouse RETURN_IN.")
+    quantity = _positive(quantity)
+    remaining_source = source.quantity - source.warehouse_returned_quantity
+    remaining_pass = quality_line.qty_pass - source.warehouse_returned_quantity
+    if quantity > remaining_source or quantity > remaining_pass:
+        raise ValidationError("Warehouse RETURN_IN exceeds source or accepted Quality quantity.")
+    warehouse = warehouse or getattr(quality_line.inspection, "warehouse", None)
+    if warehouse is None:
+        raise ValidationError("A Warehouse is required for marketplace RETURN_IN.")
+    _validate_warehouse(warehouse, source.legal_entity)
+    outbound = None
+    if source.original_order_line_id:
+        from apps.omnichannel.models import OmniPackingLine, OmniPackingState
+
+        outbound = (
+            OmniPackingLine.objects.filter(
+                order_line_id=source.original_order_line_id,
+                packing__state=OmniPackingState.POSTED,
+                warehouse_movement__isnull=False,
+            )
+            .select_related("warehouse_movement")
+            .order_by("-created_at")
+            .first()
+        )
+    unit_cost = outbound.warehouse_movement.unit_cost if outbound else None
+    valuation_status = (
+        ValuationStatus.READY if unit_cost is not None else ValuationStatus.PENDING_VALUATION
+    )
+    total_value = quantity * unit_cost if unit_cost is not None else None
+    movement = _post_movement(
+        entity=source.legal_entity,
+        warehouse=warehouse,
+        item=source.resolved_item,
+        direction=MovementDirection.IN,
+        movement_type=MovementType.MARKETPLACE_RETURN_RECEIPT,
+        quantity=quantity,
+        source_module="omnichannel",
+        source_type="OMNI_RETURN",
+        source_document_id=source.pk,
+        source_line_id=quality_line.pk,
+        source_key=f"OMNI_RETURN_IN|{source.pk}|{idempotency_key}"[:255],
+        transaction_date=(source.arrived_at or timezone.now()).date(),
+        actor=actor,
+        unit_cost=unit_cost,
+        total_value=total_value,
+        valuation_status=valuation_status,
+        notes="Warehouse RETURN_IN authorized by posted Quality PASS.",
+    )
+    source.inspected_quantity = quality_line.qty_inspected
+    source.quality_accepted_quantity = quality_line.qty_pass
+    source.warehouse_returned_quantity += quantity
+    source.save(
+        update_fields=(
+            "inspected_quantity",
+            "quality_accepted_quantity",
+            "warehouse_returned_quantity",
+            "updated_at",
+        )
+    )
+    _audit(source, "warehouse.marketplace_return_in.posted", actor, key=idempotency_key)
+    complete_idempotency(claim.record.pk, result_reference=str(movement.pk))
+    return movement
+
+
 # Descriptive aliases make the source-module boundary explicit to adapters
 # without creating a second implementation or a second ledger primitive.
 create_warehouse_purchase_receipt = create_purchase_receipt
@@ -2023,3 +2136,4 @@ add_stock_adjustment_line = add_inventory_adjustment_line
 approve_stock_adjustment = approve_inventory_adjustment
 post_stock_adjustment = post_inventory_adjustment
 reverse_stock_adjustment = reverse_inventory_adjustment
+post_marketplace_return_receipt = post_marketplace_return_in

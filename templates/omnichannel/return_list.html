@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Omni Return / Refund{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Omnichannel</p><h1>Return / Refund source</h1></div></div>
+<section class="panel"><p class="muted">Import return tidak membuat Quality decision atau StockMovement.</p><table><thead><tr><th>Marketplace</th><th>Store</th><th>Order / Package</th><th>SKU</th><th>Qty</th><th>Source status</th><th>Quality qty</th><th>Warehouse qty</th><th>Linkage</th></tr></thead><tbody>{% for source in returns %}<tr><td>{{ source.marketplace }}</td><td>{{ source.external_store_name }}</td><td>{{ source.external_order_number }} / {{ source.package_number }}</td><td>{{ source.external_sku }}</td><td>{{ source.quantity }}</td><td>{{ source.return_status }}</td><td>{{ source.quality_accepted_quantity }}</td><td>{{ source.warehouse_returned_quantity }}</td><td>{{ source.linkage_status }}</td></tr>{% empty %}<tr><td colspan="9">Belum ada return source.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

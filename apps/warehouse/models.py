@@ -21,6 +21,7 @@ class MovementType(models.TextChoices):
     INTERNAL_CONSUMPTION = "INTERNAL_CONSUMPTION", "Pemakaian Internal"
     SUPPLIER_RETURN = "SUPPLIER_RETURN", "Retur Supplier"
     OMNI_PACKING = "OMNI_PACKING", "Packing Omnichannel"
+    MARKETPLACE_RETURN_RECEIPT = "MARKETPLACE_RETURN_RECEIPT", "Penerimaan Retur Marketplace"
 
 
 class WarehouseDocumentState(models.TextChoices):

@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Omni Reconciliation{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Omnichannel</p><h1>Rekonsiliasi source</h1></div></div>
+<section class="panel"><p class="muted">Nilai di bawah adalah source/candidate amounts, bukan saldo Finance yang sudah diposting.</p><table><thead><tr><th>Store</th><th>Completed revenue</th><th>Settled</th><th>Unsettled</th><th>Fees</th><th>Returns</th><th>Refunds</th><th>Adjustments</th><th>Payout</th><th>Exceptions</th></tr></thead><tbody>{% for row in rows %}<tr><td>{{ row.store_id|default_if_none:"Unmapped" }}</td><td>{{ row.completed_revenue|default_if_none:"Review" }}</td><td>{{ row.settled_amount|default_if_none:"Review" }}</td><td>{{ row.unsettled_amount|default_if_none:"Review" }}</td><td>{{ row.marketplace_fees }}</td><td>{{ row.returns_quantity }}</td><td>{{ row.refund_amount|default_if_none:"Review" }}</td><td>{{ row.adjustments|default_if_none:"Review" }}</td><td>{{ row.payout_amount|default_if_none:"Review" }}</td><td>{{ row.exceptions|join:", " }}</td></tr>{% empty %}<tr><td colspan="10">Belum ada source untuk direkonsiliasi.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

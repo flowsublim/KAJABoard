@@ -369,3 +369,418 @@ class OmniPackingLine(UUIDPrimaryKeyModel, TimeStampedModel):
             ),
         ]
         indexes = [models.Index(fields=("order_line",), name="omni_packing_order_line_idx")]
+
+
+class OmniRevenueState(models.TextChoices):
+    ELIGIBLE = "ELIGIBLE", "Eligible"
+    BLOCKED_AMOUNT = "BLOCKED_AMOUNT", "Blocked amount"
+    BLOCKED_MAPPING = "BLOCKED_MAPPING", "Blocked mapping"
+    REVERSED = "REVERSED", "Reversed"
+
+
+class OmniReconciliationStatus(models.TextChoices):
+    READY = "READY", "Ready"
+    COMPLETED_NOT_SETTLED = "COMPLETED_NOT_SETTLED", "Completed not settled"
+    SETTLEMENT_MATCH = "SETTLEMENT_MATCH", "Settlement match"
+    SETTLEMENT_PARTIAL = "SETTLEMENT_PARTIAL", "Settlement partial"
+    SETTLEMENT_UNMATCHED = "SETTLEMENT_UNMATCHED", "Settlement unmatched"
+    SETTLEMENT_OVER = "SETTLEMENT_OVER", "Settlement over"
+    RETURN_PENDING = "RETURN_PENDING", "Return pending"
+    REFUND_PENDING = "REFUND_PENDING", "Refund pending"
+    ADJUSTMENT_PENDING = "ADJUSTMENT_PENDING", "Adjustment pending"
+    PAYOUT_PENDING = "PAYOUT_PENDING", "Payout pending"
+    PAYOUT_MATCH = "PAYOUT_MATCH", "Payout match"
+    BLOCKED_MAPPING = "BLOCKED_MAPPING", "Blocked mapping"
+    UNMATCHED_RETURN = "UNMATCHED_RETURN", "Unmatched return"
+    AMBIGUOUS_ORDER_LINE = "AMBIGUOUS_ORDER_LINE", "Ambiguous order line"
+    UNMATCHED_PAYOUT = "UNMATCHED_PAYOUT", "Unmatched payout"
+    SOURCE_CHANGED = "SOURCE_CHANGED", "Source changed"
+
+
+class OmniReturnLinkageStatus(models.TextChoices):
+    MATCHED = "MATCHED", "Matched"
+    UNMATCHED_ORDER = "UNMATCHED_ORDER", "Unmatched order"
+    UNMATCHED_SKU = "UNMATCHED_SKU", "Unmatched SKU"
+    AMBIGUOUS_ORDER_LINE = "AMBIGUOUS_ORDER_LINE", "Ambiguous order line"
+    BLOCKED_MAPPING = "BLOCKED_MAPPING", "Blocked mapping"
+
+
+class OmniRevenueEvent(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Immutable completion-date revenue source; Finance consumes a candidate later."""
+
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity", on_delete=models.PROTECT, related_name="omni_revenue_events"
+    )
+    store = models.ForeignKey(
+        "channels.Store", on_delete=models.PROTECT, related_name="omni_revenue_events"
+    )
+    marketplace = models.CharField(max_length=80)
+    order = models.ForeignKey(OmniOrder, on_delete=models.PROTECT, related_name="revenue_events")
+    external_order_number = models.CharField(max_length=150)
+    completion_date = models.DateField()
+    currency = models.CharField(max_length=12, default="IDR")
+    gross_eligible_amount = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True
+    )
+    source_components = models.JSONField(default=dict, blank=True)
+    source_lineage = models.JSONField(default=dict, blank=True)
+    state = models.CharField(
+        max_length=24, choices=OmniRevenueState.choices, default=OmniRevenueState.ELIGIBLE
+    )
+    mapping_status = models.CharField(
+        max_length=24,
+        choices=OmniReconciliationStatus.choices,
+        default=OmniReconciliationStatus.BLOCKED_MAPPING,
+    )
+    event_key = models.CharField(max_length=400, unique=True)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_omni_revenue_events",
+    )
+    reversal_of = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversals"
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "order"), name="omni_revenue_entity_order_uq"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "completion_date", "state"),
+                name="omni_revenue_date_state_idx",
+            ),
+            models.Index(
+                fields=("legal_entity", "store", "marketplace"), name="omni_revenue_store_idx"
+            ),
+        ]
+
+
+class OmniSettlementImportBatch(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity",
+        on_delete=models.PROTECT,
+        related_name="omni_settlement_batches",
+    )
+    source_type = models.CharField(max_length=60, default="BIGSELLER_SETTLEMENT")
+    source_filename = models.CharField(max_length=255)
+    file_hash = models.CharField(max_length=64)
+    row_count = models.PositiveIntegerField(default=0)
+    imported_at = models.DateTimeField(null=True, blank=True)
+    imported_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="omni_settlement_imports",
+    )
+    status = models.CharField(max_length=24, default="IMPORTED")
+    idempotency_key = models.CharField(max_length=255, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        permissions = [
+            ("import_omnisettlement", "Can import marketplace settlements"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_type", "file_hash"),
+                name="omni_settle_batch_hash_uq",
+            )
+        ]
+
+
+class OmniSettlement(UUIDPrimaryKeyModel, TimeStampedModel):
+    batch = models.ForeignKey(
+        OmniSettlementImportBatch, on_delete=models.PROTECT, related_name="settlements"
+    )
+    legal_entity = models.ForeignKey("organizations.LegalEntity", on_delete=models.PROTECT)
+    store = models.ForeignKey(
+        "channels.Store",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="omni_settlements",
+    )
+    external_store_name = models.CharField(max_length=255, blank=True)
+    marketplace = models.CharField(max_length=80, blank=True)
+    settlement_reference = models.CharField(max_length=180, blank=True)
+    external_order_number = models.CharField(max_length=150, blank=True)
+    settlement_date = models.DateField(null=True, blank=True)
+    currency = models.CharField(max_length=12, blank=True)
+    gross_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    settled_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    fee_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    refund_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    adjustment_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    net_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    fee_components = models.JSONField(default=dict, blank=True)
+    raw_data = models.JSONField(default=dict, blank=True)
+    source_row_key = models.CharField(max_length=255)
+    source_identity_key = models.CharField(max_length=500)
+    reconciliation_status = models.CharField(
+        max_length=32,
+        choices=OmniReconciliationStatus.choices,
+        default=OmniReconciliationStatus.SETTLEMENT_UNMATCHED,
+    )
+    reconciliation_message = models.TextField(blank=True)
+    matched_revenue = models.ForeignKey(
+        OmniRevenueEvent,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="settlements",
+    )
+    conflict_of = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="conflicts"
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_identity_key"),
+                name="omni_settle_source_identity_uq",
+            )
+        ]
+        indexes = [
+            models.Index(fields=("legal_entity", "settlement_date"), name="omni_settle_date_idx"),
+            models.Index(fields=("matched_revenue",), name="omni_settle_revenue_idx"),
+        ]
+
+
+class OmniSettlementFee(UUIDPrimaryKeyModel, TimeStampedModel):
+    settlement = models.ForeignKey(OmniSettlement, on_delete=models.PROTECT, related_name="fees")
+    fee_type = models.CharField(max_length=80)
+    amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    source_key = models.CharField(max_length=500, unique=True)
+    source_row_key = models.CharField(max_length=255)
+    raw_data = models.JSONField(default=dict, blank=True)
+    mapping_status = models.CharField(max_length=24, default="BLOCKED_MAPPING")
+
+
+class OmniReturnImportBatch(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity", on_delete=models.PROTECT, related_name="omni_return_batches"
+    )
+    source_type = models.CharField(max_length=60, default="BIGSELLER_RETURN")
+    source_filename = models.CharField(max_length=255)
+    file_hash = models.CharField(max_length=64)
+    row_count = models.PositiveIntegerField(default=0)
+    imported_at = models.DateTimeField(null=True, blank=True)
+    imported_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="omni_return_imports",
+    )
+    status = models.CharField(max_length=24, default="IMPORTED")
+    idempotency_key = models.CharField(max_length=255, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        permissions = [
+            ("import_omnireturnsource", "Can import marketplace returns"),
+            ("manage_omnireturnsource", "Can manage marketplace returns"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_type", "file_hash"),
+                name="omni_return_batch_hash_uq",
+            )
+        ]
+
+
+class OmniReturnSource(UUIDPrimaryKeyModel, TimeStampedModel):
+    batch = models.ForeignKey(
+        OmniReturnImportBatch, on_delete=models.PROTECT, related_name="returns"
+    )
+    legal_entity = models.ForeignKey("organizations.LegalEntity", on_delete=models.PROTECT)
+    marketplace = models.CharField(max_length=80, blank=True)
+    external_store_name = models.CharField(max_length=255, blank=True)
+    store = models.ForeignKey(
+        "channels.Store",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="omni_returns",
+    )
+    package_number = models.CharField(max_length=180, blank=True)
+    external_order_number = models.CharField(max_length=150, blank=True)
+    external_return_id = models.CharField(max_length=180, blank=True)
+    external_sku = models.CharField(max_length=150, blank=True)
+    warehouse_sku = models.CharField(max_length=150, blank=True)
+    quantity = models.DecimalField(max_digits=18, decimal_places=6)
+    stock_addition_quantity = models.DecimalField(
+        max_digits=18, decimal_places=6, null=True, blank=True
+    )
+    inspected_quantity = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    quality_accepted_quantity = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    warehouse_returned_quantity = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    refunded_quantity = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    refund_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    currency = models.CharField(max_length=12, blank=True)
+    order_status = models.CharField(max_length=120, blank=True)
+    shipping_status = models.CharField(max_length=120, blank=True)
+    aftersales_status = models.CharField(max_length=120, blank=True)
+    return_status = models.CharField(max_length=120, blank=True)
+    stock_addition_status = models.CharField(max_length=120, blank=True)
+    return_type = models.CharField(max_length=120, blank=True)
+    return_reason = models.CharField(max_length=255, blank=True)
+    order_date = models.DateTimeField(null=True, blank=True)
+    return_requested_at = models.DateTimeField(null=True, blank=True)
+    deadline_at = models.DateTimeField(null=True, blank=True)
+    shipped_at = models.DateTimeField(null=True, blank=True)
+    arrived_at = models.DateTimeField(null=True, blank=True)
+    stock_added_at = models.DateTimeField(null=True, blank=True)
+    original_order = models.ForeignKey(
+        OmniOrder, null=True, blank=True, on_delete=models.PROTECT, related_name="return_sources"
+    )
+    original_order_line = models.ForeignKey(
+        OmniOrderLine,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="return_sources",
+    )
+    resolved_item = models.ForeignKey(
+        "catalog.Item",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="omni_return_sources",
+    )
+    quality_inspection_line = models.ForeignKey(
+        "quality.QualityInspectionLine",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="omni_return_sources",
+    )
+    linkage_status = models.CharField(
+        max_length=32,
+        choices=OmniReturnLinkageStatus.choices,
+        default=OmniReturnLinkageStatus.UNMATCHED_ORDER,
+    )
+    linkage_message = models.TextField(blank=True)
+    source_row_key = models.CharField(max_length=255)
+    source_identity_key = models.CharField(max_length=500)
+    raw_data = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_identity_key"),
+                name="omni_return_source_identity_uq",
+            ),
+            models.CheckConstraint(condition=Q(quantity__gt=0), name="omni_return_qty_positive"),
+            models.CheckConstraint(
+                condition=Q(inspected_quantity__gte=0)
+                & Q(quality_accepted_quantity__gte=0)
+                & Q(warehouse_returned_quantity__gte=0)
+                & Q(refunded_quantity__gte=0),
+                name="omni_return_followup_qty_nonnegative",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("legal_entity", "arrived_at"), name="omni_return_arrival_idx"),
+            models.Index(fields=("legal_entity", "linkage_status"), name="omni_return_link_idx"),
+            models.Index(
+                fields=("original_order", "external_sku"), name="omni_return_order_sku_idx"
+            ),
+        ]
+
+
+class OmniAdjustmentSource(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity", on_delete=models.PROTECT, related_name="omni_adjustments"
+    )
+    store = models.ForeignKey(
+        "channels.Store",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="omni_adjustments",
+    )
+    marketplace = models.CharField(max_length=80, blank=True)
+    external_order_number = models.CharField(max_length=150, blank=True)
+    settlement = models.ForeignKey(
+        OmniSettlement, null=True, blank=True, on_delete=models.PROTECT, related_name="adjustments"
+    )
+    adjustment_type = models.CharField(max_length=100)
+    amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    transaction_date = models.DateField(null=True, blank=True)
+    source_batch = models.ForeignKey(
+        OmniSettlementImportBatch,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="adjustment_sources",
+    )
+    source_row_key = models.CharField(max_length=255)
+    source_identity_key = models.CharField(max_length=500)
+    reconciliation_status = models.CharField(
+        max_length=32,
+        choices=OmniReconciliationStatus.choices,
+        default=OmniReconciliationStatus.ADJUSTMENT_PENDING,
+    )
+    raw_data = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_identity_key"), name="omni_adjustment_identity_uq"
+            )
+        ]
+
+
+class OmniPayoutSource(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity", on_delete=models.PROTECT, related_name="omni_payouts"
+    )
+    store = models.ForeignKey(
+        "channels.Store",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="omni_payouts",
+    )
+    marketplace = models.CharField(max_length=80, blank=True)
+    payout_reference = models.CharField(max_length=180)
+    payout_date = models.DateField(null=True, blank=True)
+    amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    currency = models.CharField(max_length=12, blank=True)
+    settlement_references = models.JSONField(default=list, blank=True)
+    source_filename = models.CharField(max_length=255, blank=True)
+    source_row_key = models.CharField(max_length=255, blank=True)
+    source_identity_key = models.CharField(max_length=500)
+    reconciliation_status = models.CharField(
+        max_length=32,
+        choices=OmniReconciliationStatus.choices,
+        default=OmniReconciliationStatus.UNMATCHED_PAYOUT,
+    )
+    reconciliation_message = models.TextField(blank=True)
+    raw_data = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_omni_payouts",
+    )
+
+    class Meta:
+        permissions = [
+            ("manage_omnipayoutsource", "Can manage marketplace payout handoff"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_identity_key"), name="omni_payout_identity_uq"
+            )
+        ]

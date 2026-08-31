@@ -7,6 +7,15 @@ from .omnichannel import (
     packing_documents,
     warehouse_demand,
 )
+from .phase7b import (
+    adjustment_sources,
+    payout_sources,
+    reconciliation_dashboard,
+    reconciliation_summary,
+    return_sources,
+    revenue_events,
+    settlement_sources,
+)
 
 __all__ = [
     "import_batches",
@@ -16,4 +25,11 @@ __all__ = [
     "operational_summary",
     "packing_documents",
     "warehouse_demand",
+    "adjustment_sources",
+    "payout_sources",
+    "reconciliation_dashboard",
+    "reconciliation_summary",
+    "return_sources",
+    "revenue_events",
+    "settlement_sources",
 ]
