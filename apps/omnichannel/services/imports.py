@@ -32,6 +32,21 @@ from apps.omnichannel.models import (
 SOURCE_TYPE_BIGSELLER = "BIGSELLER_ORDER"
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_ROWS = 50_000
+INDONESIAN_MONTHS = {
+    "jan": "Jan",
+    "feb": "Feb",
+    "mar": "Mar",
+    "apr": "Apr",
+    "mei": "May",
+    "jun": "Jun",
+    "jul": "Jul",
+    "agu": "Aug",
+    "sep": "Sep",
+    "okt": "Oct",
+    "nov": "Nov",
+    "des": "Dec",
+}
+NUMERIC_PLACEHOLDERS = {"--", "-", "—", "n/a", "na"}
 
 HEADER_ALIASES = {
     "order_number": ("Nomor Pesanan", "No Pesanan", "Order Number", "Order No", "No. Pesanan"),
@@ -71,6 +86,10 @@ def _decimal(value, *, field, required=False):
             raise ValueError(f"{field} is required.")
         return None
     text = str(value).strip().replace("Rp", "").replace("rp", "").replace(" ", "")
+    if text.casefold() in NUMERIC_PLACEHOLDERS:
+        if required:
+            raise ValueError(f"{field} is required.")
+        return None
     if "," in text and "." in text:
         text = (
             text.replace(".", "").replace(",", ".")
@@ -102,6 +121,14 @@ def _date(value, *, field, required=False):
     if isinstance(value, (int, float, Decimal)):
         return (datetime(1899, 12, 30) + timedelta(days=float(value))).date()
     text = str(value).strip()
+    if text.casefold() in NUMERIC_PLACEHOLDERS:
+        if required:
+            raise ValueError(f"{field} is invalid.")
+        return None
+    parts = text.split()
+    if len(parts) >= 3 and parts[1].casefold() in INDONESIAN_MONTHS:
+        parts[1] = INDONESIAN_MONTHS[parts[1].casefold()]
+        text = " ".join(parts)
     formats = (
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
@@ -130,7 +157,7 @@ def _normalized_status(value) -> str:
         return OmniOperationalStatus.CANCELLED
     if "refund" in text:
         return OmniOperationalStatus.REFUNDED
-    if "retur" in text or "return" in text:
+    if "retur" in text or "return" in text or "pengembalian" in text:
         return OmniOperationalStatus.RETURNED
     if any(token in text for token in ("selesai", "completed", "delivered")):
         return OmniOperationalStatus.COMPLETED

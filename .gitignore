@@ -84,3 +84,6 @@ tmp/
 temp/
 *.tmp
 *.bak
+
+# Raw production BigSeller exports; sanitized fixtures live under tests/fixtures.
+test/fixtures/omnichannel/bigseller/Order-*.xlsx

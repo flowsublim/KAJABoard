@@ -70,7 +70,10 @@ from apps.warehouse.services import (
 
 @pytest.fixture
 def foundation():
-    entity = LegalEntity.objects.create(code="6C", name="6C Entity")
+    historical_effective_from = date(2026, 1, 1)
+    entity = LegalEntity.objects.create(
+        code="6C", name="6C Entity", effective_from=historical_effective_from
+    )
     user = (
         __import__("django.contrib.auth", fromlist=["get_user_model"])
         .get_user_model()
@@ -81,13 +84,34 @@ def foundation():
         Permission.objects.get(codename="approve_stockcount"),
         Permission.objects.get(codename="post_stockcount"),
     )
-    vendor = BusinessPartner.objects.create(legal_entity=entity, code="V6C", display_name="Vendor")
-    PartnerRole.objects.create(partner=vendor, role_type=PartnerRoleType.VENDOR)
-    customer = BusinessPartner.objects.create(
-        legal_entity=entity, code="C6C", display_name="Customer"
+    vendor = BusinessPartner.objects.create(
+        legal_entity=entity,
+        code="V6C",
+        display_name="Vendor",
+        effective_from=historical_effective_from,
     )
-    PartnerRole.objects.create(partner=customer, role_type=PartnerRoleType.CUSTOMER)
-    uom = UOM.objects.create(code="PCS6C", name="Pieces", dimension="COUNT")
+    PartnerRole.objects.create(
+        partner=vendor,
+        role_type=PartnerRoleType.VENDOR,
+        effective_from=historical_effective_from,
+    )
+    customer = BusinessPartner.objects.create(
+        legal_entity=entity,
+        code="C6C",
+        display_name="Customer",
+        effective_from=historical_effective_from,
+    )
+    PartnerRole.objects.create(
+        partner=customer,
+        role_type=PartnerRoleType.CUSTOMER,
+        effective_from=historical_effective_from,
+    )
+    uom = UOM.objects.create(
+        code="PCS6C",
+        name="Pieces",
+        dimension="COUNT",
+        effective_from=historical_effective_from,
+    )
     item = Item.objects.create(
         legal_entity=entity,
         code="ITEM6C",
@@ -96,8 +120,14 @@ def foundation():
         purchase_eligible=True,
         sales_eligible=True,
         inventory_eligible=True,
+        effective_from=historical_effective_from,
     )
-    warehouse = Warehouse.objects.create(legal_entity=entity, code="WH6C", name="Warehouse")
+    warehouse = Warehouse.objects.create(
+        legal_entity=entity,
+        code="WH6C",
+        name="Warehouse",
+        effective_from=historical_effective_from,
+    )
     create_document_sequence(
         legal_entity=entity,
         document_type="PURCHASE_ORDER",
@@ -105,6 +135,7 @@ def foundation():
         prefix="PO",
         format_template="{prefix}-{yyyymmdd}-{seq}",
         padding=3,
+        effective_from=historical_effective_from,
     )
     create_document_sequence(
         legal_entity=entity,
@@ -113,6 +144,7 @@ def foundation():
         prefix="SO",
         format_template="{prefix}-{yyyymmdd}-{seq}",
         padding=3,
+        effective_from=historical_effective_from,
     )
     create_document_sequence(
         legal_entity=entity,
@@ -121,12 +153,14 @@ def foundation():
         prefix="SJ",
         format_template="{prefix}-{yyyymmdd}-{seq}",
         padding=3,
+        effective_from=historical_effective_from,
     )
     category = create_purchase_category(
         legal_entity=entity,
         code="INV6C",
         name="Inventory",
         accounting_treatment=AccountingTreatment.INVENTORY,
+        effective_from=historical_effective_from,
     )
     return entity, user, vendor, customer, item, warehouse, category
 
@@ -327,6 +361,7 @@ def test_subcontract_receipt_is_quality_pass_limited_and_pending_cost_safe(found
         prefix="SPK",
         format_template="{prefix}-{yyyymmdd}-{seq}",
         padding=3,
+        effective_from=date(2026, 1, 1),
     )
     create_document_sequence(
         legal_entity=entity,
@@ -335,6 +370,7 @@ def test_subcontract_receipt_is_quality_pass_limited_and_pending_cost_safe(found
         prefix="TM",
         format_template="{prefix}-{yyyymmdd}-{seq}",
         padding=3,
+        effective_from=date(2026, 1, 1),
     )
     order = create_draft_work_order(
         legal_entity=entity,

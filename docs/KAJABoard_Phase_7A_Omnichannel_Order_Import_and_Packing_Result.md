@@ -77,3 +77,9 @@ The Phase 7A test module verifies exact variations, quantity and date snapshots,
 ## Deferred Phase 7 scope
 
 Not implemented here: completion-date revenue/AR, settlement and fees, payout/bank handoff, marketplace return/refund and adjustment workflows, settlement reconciliation, POS, and final store profitability analytics. Phase 7 remains open for 7B/7C; this document does not redefine the locked Project Plan.
+
+The real-file compatibility audit is recorded in `docs/KAJABoard_BigSeller_Real_File_Mapping.md`. The supplied Return export is documentation-only in Phase 7A and creates no stock or finance facts.
+
+Regression tests use only the sanitized fixtures `tests/fixtures/omnichannel/bigseller/order_goods_sample_sanitized.xlsx` and `tests/fixtures/omnichannel/bigseller/order_return_sample_sanitized.xlsx`. The raw production exports inspected during the audit are excluded from the repository.
+
+The audit patch is limited to real Order Goods parsing: Indonesian abbreviated month names and BigSeller's `--` optional numeric placeholder are accepted. Header resolution remains explicit and normalized; absent marketplace/product fields are not guessed, and the resolved Store channel supplies the operational marketplace fallback. Extra Order Goods columns remain available in durable source-row raw metadata for later reconciliation without expanding the Phase 7A canonical models.
