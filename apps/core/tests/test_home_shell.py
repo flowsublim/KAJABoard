@@ -201,3 +201,114 @@ def test_purchasing_operational_pages_render_with_registered_namespace(client):
     ):
         response = client.get(reverse(route_name))
         assert response.status_code == 200, route_name
+
+
+@pytest.mark.django_db
+def test_sidebar_superuser_operational_ordering(client):
+    user = User.objects.create_superuser("sidebar-order@example.com", "password")
+    client.force_login(user)
+    content = client.get(reverse("home:home")).content
+    positions = [
+        content.index(label)
+        for label in (
+            b"Operasional",
+            b"<summary>Warehouse</summary>",
+            b"<summary>Omnichannel</summary>",
+            b"<summary>POS &amp; Analitik</summary>",
+            b"Master &amp; Konfigurasi",
+        )
+    ]
+    assert positions == sorted(positions)
+    assert content.index(b"<summary>Production Configuration</summary>") > positions[-1]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("codename", "visible"),
+    [
+        ("view_stockmovement", b"<summary>Warehouse</summary>"),
+        ("view_omniorder", b"<summary>Omnichannel</summary>"),
+        ("view_possale", b"<summary>POS &amp; Analitik</summary>"),
+    ],
+)
+def test_sidebar_operational_only_permissions_show_operational_label(client, codename, visible):
+    entity = LegalEntity.objects.create(code=f"NAV-{codename}", name=codename)
+    user = User.objects.create_user(f"{codename}@example.com", "password")
+    OrganizationMembership.objects.create(user=user, legal_entity=entity)
+    user.user_permissions.add(Permission.objects.get(codename=codename))
+    client.force_login(user)
+    content = client.get(reverse("home:home")).content
+    assert b"Operasional" in content
+    assert visible in content
+
+
+@pytest.mark.django_db
+def test_sidebar_production_tariff_is_configuration_only(client):
+    user = User.objects.create_user("tariff-nav@example.com", "password")
+    user.user_permissions.add(Permission.objects.get(codename="view_productiontariff"))
+    client.force_login(user)
+    content = client.get(reverse("home:home")).content
+    assert b"Master &amp; Konfigurasi" in content
+    assert b"<summary>Production Configuration</summary>" in content
+    assert b"<summary>Produksi</summary>" not in content
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("codename", "label"),
+    [
+        ("view_productiondirectextracost", b"Biaya Langsung"),
+        ("view_productioncostsnapshot", b"HPP / COGM"),
+    ],
+)
+def test_sidebar_production_cost_permissions_are_operational(client, codename, label):
+    user = User.objects.create_user(f"{codename}@example.com", "password")
+    user.user_permissions.add(Permission.objects.get(codename=codename))
+    client.force_login(user)
+    content = client.get(reverse("home:home")).content
+    assert b"Operasional" in content
+    assert b"<summary>Produksi</summary>" in content
+    assert label in content
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("route", "permission", "active", "inactive"),
+    [
+        (
+            "production:tariff-list",
+            "view_productiontariff",
+            b"Production Configuration",
+            b"<summary>Produksi</summary>",
+        ),
+        (
+            "production:extra-cost-list",
+            "view_productiondirectextracost",
+            b"<summary>Produksi</summary>",
+            b"Production Configuration",
+        ),
+        (
+            "omnichannel:pos-sale-list",
+            "view_possale",
+            b"POS &amp; Analitik",
+            b"<summary>Omnichannel</summary>",
+        ),
+        (
+            "omnichannel:order-list",
+            "view_omniorder",
+            b"<summary>Omnichannel</summary>",
+            b"POS &amp; Analitik",
+        ),
+    ],
+)
+def test_sidebar_route_groups_are_mutually_active(client, route, permission, active, inactive):
+    entity = LegalEntity.objects.create(code=f"ROUTE-{permission}", name=permission)
+    user = User.objects.create_user(f"{permission}@example.com", "password")
+    OrganizationMembership.objects.create(user=user, legal_entity=entity)
+    user.user_permissions.add(Permission.objects.get(codename=permission))
+    client.force_login(user)
+    response = client.get(reverse(route))
+    assert response.status_code == 200
+    content = response.content
+    assert active in content
+    assert inactive not in content
