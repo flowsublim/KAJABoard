@@ -784,3 +784,392 @@ class OmniPayoutSource(UUIDPrimaryKeyModel, TimeStampedModel):
                 fields=("legal_entity", "source_identity_key"), name="omni_payout_identity_uq"
             )
         ]
+
+
+class PosSaleState(models.TextChoices):
+    DRAFT = "DRAFT", "Draft"
+    POSTED = "POSTED", "Posted"
+    REVERSED = "REVERSED", "Reversed"
+    CANCELLED = "CANCELLED", "Cancelled"
+
+
+class PosTenderMethod(models.TextChoices):
+    CASH = "CASH", "Cash"
+    QRIS = "QRIS", "QRIS"
+    OTHER = "OTHER", "Other configured method"
+
+
+class PosCashSessionState(models.TextChoices):
+    OPEN = "OPEN", "Open"
+    CLOSED = "CLOSED", "Closed"
+
+
+class PosReturnState(models.TextChoices):
+    RECORDED = "RECORDED", "Recorded"
+    CANCELLED = "CANCELLED", "Cancelled"
+
+
+class PosFinanceSourceState(models.TextChoices):
+    ACTIVE = "ACTIVE", "Active"
+    REVERSED = "REVERSED", "Reversed"
+    BLOCKED_MAPPING = "BLOCKED_MAPPING", "Blocked mapping"
+    PENDING_VALUATION = "PENDING_VALUATION", "Pending valuation"
+
+
+class PosCashSession(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Operational cash control only; Finance owns the eventual cash ledger."""
+
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity", on_delete=models.PROTECT, related_name="pos_cash_sessions"
+    )
+    store = models.ForeignKey(
+        "channels.Store", on_delete=models.PROTECT, related_name="pos_cash_sessions"
+    )
+    opened_by = models.ForeignKey(
+        "accounts.User", on_delete=models.PROTECT, related_name="opened_pos_cash_sessions"
+    )
+    opened_at = models.DateTimeField()
+    opening_cash_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    state = models.CharField(
+        max_length=12, choices=PosCashSessionState.choices, default=PosCashSessionState.OPEN
+    )
+    closed_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="closed_pos_cash_sessions",
+    )
+    closed_at = models.DateTimeField(null=True, blank=True)
+    expected_cash_amount = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True
+    )
+    counted_cash_amount = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True
+    )
+    variance_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    notes = models.TextField(blank=True)
+    source_key = models.CharField(max_length=255, unique=True)
+    close_idempotency_key = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        permissions = [
+            ("open_poscashsession", "Can open POS cash session"),
+            ("close_poscashsession", "Can close POS cash session"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "store"),
+                condition=Q(state=PosCashSessionState.OPEN),
+                name="pos_cash_one_open_store_uq",
+            ),
+            models.CheckConstraint(
+                condition=Q(opening_cash_amount__gte=0), name="pos_cash_opening_nonnegative"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "store", "state"), name="pos_cash_session_scope_idx"
+            )
+        ]
+
+
+class PosSale(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Strict canonical-Item POS source document; stock is posted by Warehouse."""
+
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity", on_delete=models.PROTECT, related_name="pos_sales"
+    )
+    document_number = models.CharField(max_length=80)
+    store = models.ForeignKey("channels.Store", on_delete=models.PROTECT, related_name="pos_sales")
+    warehouse = models.ForeignKey(
+        "organizations.Warehouse", on_delete=models.PROTECT, related_name="pos_sales"
+    )
+    sales_channel = models.CharField(max_length=50, default="POS")
+    transaction_at = models.DateTimeField()
+    transaction_date = models.DateField()
+    state = models.CharField(
+        max_length=12, choices=PosSaleState.choices, default=PosSaleState.DRAFT
+    )
+    currency = models.CharField(max_length=12, default="IDR")
+    subtotal_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    discount_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    grand_total_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    source_key = models.CharField(max_length=255, unique=True)
+    idempotency_key = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_pos_sales",
+    )
+    posted_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="posted_pos_sales",
+    )
+    posted_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="cancelled_pos_sales",
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        permissions = [
+            ("post_possale", "Can post POS sale"),
+            ("reverse_possale", "Can reverse POS sale"),
+            ("view_storeanalytics", "Can view Store analytics"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "document_number"), name="pos_sale_document_number_uq"
+            ),
+            models.CheckConstraint(
+                condition=Q(subtotal_amount__gte=0)
+                & Q(discount_amount__gte=0)
+                & Q(grand_total_amount__gte=0),
+                name="pos_sale_amounts_nonnegative",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "store", "transaction_date", "state"),
+                name="pos_sale_analytics_idx",
+            )
+        ]
+
+
+class PosSaleLine(UUIDPrimaryKeyModel, TimeStampedModel):
+    sale = models.ForeignKey(PosSale, on_delete=models.PROTECT, related_name="lines")
+    item = models.ForeignKey(
+        "catalog.Item", on_delete=models.PROTECT, related_name="pos_sale_lines"
+    )
+    item_code_snapshot = models.CharField(max_length=64)
+    item_name_snapshot = models.CharField(max_length=255)
+    uom_code_snapshot = models.CharField(max_length=20)
+    quantity = models.DecimalField(max_digits=18, decimal_places=6)
+    unit_price_amount = models.DecimalField(max_digits=18, decimal_places=2)
+    line_amount = models.DecimalField(max_digits=18, decimal_places=2)
+    warehouse_unit_cost = models.DecimalField(
+        max_digits=24, decimal_places=6, null=True, blank=True
+    )
+    cogs_amount = models.DecimalField(max_digits=24, decimal_places=6, null=True, blank=True)
+    valuation_status = models.CharField(max_length=24, default="PENDING_VALUATION")
+    source_key = models.CharField(max_length=255, unique=True)
+    sequence = models.PositiveIntegerField()
+    warehouse_movement = models.OneToOneField(
+        "warehouse.StockMovement",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="pos_sale_line",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("sale", "sequence"), name="pos_sale_line_sequence_uq"),
+            models.CheckConstraint(condition=Q(quantity__gt=0), name="pos_sale_line_qty_positive"),
+            models.CheckConstraint(
+                condition=Q(unit_price_amount__gte=0), name="pos_sale_line_price_nonnegative"
+            ),
+        ]
+
+
+class PosTender(UUIDPrimaryKeyModel, TimeStampedModel):
+    sale = models.OneToOneField(PosSale, on_delete=models.PROTECT, related_name="tender")
+    method = models.CharField(max_length=20, choices=PosTenderMethod.choices)
+    method_reference = models.CharField(max_length=160, blank=True)
+    amount = models.DecimalField(max_digits=18, decimal_places=2)
+    currency = models.CharField(max_length=12, default="IDR")
+    transaction_at = models.DateTimeField()
+    cash_session = models.ForeignKey(
+        PosCashSession,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="tenders",
+    )
+    source_key = models.CharField(max_length=255, unique=True)
+    mapping_status = models.CharField(max_length=24, default="BLOCKED_MAPPING")
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(amount__gte=0), name="pos_tender_amount_nonnegative")
+        ]
+
+
+class PosSaleReversal(UUIDPrimaryKeyModel, TimeStampedModel):
+    original_sale = models.OneToOneField(PosSale, on_delete=models.PROTECT, related_name="reversal")
+    reversal_date = models.DateField()
+    reason = models.TextField()
+    source_key = models.CharField(max_length=255, unique=True)
+    idempotency_key = models.CharField(max_length=255)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_pos_sale_reversals",
+    )
+
+
+class PosReturn(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Commercial POS return source. Quality and Warehouse control physical disposition."""
+
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity", on_delete=models.PROTECT, related_name="pos_returns"
+    )
+    document_number = models.CharField(max_length=80)
+    original_sale = models.ForeignKey(PosSale, on_delete=models.PROTECT, related_name="returns")
+    store = models.ForeignKey(
+        "channels.Store", on_delete=models.PROTECT, related_name="pos_returns"
+    )
+    warehouse = models.ForeignKey(
+        "organizations.Warehouse", on_delete=models.PROTECT, related_name="pos_returns"
+    )
+    return_at = models.DateTimeField()
+    return_date = models.DateField()
+    state = models.CharField(
+        max_length=12, choices=PosReturnState.choices, default=PosReturnState.RECORDED
+    )
+    currency = models.CharField(max_length=12, default="IDR")
+    refund_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    refunded_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    cash_session = models.ForeignKey(
+        PosCashSession,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="pos_refunds",
+    )
+    source_key = models.CharField(max_length=255, unique=True)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_pos_returns",
+    )
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        permissions = [("manage_posreturn", "Can manage POS return")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "document_number"), name="pos_return_document_number_uq"
+            ),
+            models.CheckConstraint(
+                condition=Q(refunded_amount__gte=0), name="pos_return_refunded_nonnegative"
+            ),
+        ]
+
+
+class PosReturnLine(UUIDPrimaryKeyModel, TimeStampedModel):
+    pos_return = models.ForeignKey(PosReturn, on_delete=models.PROTECT, related_name="lines")
+    original_sale_line = models.ForeignKey(
+        PosSaleLine, on_delete=models.PROTECT, related_name="return_lines"
+    )
+    item = models.ForeignKey(
+        "catalog.Item", on_delete=models.PROTECT, related_name="pos_return_lines"
+    )
+    quantity = models.DecimalField(max_digits=18, decimal_places=6)
+    inspected_quantity = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    quality_accepted_quantity = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    warehouse_returned_quantity = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    refunded_quantity = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    refund_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    quality_inspection_line = models.ForeignKey(
+        "quality.QualityInspectionLine",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="pos_return_lines",
+    )
+    source_key = models.CharField(max_length=255, unique=True)
+    sequence = models.PositiveIntegerField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("pos_return", "sequence"), name="pos_return_line_sequence_uq"
+            ),
+            models.CheckConstraint(
+                condition=Q(quantity__gt=0), name="pos_return_line_qty_positive"
+            ),
+            models.CheckConstraint(
+                condition=Q(inspected_quantity__gte=0)
+                & Q(quality_accepted_quantity__gte=0)
+                & Q(warehouse_returned_quantity__gte=0)
+                & Q(refunded_quantity__gte=0),
+                name="pos_return_line_followup_nonnegative",
+            ),
+        ]
+
+
+class PosFinanceSource(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Immutable Finance handoff candidate; never a JournalEntry or cash ledger."""
+
+    legal_entity = models.ForeignKey(
+        "organizations.LegalEntity", on_delete=models.PROTECT, related_name="pos_finance_sources"
+    )
+    store = models.ForeignKey(
+        "channels.Store", on_delete=models.PROTECT, related_name="pos_finance_sources"
+    )
+    sale = models.ForeignKey(
+        PosSale,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="finance_sources",
+    )
+    sale_line = models.ForeignKey(
+        PosSaleLine,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="finance_sources",
+    )
+    pos_return = models.ForeignKey(
+        PosReturn,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="finance_sources",
+    )
+    cash_session = models.ForeignKey(
+        PosCashSession,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="finance_sources",
+    )
+    event_code = models.CharField(max_length=64)
+    transaction_date = models.DateField()
+    amount = models.DecimalField(max_digits=24, decimal_places=6, null=True, blank=True)
+    currency = models.CharField(max_length=12, default="IDR")
+    mapping_status = models.CharField(max_length=24, default="BLOCKED_MAPPING")
+    source_key = models.CharField(max_length=255, unique=True)
+    state = models.CharField(
+        max_length=24, choices=PosFinanceSourceState.choices, default=PosFinanceSourceState.ACTIVE
+    )
+    reversal_of = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversals"
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "store", "transaction_date", "event_code"),
+                name="pos_finance_analytics_idx",
+            )
+        ]

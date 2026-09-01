@@ -22,6 +22,9 @@ class MovementType(models.TextChoices):
     SUPPLIER_RETURN = "SUPPLIER_RETURN", "Retur Supplier"
     OMNI_PACKING = "OMNI_PACKING", "Packing Omnichannel"
     MARKETPLACE_RETURN_RECEIPT = "MARKETPLACE_RETURN_RECEIPT", "Penerimaan Retur Marketplace"
+    POS_SALE_ISSUE = "POS_SALE_ISSUE", "Pengeluaran POS"
+    POS_SALE_REVERSAL = "POS_SALE_REVERSAL", "Pembalikan Pengeluaran POS"
+    POS_RETURN_RECEIPT = "POS_RETURN_RECEIPT", "Penerimaan Retur POS"
 
 
 class WarehouseDocumentState(models.TextChoices):

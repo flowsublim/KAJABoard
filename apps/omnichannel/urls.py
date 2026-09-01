@@ -23,4 +23,18 @@ urlpatterns = [
     path("adjustments/", views.adjustment_list, name="adjustment-list"),
     path("reconciliation/", views.reconciliation, name="reconciliation"),
     path("payout/", views.payout_list, name="payout"),
+    path("pos/", views.pos_sale_list, name="pos-sale-list"),
+    path("pos/create/", views.pos_sale_create, name="pos-sale-create"),
+    path("pos/<uuid:pk>/", views.pos_sale_detail, name="pos-sale-detail"),
+    path("pos/<uuid:pk>/post/", views.pos_sale_post, name="pos-sale-post"),
+    path("pos/<uuid:pk>/reverse/", views.pos_sale_reverse, name="pos-sale-reverse"),
+    path("pos/cash-sessions/", views.pos_cash_session_list, name="pos-cash-session-list"),
+    path("pos/cash-sessions/open/", views.pos_cash_session_open, name="pos-cash-session-open"),
+    path(
+        "pos/cash-sessions/<uuid:pk>/close/",
+        views.pos_cash_session_close,
+        name="pos-cash-session-close",
+    ),
+    path("pos/returns/", views.pos_return_list, name="pos-return-list"),
+    path("analytics/stores/", views.store_analytics, name="store-analytics"),
 ]

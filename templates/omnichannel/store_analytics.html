@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Analitik Store{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Omnichannel / POS</p><h1>Analitik Store / Channel / SKU</h1></div></div>
+<section class="panel"><p class="muted">Revenue, COGS, fees, settlement, dan payout adalah source facts; settlement/payout bukan revenue tambahan.</p><table><thead><tr><th>Store / Channel</th><th>SKU</th><th>Marketplace Revenue</th><th>POS Revenue</th><th>COGS</th><th>Gross Profit Source</th><th>Fees</th><th>Settlement</th><th>Payout</th><th>Return Qty</th></tr></thead><tbody>{% for row in rows %}<tr><td>{{ row.store_code }} / {{ row.sales_channel }}</td><td>{{ row.item_code|default:"Store total" }}</td><td>{{ row.marketplace_completed_revenue|default_if_none:"Unavailable" }}</td><td>{{ row.pos_revenue }}</td><td>{{ row.warehouse_cogs|default_if_none:"Pending" }}</td><td>{{ row.gross_profit_source|default_if_none:"Unavailable" }}</td><td>{{ row.marketplace_fees|default_if_none:"Unavailable" }}</td><td>{{ row.settlement_amount|default_if_none:"Unavailable" }}</td><td>{{ row.payout_amount|default_if_none:"Unavailable" }}</td><td>{{ row.return_quantity }}</td></tr>{% empty %}<tr><td colspan="10">Belum ada source analytics.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

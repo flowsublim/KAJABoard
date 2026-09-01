@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Retur POS{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Omnichannel / POS</p><h1>Retur POS</h1></div></div>
+<section class="panel"><p class="muted">Retur POS adalah dokumen terpisah. Stok hanya kembali setelah Quality PASS dan Warehouse receipt.</p><table><thead><tr><th>No.</th><th>POS asal</th><th>Store</th><th>Tanggal</th><th>Refund source</th><th>Status</th></tr></thead><tbody>{% for source in returns %}<tr><td>{{ source.document_number }}</td><td>{{ source.original_sale.document_number }}</td><td>{{ source.store.code }}</td><td>{{ source.return_at }}</td><td>{{ source.refund_amount|default_if_none:"Unavailable" }}</td><td>{{ source.state }}</td></tr>{% empty %}<tr><td colspan="6">Belum ada retur POS.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

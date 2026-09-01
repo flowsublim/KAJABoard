@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Penjualan POS{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">Omnichannel / POS</p><h1>Penjualan POS</h1></div>{% if perms.omnichannel.add_possale %}<button type="button" onclick="document.getElementById('pos-sale-modal').showModal()">Buat POS</button>{% endif %}</div>
+<section class="panel"><p class="muted">POS wajib memakai Item kanonis. Posting mengeluarkan stok melalui Warehouse; belum membuat jurnal atau kas Finance.</p><table><thead><tr><th>No.</th><th>Store</th><th>Tanggal</th><th>Total</th><th>Tender</th><th>Status</th></tr></thead><tbody>{% for sale in sales %}<tr><td><a href="{% url 'omnichannel:pos-sale-detail' sale.pk %}">{{ sale.document_number }}</a></td><td>{{ sale.store.code }}</td><td>{{ sale.transaction_at }}</td><td>{{ sale.grand_total_amount }}</td><td>{{ sale.tender.method }}</td><td>{{ sale.state }}</td></tr>{% empty %}<tr><td colspan="6">Belum ada penjualan POS.</td></tr>{% endfor %}</tbody></table></section>
+{% if perms.omnichannel.add_possale %}<dialog id="pos-sale-modal"><form method="post" action="{% url 'omnichannel:pos-sale-create' %}"><h2>Buat draft POS</h2>{% csrf_token %}{{ form.as_p }}<button type="submit">Simpan Draft</button><button type="button" onclick="this.closest('dialog').close()">Batal</button></form></dialog>{% endif %}
+{% endblock %}

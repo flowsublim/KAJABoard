@@ -2111,6 +2111,101 @@ def post_marketplace_return_in(
     return movement
 
 
+@transaction.atomic
+def post_pos_return_in(
+    return_line,
+    *,
+    quantity,
+    actor=None,
+    idempotency_key,
+    warehouse=None,
+):
+    """Post only posted-Quality-PASS POS return quantity as Warehouse RETURN_IN."""
+
+    from apps.omnichannel.models import PosReturnLine, PosReturnState
+    from apps.quality.models import QualityDocumentState, QualityResult
+
+    line = (
+        PosReturnLine.objects.select_for_update()
+        .select_related("pos_return", "pos_return__legal_entity", "item", "original_sale_line")
+        .get(pk=return_line.pk)
+    )
+    if line.pos_return.state != PosReturnState.RECORDED or line.quality_inspection_line_id is None:
+        raise ValidationError("A recorded POS return with a Quality candidate is required.")
+    quality_line = (
+        line.quality_inspection_line.__class__.objects.select_for_update()
+        .select_related("inspection")
+        .get(pk=line.quality_inspection_line_id)
+    )
+    claim = _claim(
+        "warehouse.pos_return_in",
+        idempotency_key,
+        {
+            "pos_return_line": str(line.pk),
+            "quality_line": str(quality_line.pk),
+            "quantity": str(quantity),
+        },
+        actor,
+    )
+    replay = _replay(claim, StockMovement)
+    if replay:
+        return replay
+    if quality_line.inspection.state != QualityDocumentState.POSTED:
+        raise ValidationError(
+            "POS return Quality inspection must be POSTED before Warehouse receipt."
+        )
+    if quality_line.result != QualityResult.PASS:
+        raise ValidationError("Only Quality PASS can authorize POS Warehouse RETURN_IN.")
+    quantity = _positive(quantity)
+    remaining_source = line.quantity - line.warehouse_returned_quantity
+    remaining_pass = quality_line.qty_pass - line.warehouse_returned_quantity
+    if quantity > remaining_source or quantity > remaining_pass:
+        raise ValidationError(
+            "POS Warehouse RETURN_IN exceeds source or accepted Quality quantity."
+        )
+    warehouse = warehouse or line.pos_return.warehouse
+    _validate_warehouse(warehouse, line.pos_return.legal_entity)
+    outbound = line.original_sale_line.warehouse_movement
+    unit_cost = outbound.unit_cost if outbound else None
+    valuation_status = (
+        ValuationStatus.READY if unit_cost is not None else ValuationStatus.PENDING_VALUATION
+    )
+    total_value = quantity * unit_cost if unit_cost is not None else None
+    movement = _post_movement(
+        entity=line.pos_return.legal_entity,
+        warehouse=warehouse,
+        item=line.item,
+        direction=MovementDirection.IN,
+        movement_type=MovementType.POS_RETURN_RECEIPT,
+        quantity=quantity,
+        source_module="omnichannel",
+        source_type="POS_RETURN",
+        source_document_id=line.pos_return_id,
+        source_line_id=line.pk,
+        source_key=f"POS_RETURN_IN|{line.pk}|{idempotency_key}"[:255],
+        transaction_date=line.pos_return.return_date,
+        actor=actor,
+        unit_cost=unit_cost,
+        total_value=total_value,
+        valuation_status=valuation_status,
+        notes="Warehouse RETURN_IN authorized by posted POS return Quality PASS.",
+    )
+    line.inspected_quantity = quality_line.qty_inspected
+    line.quality_accepted_quantity = quality_line.qty_pass
+    line.warehouse_returned_quantity += quantity
+    line.save(
+        update_fields=(
+            "inspected_quantity",
+            "quality_accepted_quantity",
+            "warehouse_returned_quantity",
+            "updated_at",
+        )
+    )
+    _audit(line, "warehouse.pos_return_in.posted", actor, key=idempotency_key)
+    complete_idempotency(claim.record.pk, result_reference=str(movement.pk))
+    return movement
+
+
 # Descriptive aliases make the source-module boundary explicit to adapters
 # without creating a second implementation or a second ledger primitive.
 create_warehouse_purchase_receipt = create_purchase_receipt
@@ -2137,3 +2232,4 @@ approve_stock_adjustment = approve_inventory_adjustment
 post_stock_adjustment = post_inventory_adjustment
 reverse_stock_adjustment = reverse_inventory_adjustment
 post_marketplace_return_receipt = post_marketplace_return_in
+post_pos_return_receipt = post_pos_return_in

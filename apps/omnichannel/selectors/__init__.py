@@ -16,6 +16,13 @@ from .phase7b import (
     revenue_events,
     settlement_sources,
 )
+from .phase7c import (
+    phase7_channel_reconciliation,
+    pos_cash_sessions,
+    pos_returns,
+    pos_sales,
+    store_channel_sku_analytics,
+)
 
 __all__ = [
     "import_batches",
@@ -32,4 +39,9 @@ __all__ = [
     "return_sources",
     "revenue_events",
     "settlement_sources",
+    "phase7_channel_reconciliation",
+    "pos_cash_sessions",
+    "pos_returns",
+    "pos_sales",
+    "store_channel_sku_analytics",
 ]
