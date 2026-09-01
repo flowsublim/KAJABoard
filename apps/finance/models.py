@@ -168,3 +168,102 @@ class COAMapping(UUIDPrimaryKeyModel, TimeStampedModel, EffectivePeriodModel):
 
     def __str__(self) -> str:
         return f"{self.module_code}/{self.event_code}/{self.line_role}/{self.dc}"
+
+
+class JournalState(models.TextChoices):
+    POSTED = "POSTED", "Posted"
+    REVERSED = "REVERSED", "Reversed"
+
+
+class JournalEntry(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT, related_name="journals")
+    journal_number = models.CharField(max_length=80)
+    accounting_date = models.DateField()
+    event_code = models.CharField(max_length=80)
+    source_module = models.CharField(max_length=40)
+    source_document_type = models.CharField(max_length=80)
+    source_document_id = models.CharField(max_length=80)
+    source_key = models.CharField(max_length=255)
+    source_reference = models.JSONField(default=dict, blank=True)
+    state = models.CharField(
+        max_length=12, choices=JournalState.choices, default=JournalState.POSTED
+    )
+    currency = models.CharField(max_length=12, default="IDR")
+    total_debit = models.DecimalField(max_digits=20, decimal_places=0)
+    total_credit = models.DecimalField(max_digits=20, decimal_places=0)
+    description = models.TextField(blank=True)
+    posted_at = models.DateTimeField()
+    posted_by = models.ForeignKey("accounts.User", null=True, on_delete=models.PROTECT)
+    reversal_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversal"
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_key"), name="finance_journal_source_uq"
+            ),
+            models.CheckConstraint(
+                condition=Q(total_debit=models.F("total_credit")), name="finance_journal_balanced"
+            ),
+        ]
+        permissions = [
+            ("view_gl", "Can view general ledger"),
+            ("post_journal", "Can post journal"),
+            ("reverse_journal", "Can reverse journal"),
+            ("view_ar", "Can view accounts receivable"),
+            ("view_ap", "Can view accounts payable"),
+            ("view_reconciliation", "Can view finance reconciliation"),
+        ]
+
+
+class JournalLine(UUIDPrimaryKeyModel, TimeStampedModel):
+    journal = models.ForeignKey(JournalEntry, on_delete=models.PROTECT, related_name="lines")
+    sequence = models.PositiveIntegerField()
+    line_role = models.CharField(max_length=80)
+    account = models.ForeignKey(COAAccount, on_delete=models.PROTECT)
+    account_code_snapshot = models.CharField(max_length=40)
+    account_name_snapshot = models.CharField(max_length=150)
+    debit = models.DecimalField(max_digits=20, decimal_places=0, default=0)
+    credit = models.DecimalField(max_digits=20, decimal_places=0, default=0)
+    mapping_snapshot = models.JSONField(default=dict)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("journal", "sequence"), name="finance_journal_line_seq_uq"
+            ),
+            models.CheckConstraint(
+                condition=(Q(debit__gt=0, credit=0) | Q(credit__gt=0, debit=0)),
+                name="finance_journal_line_one_side",
+            ),
+        ]
+
+
+class ReceivableEntry(UUIDPrimaryKeyModel, TimeStampedModel):
+    journal = models.OneToOneField(
+        JournalEntry, on_delete=models.PROTECT, related_name="receivable"
+    )
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT)
+    accounting_date = models.DateField()
+    original_amount = models.DecimalField(max_digits=20, decimal_places=0)
+    open_amount = models.DecimalField(max_digits=20, decimal_places=0)
+    currency = models.CharField(max_length=12, default="IDR")
+    store = models.ForeignKey("channels.Store", null=True, blank=True, on_delete=models.PROTECT)
+    partner = models.ForeignKey(
+        "partners.BusinessPartner", null=True, blank=True, on_delete=models.PROTECT
+    )
+
+
+class PayableEntry(UUIDPrimaryKeyModel, TimeStampedModel):
+    journal = models.OneToOneField(JournalEntry, on_delete=models.PROTECT, related_name="payable")
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT)
+    accounting_date = models.DateField()
+    original_amount = models.DecimalField(max_digits=20, decimal_places=0)
+    open_amount = models.DecimalField(max_digits=20, decimal_places=0)
+    currency = models.CharField(max_length=12, default="IDR")
+    partner = models.ForeignKey(
+        "partners.BusinessPartner", null=True, blank=True, on_delete=models.PROTECT
+    )

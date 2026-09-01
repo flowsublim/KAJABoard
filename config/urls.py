@@ -12,6 +12,7 @@ urlpatterns = [
     path("settings/channels/", include("apps.channels.urls", namespace="channels")),
     path("settings/purchasing/", include("apps.purchasing.urls", namespace="purchasing")),
     path("settings/finance/", include("apps.finance.urls", namespace="finance")),
+    path("finance/", include("apps.finance.operational_urls", namespace="finance_operations")),
     path("settings/tax/", include("apps.tax.urls", namespace="tax")),
     path("settings/data-exchange/", include("apps.data_exchange.urls", namespace="data_exchange")),
     path("partners/", include("apps.partners.urls", namespace="partners")),
