@@ -4,27 +4,60 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils.dateparse import parse_date
 
-from apps.finance.forms import COAAccountForm, COAMappingForm, LifecycleReasonForm
-from apps.finance.models import COAAccount, COAMapping, JournalEntry, MappingDimensionType
+from apps.finance.forms import (
+    COAAccountForm,
+    COAMappingForm,
+    LifecycleReasonForm,
+    LiquidityAccountForm,
+    PaymentActionForm,
+    PaymentReversalForm,
+)
+from apps.finance.models import (
+    COAAccount,
+    COAMapping,
+    JournalEntry,
+    LiquidityAccount,
+    LiquidityAccountType,
+    MappingDimensionType,
+    MarketplacePayoutPosting,
+    MarketplaceSettlementPosting,
+    Payment,
+)
 from apps.finance.selectors import (
+    bank_ledger,
+    cash_ledger,
     coa_accounts,
     coa_mappings,
     general_ledger,
+    marketplace_balance_entries,
+    marketplace_payouts,
+    marketplace_settlements,
     payables,
+    payments,
     receivables,
     reconciliation,
 )
 from apps.finance.services import (
     create_coa_account,
     create_coa_mapping,
+    create_liquidity_account,
     deactivate_coa_account,
     deactivate_coa_mapping,
+    post_customer_receipt,
+    post_marketplace_payout,
+    post_marketplace_settlement,
+    post_vendor_payment,
     reactivate_coa_account,
     reactivate_coa_mapping,
+    reverse_marketplace_payout,
+    reverse_marketplace_settlement,
+    reverse_payment,
     update_coa_account,
     update_coa_mapping,
+    update_liquidity_account,
 )
 from apps.organizations.selectors import accessible_legal_entities
 
@@ -170,6 +203,358 @@ def finance_reconciliation(request):
     selected = context["selected_entity"]
     context["result"] = reconciliation(legal_entity=selected) if selected else None
     return render(request, "finance/reconciliation.html", context)
+
+
+def _operational_rows(request, *, permission, selector, template, title):
+    _require_codename(request.user, permission)
+    context = _finance_page_context(request)
+    selected = context["selected_entity"]
+    rows = selector(legal_entity=selected) if selected else JournalEntry.objects.none()
+    context.update({"page": Paginator(rows, 50).get_page(request.GET.get("page")), "title": title})
+    return render(request, template, context)
+
+
+@login_required
+def payment_list(request):
+    response = _operational_rows(
+        request,
+        permission="view_payment",
+        selector=payments,
+        template="finance/payment_list.html",
+        title="Payments",
+    )
+    response.context_data = getattr(response, "context_data", {})
+    return response
+
+
+@login_required
+def payment_detail(request, pk):
+    _require(request.user, "view", Payment)
+    payment = get_object_or_404(
+        Payment.objects.filter(legal_entity__in=accessible_legal_entities(request.user))
+        .select_related("liquidity_account", "journal", "liquidity_entry", "partner", "store")
+        .prefetch_related("allocations__receivable", "allocations__payable"),
+        pk=pk,
+    )
+    return render(request, "finance/payment_detail.html", {"payment": payment})
+
+
+def _payment_action(request, *, target):
+    _require_codename(request.user, "post_payment")
+    form = PaymentActionForm(request.POST or None, user=request.user, target=target)
+    if request.method == "POST" and form.is_valid():
+        values = form.cleaned_data
+        try:
+            service = post_customer_receipt if target == "receivable" else post_vendor_payment
+            payment = service(
+                legal_entity=values["legal_entity"],
+                liquidity_account=values["liquidity_account"],
+                allocations=[{target: values[target], "amount": values["amount"]}],
+                payment_date=values["payment_date"],
+                source_key=values["source_key"],
+                actor=request.user,
+            )
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, f"{payment.payment_number} posted.")
+            return redirect("finance_operations:payment-list")
+    title = "Record Customer Receipt" if target == "receivable" else "Record Vendor Payment"
+    return render(
+        request,
+        "finance/action_form.html",
+        {"form": form, "title": title, "cancel_url": "finance_operations:payment-list"},
+    )
+
+
+@login_required
+def customer_receipt_create(request):
+    return _payment_action(request, target="receivable")
+
+
+@login_required
+def vendor_payment_create(request):
+    return _payment_action(request, target="payable")
+
+
+@login_required
+def payment_reverse(request, pk):
+    _require_codename(request.user, "reverse_payment")
+    payment = get_object_or_404(
+        Payment.objects.filter(legal_entity__in=accessible_legal_entities(request.user)), pk=pk
+    )
+    form = PaymentReversalForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        reverse_payment(payment, actor=request.user)
+        messages.success(request, f"{payment.payment_number} reversed.")
+        return redirect("finance_operations:payment-list")
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": form,
+            "title": f"Reverse {payment.payment_number}",
+            "cancel_url": "finance_operations:payment-list",
+        },
+    )
+
+
+@login_required
+def cash_list(request):
+    return _operational_rows(
+        request,
+        permission="view_cash",
+        selector=cash_ledger,
+        template="finance/liquidity_list.html",
+        title="Cash",
+    )
+
+
+@login_required
+def bank_list(request):
+    return _operational_rows(
+        request,
+        permission="view_bank",
+        selector=bank_ledger,
+        template="finance/liquidity_list.html",
+        title="Bank",
+    )
+
+
+@login_required
+def marketplace_settlement_list(request):
+    return _operational_rows(
+        request,
+        permission="view_marketplace_settlement",
+        selector=marketplace_settlements,
+        template="finance/marketplace_settlement_list.html",
+        title="Marketplace Settlements",
+    )
+
+
+@login_required
+def marketplace_settlement_post(request):
+    _require_codename(request.user, "post_marketplace_settlement")
+    from apps.omnichannel.models import OmniSettlement
+
+    entity = _selected_entity(request)[1]
+    sources = (
+        OmniSettlement.objects.filter(legal_entity=entity)
+        if entity
+        else OmniSettlement.objects.none()
+    )
+    from django import forms
+
+    class SettlementForm(forms.Form):
+        settlement = forms.ModelChoiceField(queryset=sources)
+
+    form = SettlementForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        result = post_marketplace_settlement(form.cleaned_data["settlement"], actor=request.user)
+        if isinstance(result, dict):
+            form.add_error(None, result["reason"])
+        else:
+            messages.success(request, "Marketplace settlement posted.")
+            return redirect("finance_operations:marketplace-settlement-list")
+    return render(
+        request,
+        "master/master_form.html",
+        {
+            "form": form,
+            "title": "Post Marketplace Settlement",
+            "cancel_url": "finance_operations:marketplace-settlement-list",
+        },
+    )
+
+
+@login_required
+def marketplace_settlement_reverse(request, pk):
+    _require_codename(request.user, "reverse_marketplace_settlement")
+    posting = get_object_or_404(
+        MarketplaceSettlementPosting.objects.filter(
+            legal_entity__in=accessible_legal_entities(request.user)
+        ),
+        pk=pk,
+    )
+    form = PaymentReversalForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        reverse_marketplace_settlement(posting, actor=request.user)
+        return redirect("finance_operations:marketplace-settlement-list")
+    return render(
+        request,
+        "master/master_form.html",
+        {
+            "form": form,
+            "title": "Reverse Marketplace Settlement",
+            "cancel_url": "finance_operations:marketplace-settlement-list",
+        },
+    )
+
+
+@login_required
+def marketplace_balance_list(request):
+    return _operational_rows(
+        request,
+        permission="view_marketplace_balance",
+        selector=marketplace_balance_entries,
+        template="finance/marketplace_balance_list.html",
+        title="Marketplace Balance",
+    )
+
+
+@login_required
+def marketplace_payout_list(request):
+    return _operational_rows(
+        request,
+        permission="view_marketplace_payoutposting",
+        selector=marketplace_payouts,
+        template="finance/marketplace_payout_list.html",
+        title="Marketplace Payouts",
+    )
+
+
+@login_required
+def marketplace_payout_post(request):
+    _require(request.user, "add", MarketplacePayoutPosting)
+    from django import forms
+
+    from apps.omnichannel.models import OmniPayoutSource
+
+    entity = _selected_entity(request)[1]
+    sources = (
+        OmniPayoutSource.objects.filter(legal_entity=entity)
+        if entity
+        else OmniPayoutSource.objects.none()
+    )
+
+    class PayoutForm(forms.Form):
+        payout_source = forms.ModelChoiceField(queryset=sources)
+        liquidity_account = forms.ModelChoiceField(
+            queryset=LiquidityAccount.objects.filter(
+                legal_entity=entity, account_type=LiquidityAccountType.BANK, is_active=True
+            )
+            if entity
+            else LiquidityAccount.objects.none()
+        )
+
+    form = PayoutForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            result = post_marketplace_payout(
+                form.cleaned_data["payout_source"],
+                liquidity_account=form.cleaned_data["liquidity_account"],
+                actor=request.user,
+            )
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            if isinstance(result, dict):
+                form.add_error(None, result["reason"])
+            else:
+                messages.success(request, "Marketplace payout posted.")
+                return redirect("finance_operations:marketplace-payout-list")
+    return render(
+        request,
+        "master/master_form.html",
+        {
+            "form": form,
+            "title": "Post Marketplace Payout",
+            "cancel_url": "finance_operations:marketplace-payout-list",
+        },
+    )
+
+
+@login_required
+def marketplace_payout_reverse(request, pk):
+    _require(request.user, "change", MarketplacePayoutPosting)
+    posting = get_object_or_404(
+        MarketplacePayoutPosting.objects.filter(
+            legal_entity__in=accessible_legal_entities(request.user)
+        ),
+        pk=pk,
+    )
+    form = PaymentReversalForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        reverse_marketplace_payout(posting, actor=request.user)
+        return redirect("finance_operations:marketplace-payout-list")
+    return render(
+        request,
+        "master/master_form.html",
+        {
+            "form": form,
+            "title": "Reverse Marketplace Payout",
+            "cancel_url": "finance_operations:marketplace-payout-list",
+        },
+    )
+
+
+@login_required
+def liquidity_account_list(request):
+    _require(request.user, "view", LiquidityAccount)
+    rows = (
+        LiquidityAccount.objects.filter(legal_entity__in=accessible_legal_entities(request.user))
+        .select_related("legal_entity")
+        .order_by("legal_entity__code", "code")
+    )
+    return render(
+        request,
+        "finance/liquidity_account_list.html",
+        {
+            "page": Paginator(rows, 25).get_page(request.GET.get("page")),
+            "can_add": request.user.has_perm("finance.add_liquidityaccount"),
+            "can_change": request.user.has_perm("finance.change_liquidityaccount"),
+        },
+    )
+
+
+@login_required
+def liquidity_account_create(request):
+    _require(request.user, "add", LiquidityAccount)
+    form = LiquidityAccountForm(request.POST or None, user=request.user)
+    if request.method == "POST" and form.is_valid():
+        try:
+            account = create_liquidity_account(actor=request.user, **_model_values(form))
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, f"{account} created.")
+            return redirect("finance:liquidity-account-list")
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": form,
+            "title": "New Liquidity Account",
+            "cancel_href": reverse("finance:liquidity-account-list"),
+        },
+    )
+
+
+@login_required
+def liquidity_account_edit(request, pk):
+    _require(request.user, "change", LiquidityAccount)
+    account = get_object_or_404(
+        LiquidityAccount.objects.filter(legal_entity__in=accessible_legal_entities(request.user)),
+        pk=pk,
+    )
+    form = LiquidityAccountForm(request.POST or None, instance=account, user=request.user)
+    if request.method == "POST" and form.is_valid():
+        try:
+            account = update_liquidity_account(account, actor=request.user, **_model_values(form))
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, f"{account} updated.")
+            return redirect("finance:liquidity-account-list")
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": form,
+            "title": f"Edit {account}",
+            "cancel_href": reverse("finance:liquidity-account-list"),
+        },
+    )
 
 
 @login_required

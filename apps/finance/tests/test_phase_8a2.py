@@ -20,6 +20,7 @@ from apps.finance.models import (
     MappingDimensionType,
     NormalBalance,
     PayableEntry,
+    Payment,
     ReceivableEntry,
 )
 from apps.finance.selectors import (
@@ -435,7 +436,8 @@ def test_pos_boundary_defers_phase_8b_payment_semantics(foundation):
         assert result["status"] == "DEFERRED"
 
     installed_model_names = {model.__name__ for model in apps.get_models()}
-    assert {"CashLedger", "BankLedger", "Payment"}.isdisjoint(installed_model_names)
+    assert {"CashLedger", "BankLedger"}.isdisjoint(installed_model_names)
+    assert Payment.objects.count() == 0
     assert JournalEntry.objects.count() == 0
 
 

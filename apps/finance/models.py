@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
@@ -88,6 +89,7 @@ class MappingDimensionType(models.TextChoices):
     TAX = "TAX", "Tax"
     BUSINESS_UNIT = "BUSINESS_UNIT", "Business unit"
     PROJECT = "PROJECT", "Project"
+    LIQUIDITY_ACCOUNT = "LIQUIDITY_ACCOUNT", "Liquidity account"
 
 
 class DCDirection(models.TextChoices):
@@ -267,3 +269,496 @@ class PayableEntry(UUIDPrimaryKeyModel, TimeStampedModel):
     partner = models.ForeignKey(
         "partners.BusinessPartner", null=True, blank=True, on_delete=models.PROTECT
     )
+
+
+class LiquidityAccountType(models.TextChoices):
+    CASH = "CASH", "Cash"
+    BANK = "BANK", "Bank"
+
+
+class LiquidityDirection(models.TextChoices):
+    IN = "IN", "In"
+    OUT = "OUT", "Out"
+
+
+class PaymentDirection(models.TextChoices):
+    RECEIPT = "RECEIPT", "Receipt"
+    DISBURSEMENT = "DISBURSEMENT", "Disbursement"
+
+
+class PaymentState(models.TextChoices):
+    POSTED = "POSTED", "Posted"
+    REVERSED = "REVERSED", "Reversed"
+
+
+class LiquidityAccount(UUIDPrimaryKeyModel, TimeStampedModel, EffectivePeriodModel):
+    """Finance-owned Cash/Bank source master; COA remains resolver-selected."""
+
+    legal_entity = models.ForeignKey(
+        LegalEntity, on_delete=models.PROTECT, related_name="liquidity_accounts"
+    )
+    code = models.CharField(max_length=40)
+    name = models.CharField(max_length=150)
+    account_type = models.CharField(max_length=10, choices=LiquidityAccountType.choices)
+    currency = models.CharField(max_length=12, default="IDR")
+    mapping_key = models.CharField(max_length=120)
+    bank_name = models.CharField(max_length=120, blank=True)
+    bank_account_number = models.CharField(max_length=120, blank=True)
+    account_holder_name = models.CharField(max_length=150, blank=True)
+    notes = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "code"), name="finance_liquidity_account_code_uq"
+            ),
+            models.UniqueConstraint(
+                fields=("legal_entity", "mapping_key"), name="finance_liquidity_mapping_key_uq"
+            ),
+            models.CheckConstraint(
+                condition=Q(effective_to__isnull=True)
+                | Q(effective_to__gte=models.F("effective_from")),
+                name="finance_liquidity_effective_period_valid",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "account_type", "is_active"),
+                name="finance_liquidity_lookup_idx",
+            )
+        ]
+        permissions = [("manage_liquidityaccount", "Can manage liquidity accounts")]
+
+    def clean(self):
+        super().clean()
+        if self.account_type == LiquidityAccountType.CASH and any(
+            (self.bank_name, self.bank_account_number, self.account_holder_name)
+        ):
+            raise ValidationError("Bank metadata is allowed only for BANK liquidity accounts.")
+
+
+class LiquidityEntry(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Immutable Finance Cash/Bank movement; balances are read projections."""
+
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT)
+    liquidity_account = models.ForeignKey(
+        LiquidityAccount, on_delete=models.PROTECT, related_name="entries"
+    )
+    journal = models.ForeignKey(
+        JournalEntry, on_delete=models.PROTECT, related_name="liquidity_entries"
+    )
+    transaction_date = models.DateField()
+    direction = models.CharField(max_length=3, choices=LiquidityDirection.choices)
+    amount = models.DecimalField(max_digits=20, decimal_places=0)
+    currency = models.CharField(max_length=12, default="IDR")
+    source_module = models.CharField(max_length=40)
+    source_document_type = models.CharField(max_length=80)
+    source_document_id = models.CharField(max_length=80)
+    source_key = models.CharField(max_length=255)
+    source_reference = models.JSONField(default=dict, blank=True)
+    reversal_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversal"
+    )
+    posted_by = models.ForeignKey("accounts.User", null=True, on_delete=models.PROTECT)
+    posted_at = models.DateTimeField()
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_key"), name="finance_liquidity_source_uq"
+            ),
+            models.CheckConstraint(
+                condition=Q(amount__gt=0), name="finance_liquidity_amount_positive"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("liquidity_account", "transaction_date"),
+                name="finance_liquidity_ledger_idx",
+            ),
+            models.Index(
+                fields=("legal_entity", "source_key"), name="finance_liquidity_source_idx"
+            ),
+        ]
+
+
+class MarketplaceBalanceDirection(models.TextChoices):
+    IN = "IN", "In"
+    OUT = "OUT", "Out"
+
+
+class MarketplaceSettlementState(models.TextChoices):
+    POSTED = "POSTED", "Posted"
+    REVERSED = "REVERSED", "Reversed"
+
+
+class MarketplaceReturnTreatment(models.TextChoices):
+    RECEIVABLE_CREDIT = "RECEIVABLE_CREDIT", "Receivable credit"
+    MARKETPLACE_BALANCE_CREDIT = "MARKETPLACE_BALANCE_CREDIT", "Marketplace balance credit"
+
+
+class MarketplaceFollowupState(models.TextChoices):
+    POSTED = "POSTED", "Posted"
+    REVERSED = "REVERSED", "Reversed"
+
+
+class MarketplaceAdjustmentState(models.TextChoices):
+    CONSUMED_IN_SETTLEMENT = "CONSUMED_IN_SETTLEMENT", "Consumed in settlement"
+    REVERSED = "REVERSED", "Reversed"
+
+
+class MarketplaceBalanceEntry(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Immutable marketplace-held-money movement; balances are read projections."""
+
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT)
+    store = models.ForeignKey(
+        "channels.Store", on_delete=models.PROTECT, related_name="marketplace_balance_entries"
+    )
+    journal = models.ForeignKey(
+        JournalEntry, on_delete=models.PROTECT, related_name="marketplace_balance_entries"
+    )
+    transaction_date = models.DateField()
+    direction = models.CharField(max_length=3, choices=MarketplaceBalanceDirection.choices)
+    amount = models.DecimalField(max_digits=20, decimal_places=0)
+    currency = models.CharField(max_length=12, default="IDR")
+    source_module = models.CharField(max_length=40)
+    source_document_type = models.CharField(max_length=80)
+    source_document_id = models.CharField(max_length=80)
+    source_key = models.CharField(max_length=255)
+    source_reference = models.JSONField(default=dict, blank=True)
+    reversal_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversal"
+    )
+    posted_by = models.ForeignKey("accounts.User", null=True, on_delete=models.PROTECT)
+    posted_at = models.DateTimeField()
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_key"), name="finance_marketplace_balance_source_uq"
+            ),
+            models.CheckConstraint(
+                condition=Q(amount__gt=0), name="finance_marketplace_balance_amount_positive"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "store", "transaction_date"),
+                name="fin_mkt_balance_ledger_idx",
+            ),
+            models.Index(fields=("legal_entity", "source_key"), name="fin_mkt_balance_source_idx"),
+        ]
+        permissions = [("view_marketplace_balance", "Can view marketplace balance")]
+
+
+class MarketplaceSettlementPosting(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Finance-owned settlement accounting state; the Omni source remains immutable."""
+
+    legal_entity = models.ForeignKey(
+        LegalEntity, on_delete=models.PROTECT, related_name="marketplace_settlement_postings"
+    )
+    store = models.ForeignKey("channels.Store", on_delete=models.PROTECT)
+    source_settlement_id = models.CharField(max_length=80)
+    source_settlement_identity = models.CharField(max_length=500)
+    settlement_date = models.DateField()
+    currency = models.CharField(max_length=12, default="IDR")
+    receivable = models.ForeignKey(ReceivableEntry, on_delete=models.PROTECT)
+    journal = models.OneToOneField(
+        JournalEntry, on_delete=models.PROTECT, related_name="marketplace_settlement_posting"
+    )
+    marketplace_balance_entry = models.OneToOneField(
+        MarketplaceBalanceEntry,
+        on_delete=models.PROTECT,
+        related_name="marketplace_settlement_posting",
+    )
+    ar_cleared_amount = models.DecimalField(max_digits=20, decimal_places=0)
+    marketplace_balance_amount = models.DecimalField(max_digits=20, decimal_places=0)
+    fee_amount = models.DecimalField(max_digits=20, decimal_places=0, default=0)
+    fee_components = models.JSONField(default=dict, blank=True)
+    source_reference = models.JSONField(default=dict, blank=True)
+    source_lineage = models.JSONField(default=dict, blank=True)
+    state = models.CharField(
+        max_length=12,
+        choices=MarketplaceSettlementState.choices,
+        default=MarketplaceSettlementState.POSTED,
+    )
+    reversal_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversal"
+    )
+    posted_by = models.ForeignKey("accounts.User", null=True, on_delete=models.PROTECT)
+    posted_at = models.DateTimeField()
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_settlement_identity"),
+                name="finance_marketplace_settlement_source_uq",
+            ),
+            models.CheckConstraint(
+                condition=Q(ar_cleared_amount__gt=0),
+                name="finance_marketplace_settlement_ar_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(marketplace_balance_amount__gt=0),
+                name="finance_marketplace_settlement_balance_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(fee_amount__gte=0),
+                name="finance_marketplace_settlement_fee_nonnegative",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "store", "settlement_date"),
+                name="fin_mkt_settlement_list_idx",
+            )
+        ]
+        permissions = [
+            ("view_marketplace_settlement", "Can view marketplace settlements"),
+            ("post_marketplace_settlement", "Can post marketplace settlements"),
+            ("reverse_marketplace_settlement", "Can reverse marketplace settlements"),
+        ]
+
+
+class MarketplaceReturnPosting(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT)
+    store = models.ForeignKey("channels.Store", on_delete=models.PROTECT)
+    source_return_id = models.CharField(max_length=80)
+    source_return_identity = models.CharField(max_length=500)
+    transaction_date = models.DateField()
+    amount = models.DecimalField(max_digits=20, decimal_places=0)
+    currency = models.CharField(max_length=12, default="IDR")
+    receivable = models.ForeignKey(ReceivableEntry, on_delete=models.PROTECT)
+    revenue_journal = models.ForeignKey(JournalEntry, on_delete=models.PROTECT)
+    journal = models.OneToOneField(
+        JournalEntry, on_delete=models.PROTECT, related_name="marketplace_return_posting"
+    )
+    marketplace_balance_entry = models.OneToOneField(
+        MarketplaceBalanceEntry,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="marketplace_return_posting",
+    )
+    treatment = models.CharField(max_length=32, choices=MarketplaceReturnTreatment.choices)
+    state = models.CharField(
+        max_length=12,
+        choices=MarketplaceFollowupState.choices,
+        default=MarketplaceFollowupState.POSTED,
+    )
+    source_reference = models.JSONField(default=dict, blank=True)
+    reversal_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversal"
+    )
+    posted_by = models.ForeignKey("accounts.User", null=True, on_delete=models.PROTECT)
+    posted_at = models.DateTimeField()
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_return_identity"),
+                name="finance_mkt_return_source_uq",
+            ),
+            models.CheckConstraint(
+                condition=Q(amount__gt=0), name="finance_mkt_return_amount_positive"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "store", "transaction_date"), name="fin_mkt_return_list_idx"
+            )
+        ]
+
+
+class MarketplaceAdjustmentPosting(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT)
+    store = models.ForeignKey("channels.Store", on_delete=models.PROTECT)
+    source_adjustment_id = models.CharField(max_length=80)
+    source_adjustment_identity = models.CharField(max_length=500)
+    transaction_date = models.DateField()
+    signed_amount = models.DecimalField(max_digits=20, decimal_places=0)
+    currency = models.CharField(max_length=12, default="IDR")
+    settlement_posting = models.ForeignKey(
+        MarketplaceSettlementPosting, on_delete=models.PROTECT, related_name="adjustment_postings"
+    )
+    journal = models.ForeignKey(
+        JournalEntry, on_delete=models.PROTECT, related_name="marketplace_adjustment_postings"
+    )
+    state = models.CharField(
+        max_length=32,
+        choices=MarketplaceAdjustmentState.choices,
+        default=MarketplaceAdjustmentState.CONSUMED_IN_SETTLEMENT,
+    )
+    source_reference = models.JSONField(default=dict, blank=True)
+    reversal_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversal"
+    )
+    posted_by = models.ForeignKey("accounts.User", null=True, on_delete=models.PROTECT)
+    posted_at = models.DateTimeField()
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_adjustment_identity"),
+                name="finance_mkt_adjustment_source_uq",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "store", "transaction_date"),
+                name="fin_mkt_adjustment_list_idx",
+            )
+        ]
+
+
+class MarketplacePayoutPosting(UUIDPrimaryKeyModel, TimeStampedModel):
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT)
+    store = models.ForeignKey("channels.Store", on_delete=models.PROTECT)
+    source_payout_id = models.CharField(max_length=80)
+    source_payout_identity = models.CharField(max_length=500)
+    payout_reference = models.CharField(max_length=180)
+    payout_date = models.DateField()
+    amount = models.DecimalField(max_digits=20, decimal_places=0)
+    currency = models.CharField(max_length=12, default="IDR")
+    liquidity_account = models.ForeignKey(LiquidityAccount, on_delete=models.PROTECT)
+    journal = models.OneToOneField(
+        JournalEntry, on_delete=models.PROTECT, related_name="marketplace_payout_posting"
+    )
+    marketplace_balance_entry = models.OneToOneField(
+        MarketplaceBalanceEntry, on_delete=models.PROTECT, related_name="marketplace_payout_posting"
+    )
+    liquidity_entry = models.OneToOneField(
+        LiquidityEntry, on_delete=models.PROTECT, related_name="marketplace_payout_posting"
+    )
+    state = models.CharField(
+        max_length=12,
+        choices=MarketplaceFollowupState.choices,
+        default=MarketplaceFollowupState.POSTED,
+    )
+    source_reference = models.JSONField(default=dict, blank=True)
+    reversal_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversal"
+    )
+    posted_by = models.ForeignKey("accounts.User", null=True, on_delete=models.PROTECT)
+    posted_at = models.DateTimeField()
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_payout_identity"),
+                name="finance_mkt_payout_source_uq",
+            ),
+            models.CheckConstraint(
+                condition=Q(amount__gt=0), name="finance_mkt_payout_amount_positive"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "store", "payout_date"), name="fin_mkt_payout_list_idx"
+            )
+        ]
+
+
+class Payment(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Finance-owned immutable receipt/disbursement linked to journal and liquidity source."""
+
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT, related_name="payments")
+    payment_number = models.CharField(max_length=80)
+    payment_date = models.DateField()
+    direction = models.CharField(max_length=16, choices=PaymentDirection.choices)
+    liquidity_account = models.ForeignKey(
+        LiquidityAccount, on_delete=models.PROTECT, related_name="payments"
+    )
+    amount = models.DecimalField(max_digits=20, decimal_places=0)
+    currency = models.CharField(max_length=12, default="IDR")
+    partner = models.ForeignKey(
+        "partners.BusinessPartner", null=True, blank=True, on_delete=models.PROTECT
+    )
+    store = models.ForeignKey("channels.Store", null=True, blank=True, on_delete=models.PROTECT)
+    source_module = models.CharField(max_length=40)
+    source_document_type = models.CharField(max_length=80)
+    source_document_id = models.CharField(max_length=80)
+    source_key = models.CharField(max_length=255)
+    source_reference = models.JSONField(default=dict, blank=True)
+    state = models.CharField(
+        max_length=12, choices=PaymentState.choices, default=PaymentState.POSTED
+    )
+    journal = models.OneToOneField(JournalEntry, on_delete=models.PROTECT, related_name="payment")
+    liquidity_entry = models.OneToOneField(
+        LiquidityEntry, on_delete=models.PROTECT, related_name="payment"
+    )
+    reversal_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversal"
+    )
+    posted_by = models.ForeignKey("accounts.User", null=True, on_delete=models.PROTECT)
+    posted_at = models.DateTimeField()
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_key"), name="finance_payment_source_uq"
+            ),
+            models.CheckConstraint(
+                condition=Q(amount__gt=0), name="finance_payment_amount_positive"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "payment_date", "direction"),
+                name="finance_payment_list_idx",
+            )
+        ]
+        permissions = [
+            ("post_payment", "Can post payment"),
+            ("reverse_payment", "Can reverse payment"),
+            ("view_cash", "Can view cash ledger"),
+            ("view_bank", "Can view bank ledger"),
+        ]
+
+
+class PaymentAllocation(UUIDPrimaryKeyModel, TimeStampedModel):
+    payment = models.ForeignKey(Payment, on_delete=models.PROTECT, related_name="allocations")
+    receivable = models.ForeignKey(
+        ReceivableEntry,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="payment_allocations",
+    )
+    payable = models.ForeignKey(
+        PayableEntry,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="payment_allocations",
+    )
+    amount = models.DecimalField(max_digits=20, decimal_places=0)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(amount__gt=0), name="finance_payment_alloc_positive"
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(receivable__isnull=False, payable__isnull=True)
+                    | Q(receivable__isnull=True, payable__isnull=False)
+                ),
+                name="finance_payment_alloc_one_target",
+            ),
+            models.UniqueConstraint(
+                fields=("payment", "receivable"), name="finance_payment_alloc_receivable_uq"
+            ),
+            models.UniqueConstraint(
+                fields=("payment", "payable"), name="finance_payment_alloc_payable_uq"
+            ),
+        ]

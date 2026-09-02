@@ -5,6 +5,15 @@ from apps.finance import views
 app_name = "finance"
 
 urlpatterns = [
+    path("liquidity-accounts/", views.liquidity_account_list, name="liquidity-account-list"),
+    path(
+        "liquidity-accounts/new/", views.liquidity_account_create, name="liquidity-account-create"
+    ),
+    path(
+        "liquidity-accounts/<uuid:pk>/edit/",
+        views.liquidity_account_edit,
+        name="liquidity-account-edit",
+    ),
     path("coa/", views.account_list, name="account-list"),
     path("coa/new/", views.account_create, name="account-create"),
     path("coa/<uuid:pk>/edit/", views.account_edit, name="account-edit"),

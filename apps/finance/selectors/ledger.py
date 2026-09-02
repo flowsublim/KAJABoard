@@ -3,6 +3,8 @@ from decimal import Decimal
 from django.db.models import Q
 
 from apps.finance.models import JournalLine, PayableEntry, ReceivableEntry
+from apps.finance.selectors.liquidity import bank_ledger, cash_ledger
+from apps.finance.selectors.marketplace import marketplace_balance
 from apps.warehouse.models import MovementDirection, StockMovement, ValuationStatus
 
 
@@ -102,4 +104,42 @@ def reconciliation(*, legal_entity):
             "control": inventory_gl,
             "detail": warehouse_value,
         },
+        "liquidity": _control_fact(
+            lines=lines,
+            line_role="LIQUIDITY",
+            detail=sum(
+                (
+                    entry.amount if entry.direction == "IN" else -entry.amount
+                    for entry in [
+                        *cash_ledger(legal_entity=legal_entity),
+                        *bank_ledger(legal_entity=legal_entity),
+                    ]
+                ),
+                Decimal("0"),
+            ),
+        ),
+        "marketplace_balance": _control_fact(
+            lines=lines,
+            line_role="MARKETPLACE_BALANCE",
+            detail=marketplace_balance(legal_entity=legal_entity),
+        ),
+    }
+
+
+def _control_fact(*, lines, line_role, detail):
+    control = sum(
+        (line.debit - line.credit for line in lines if line.line_role == line_role),
+        Decimal("0"),
+    )
+    has_fact = bool(control or detail)
+    return {
+        "status": (
+            "MATCH"
+            if has_fact and control == detail
+            else "DIFFERENCE"
+            if has_fact
+            else "PENDING_SOURCE"
+        ),
+        "control": control,
+        "detail": detail,
     }

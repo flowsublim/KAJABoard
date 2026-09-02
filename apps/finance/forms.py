@@ -1,6 +1,12 @@
 from django import forms
 
-from apps.finance.models import COAAccount, COAMapping
+from apps.finance.models import (
+    COAAccount,
+    COAMapping,
+    LiquidityAccount,
+    PayableEntry,
+    ReceivableEntry,
+)
 from apps.organizations.selectors import accessible_legal_entities
 
 
@@ -14,7 +20,7 @@ class AuditedFinanceForm(forms.ModelForm):
 
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.instance.pk:
+        if not self.instance._state.adding:
             self.fields["change_reason"].required = True
 
 
@@ -51,7 +57,7 @@ class COAAccountForm(AuditedFinanceForm):
             entities = accessible_legal_entities(user)
             self.fields["legal_entity"].queryset = entities
             self.fields["parent"].queryset = COAAccount.objects.filter(legal_entity__in=entities)
-        if self.instance.pk:
+        if not self.instance._state.adding:
             self.fields["legal_entity"].disabled = True
             self.fields["account_code"].disabled = True
 
@@ -89,3 +95,66 @@ class COAMappingForm(AuditedFinanceForm):
 
 class LifecycleReasonForm(forms.Form):
     reason = forms.CharField(max_length=500, widget=forms.Textarea(attrs={"rows": 3}))
+
+
+class LiquidityAccountForm(AuditedFinanceForm):
+    """Liquidity master data only; transactional COA stays resolver-mapped."""
+
+    class Meta:
+        model = LiquidityAccount
+        fields = (
+            "legal_entity",
+            "code",
+            "name",
+            "account_type",
+            "currency",
+            "mapping_key",
+            "effective_from",
+            "effective_to",
+            "bank_name",
+            "bank_account_number",
+            "account_holder_name",
+            "is_active",
+            "notes",
+        )
+        widgets = {
+            "effective_from": forms.DateInput(attrs={"type": "date"}),
+            "effective_to": forms.DateInput(attrs={"type": "date"}),
+            "notes": forms.Textarea(attrs={"rows": 3}),
+        }
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, user=user, **kwargs)
+        if user is not None:
+            self.fields["legal_entity"].queryset = accessible_legal_entities(user)
+        if not self.instance._state.adding:
+            self.fields["legal_entity"].disabled = True
+            self.fields["code"].disabled = True
+
+
+class PaymentActionForm(forms.Form):
+    legal_entity = forms.ModelChoiceField(queryset=None)
+    liquidity_account = forms.ModelChoiceField(queryset=LiquidityAccount.objects.none())
+    payment_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+    source_key = forms.CharField(max_length=255)
+    amount = forms.DecimalField(max_digits=20, decimal_places=0, min_value=1)
+
+    def __init__(self, *args, user=None, target="receivable", **kwargs):
+        super().__init__(*args, **kwargs)
+        entities = accessible_legal_entities(user) if user is not None else None
+        self.fields["legal_entity"].queryset = entities
+        self.fields["liquidity_account"].queryset = LiquidityAccount.objects.filter(
+            legal_entity__in=entities, is_active=True
+        )
+        model = ReceivableEntry if target == "receivable" else PayableEntry
+        self.fields[target] = forms.ModelChoiceField(
+            queryset=model.objects.filter(
+                legal_entity__in=entities, open_amount__gt=0
+            ).select_related("journal"),
+            label=target.title(),
+        )
+        self.target = target
+
+
+class PaymentReversalForm(forms.Form):
+    confirm = forms.BooleanField(required=True, label="Confirm payment reversal")
