@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 from apps.projects.forms import (
     ProjectBudgetLineForm,
+    ProjectForecastLineForm,
     ProjectForm,
     ProjectReasonForm,
     ProjectSalesOrderLinkForm,
@@ -20,13 +21,16 @@ from apps.projects.selectors import (
 from apps.projects.services import (
     activate_project,
     add_project_budget_line,
+    add_project_forecast_line,
     cancel_project,
     complete_project,
     create_draft_project,
     hold_project,
     link_sales_order,
     release_project,
+    remove_project_forecast_line,
     update_draft_project,
+    update_project_forecast_line,
 )
 
 
@@ -94,6 +98,8 @@ def project_detail_view(request, pk):
             "demand_candidates": project_b2b_demand_candidates(request.user, project=project),
             "can_change": request.user.has_perm("projects.change_project")
             and project.state == ProjectState.DRAFT,
+            "can_manage_forecast": request.user.has_perm("projects.change_project")
+            and project.state in (ProjectState.DRAFT, ProjectState.ACTIVE, ProjectState.ON_HOLD),
             "can_link": request.user.has_perm("projects.link_project_salesorder")
             and project.state not in (ProjectState.COMPLETED, ProjectState.CANCELLED),
         },
@@ -196,4 +202,85 @@ def project_transition(request, pk, action):
         request,
         "projects/transition_form.html",
         {"form": form, "project": project, "action": action},
+    )
+
+
+@login_required
+def forecast_add(request, pk):
+    _require(request.user, "projects.change_project")
+    project = _project(request.user, pk)
+    form = ProjectForecastLineForm(request.POST or None, user=request.user, project=project)
+    if project.state in (ProjectState.COMPLETED, ProjectState.CANCELLED):
+        form.add_error(None, "Completed or cancelled Projects cannot receive forecast lines.")
+    elif request.method == "POST" and form.is_valid():
+        try:
+            add_project_forecast_line(
+                project,
+                actor=request.user,
+                reason=form.cleaned_data.get("reason", ""),
+                **_values(form),
+            )
+        except ValidationError as error:
+            _errors(form, error)
+        else:
+            return redirect("projects:detail", pk=project.pk)
+    return render(
+        request,
+        "projects/forecast_form.html",
+        {"form": form, "project": project, "title": "Add forecast line"},
+    )
+
+
+@login_required
+def forecast_edit(request, pk, line_pk):
+    _require(request.user, "projects.change_project")
+    project = _project(request.user, pk)
+    line = get_object_or_404(project.forecast_lines, pk=line_pk)
+    form = ProjectForecastLineForm(
+        request.POST or None, instance=line, user=request.user, project=project
+    )
+    if project.state in (ProjectState.COMPLETED, ProjectState.CANCELLED):
+        form.add_error(None, "Completed or cancelled Projects cannot be edited.")
+    elif request.method == "POST" and form.is_valid():
+        try:
+            update_project_forecast_line(
+                line,
+                actor=request.user,
+                reason=form.cleaned_data.get("reason", ""),
+                **_values(form),
+            )
+        except ValidationError as error:
+            _errors(form, error)
+        else:
+            return redirect("projects:detail", pk=project.pk)
+    return render(
+        request,
+        "projects/forecast_form.html",
+        {"form": form, "project": project, "line": line, "title": "Edit forecast line"},
+    )
+
+
+@login_required
+def forecast_remove(request, pk, line_pk):
+    _require(request.user, "projects.change_project")
+    project = _project(request.user, pk)
+    line = get_object_or_404(project.forecast_lines, pk=line_pk)
+    form = ProjectReasonForm(request.POST or None)
+    if project.state in (ProjectState.COMPLETED, ProjectState.CANCELLED):
+        form.add_error(None, "Completed or cancelled Projects cannot be edited.")
+    elif request.method == "POST" and form.is_valid():
+        try:
+            remove_project_forecast_line(
+                line,
+                actor=request.user,
+                reason=form.cleaned_data["reason"],
+            )
+        except ValidationError as error:
+            _errors(form, error)
+        else:
+            return redirect("projects:detail", pk=project.pk)
+    return render(
+        request,
+        "projects/forecast_confirm_delete.html",
+        {"form": form, "project": project, "line": line},
     )

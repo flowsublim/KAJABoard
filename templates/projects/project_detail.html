@@ -1,6 +1,354 @@
 {% extends "base.html" %}{% block title %}{{ project.code }} · KAJABoard{% endblock %}{% block content %}
-<div class="page-header"><div><p class="eyebrow">Project / Contract</p><h1>{{ project.code }} — {{ project.name }}</h1><p class="muted">{{ project.customer }}{% if project.contract_reference %} · Contract {{ project.contract_reference }}{% endif %}</p></div><div class="page-actions">{% if can_change %}<a class="button" href="{% url 'projects:edit' project.pk %}">Edit</a>{% endif %}{% if project.state == 'DRAFT' and perms.projects.activate_project %}<a class="button button-primary" href="{% url 'projects:transition' project.pk 'activate' %}">Activate</a>{% endif %}{% if project.state == 'ACTIVE' and perms.projects.hold_project %}<a class="button" href="{% url 'projects:transition' project.pk 'hold' %}">Hold</a>{% endif %}{% if project.state == 'ON_HOLD' and perms.projects.hold_project %}<a class="button" href="{% url 'projects:transition' project.pk 'release' %}">Release</a>{% endif %}{% if project.state != 'COMPLETED' and project.state != 'CANCELLED' and perms.projects.cancel_project %}<a class="button button-danger" href="{% url 'projects:transition' project.pk 'cancel' %}">Cancel</a>{% endif %}</div></div>
-<section class="detail-grid"><div class="panel"><h2>Commercial Contract</h2><dl class="detail-list"><div><dt>Status</dt><dd>{{ project.get_state_display }}</dd></div><div><dt>Start / target</dt><dd>{{ project.start_date }} / {{ project.target_date|default:"-" }}</dd></div><div><dt>Currency</dt><dd>{{ project.currency }}</dd></div></dl></div><aside class="panel totals-panel"><h2>Commercial & Budget</h2><dl class="total-list"><div><dt>Confirmed Sales value</dt><dd>{{ project.currency }} {{ profitability.commercial_order_value }}</dd></div><div><dt>Invoice source value</dt><dd>{{ project.currency }} {{ profitability.commercial_invoice_source_value }}</dd></div><div class="grand"><dt>Budget</dt><dd>{{ project.currency }} {{ profitability.budget_value }}</dd></div></dl><p class="muted">Committed cost, actual cost, forecast, and profit are not available until their owning domains are implemented.</p></aside></section>
-<section class="panel table-panel"><div class="panel-heading"><h2>Budget</h2>{% if can_change or project.state == 'ACTIVE' and perms.projects.change_project %}<a class="button" href="{% url 'projects:budget-add' project.pk %}">Add line</a>{% endif %}</div><div class="table-wrap"><table><thead><tr><th>Category</th><th>Description</th><th>Cost center</th><th class="number">Amount</th></tr></thead><tbody>{% for line in project.budget_lines.all %}<tr><td>{{ line.get_category_display }}</td><td>{{ line.description }}</td><td>{{ line.cost_center|default:"-" }}</td><td class="number">{{ line.amount }}</td></tr>{% empty %}<tr><td colspan="4" class="empty">No budget lines.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="panel table-panel"><div class="panel-heading"><h2>Sales Order lineage</h2>{% if can_link %}<a class="button" href="{% url 'projects:sales-order-link' project.pk %}">Link Sales Order</a>{% endif %}</div><div class="table-wrap"><table><thead><tr><th>Sales Order</th><th>Date</th><th>Status</th><th>Total</th></tr></thead><tbody>{% for link in project.sales_order_links.all %}<tr><td>{{ link.sales_order.document_number }}</td><td>{{ link.sales_order.document_date }}</td><td>{{ link.sales_order.get_state_display }}</td><td>{{ project.currency }} {{ link.sales_order.grand_total }}</td></tr>{% empty %}<tr><td colspan="4" class="empty">No linked Sales Orders.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="panel"><h2>Progress and B2B handoff</h2><p>Sales confirmed: {{ progress.sales_confirmed.count }} · Delivery: {{ progress.delivery.count }} · Invoice source: {{ progress.invoicing_source.count }}</p><p class="muted">Procurement, production, warehouse receipt, and collection are not yet available. {% if demand_candidates %}{{ demand_candidates|length }} active-project demand candidate(s) are exposed for future downstream owners.{% endif %}</p></section>{% endblock %}
+<div class="page-header">
+  <div>
+    <p class="eyebrow">Project / Contract</p>
+    <h1>{{ project.code }} — {{ project.name }}</h1>
+    <p class="muted">{{ project.customer }}{% if project.contract_reference %} · Contract {{ project.contract_reference }}{% endif %}</p>
+  </div>
+  <div class="page-actions">
+    {% if can_change %}<a class="button" href="{% url 'projects:edit' project.pk %}">Edit</a>{% endif %}
+    {% if project.state == 'DRAFT' and perms.projects.activate_project %}<a class="button button-primary" href="{% url 'projects:transition' project.pk 'activate' %}">Activate</a>{% endif %}
+    {% if project.state == 'ACTIVE' and perms.projects.hold_project %}<a class="button" href="{% url 'projects:transition' project.pk 'hold' %}">Hold</a>{% endif %}
+    {% if project.state == 'ON_HOLD' and perms.projects.hold_project %}<a class="button" href="{% url 'projects:transition' project.pk 'release' %}">Release</a>{% endif %}
+    {% if project.state != 'COMPLETED' and project.state != 'CANCELLED' and perms.projects.cancel_project %}<a class="button button-danger" href="{% url 'projects:transition' project.pk 'cancel' %}">Cancel</a>{% endif %}
+  </div>
+</div>
+
+<!-- Commercial & Profitability Overview -->
+<section class="detail-grid">
+  <div class="panel">
+    <h2>Commercial Contract</h2>
+    <dl class="detail-list">
+      <div><dt>Status</dt><dd><span class="status">{{ project.get_state_display }}</span></dd></div>
+      <div><dt>Start / target</dt><dd>{{ project.start_date }} / {{ project.target_date|default:"-" }}</dd></div>
+      <div><dt>Currency</dt><dd>{{ project.currency }}</dd></div>
+      <div><dt>Target Margin %</dt><dd>{% if project.target_margin_percent %}{{ project.target_margin_percent }}%{% else %}-{% endif %}</dd></div>
+    </dl>
+    <h3 style="margin-top: 1rem;">Commercial Lineage</h3>
+    <dl class="detail-list">
+      <div>
+        <dt>Commercial Sales Order Value</dt>
+        <dd><strong>{{ project.currency }} {{ profitability.commercial_order_value }}</strong> <span class="muted">({{ profitability.commercial_order_metric.record_count }} order(s))</span></dd>
+      </div>
+      <div>
+        <dt>Commercial Invoice Source Value</dt>
+        <dd><strong>{{ project.currency }} {{ profitability.commercial_invoice_source_value }}</strong> <span class="muted">({{ profitability.commercial_invoice_metric.record_count }} invoice(s))</span></dd>
+      </div>
+    </dl>
+  </div>
+
+  <aside class="panel totals-panel">
+    <h2>Profitability & Variances (Phase 9A)</h2>
+    <dl class="total-list">
+      <div>
+        <dt>Recognized Revenue</dt>
+        <dd>
+          {% if profitability.recognized_revenue is not None %}
+            <strong>{{ project.currency }} {{ profitability.recognized_revenue }}</strong>
+          {% else %}
+            <span class="status status-pending">PENDING SOURCE</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Budget</dt>
+        <dd>
+          <strong>{{ project.currency }} {{ profitability.budget_value }}</strong>
+          {% if profitability.budget.status == 'MATCH' %}
+            <span class="status status-success" style="color: green;">MATCH</span>
+          {% elif profitability.budget.status == 'DIFFERENCE' %}
+            <span class="status status-danger" style="color: red; font-weight: bold;">DIFFERENCE</span>
+          {% else %}
+            <span class="status status-muted">NO LINES</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Committed Cost</dt>
+        <dd>
+          {% if profitability.committed_cost is not None %}
+            <strong>{{ project.currency }} {{ profitability.committed_cost }}</strong>
+          {% else %}
+            <span class="status status-pending">PENDING SOURCE</span>
+            {% if profitability.committed_cost_metric.reason %}<span class="muted" style="display:block; font-size:0.8em;">{{ profitability.committed_cost_metric.reason }}</span>{% endif %}
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Actual Cost</dt>
+        <dd>
+          {% if profitability.actual_cost is not None %}
+            <strong>{{ project.currency }} {{ profitability.actual_cost }}</strong>
+          {% else %}
+            <span class="status status-pending">PENDING SOURCE</span>
+            {% if profitability.actual_cost_metric.reason %}<span class="muted" style="display:block; font-size:0.8em;">{{ profitability.actual_cost_metric.reason }}</span>{% endif %}
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Forecast Cost</dt>
+        <dd>
+          {% if profitability.forecast_cost is not None %}
+            <strong>{{ project.currency }} {{ profitability.forecast_cost }}</strong>
+          {% else %}
+            <span class="status status-pending">PENDING SOURCE</span>
+            {% if profitability.forecast_cost_metric.reason %}<span class="muted" style="display:block; font-size:0.8em;">{{ profitability.forecast_cost_metric.reason }}</span>{% endif %}
+          {% endif %}
+        </dd>
+      </div>
+      <div class="grand">
+        <dt>Projected Profit</dt>
+        <dd>
+          {% if profitability.projected_profit is not None %}
+            <strong>{{ project.currency }} {{ profitability.projected_profit }}</strong>
+          {% else %}
+            <span class="status status-pending">PENDING SOURCE</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Projected Margin %</dt>
+        <dd>
+          {% if profitability.projected_margin_percent is not None %}
+            <strong>{{ profitability.projected_margin_percent }}%</strong>
+          {% else %}
+            <span class="status status-pending">PENDING SOURCE</span>
+          {% endif %}
+        </dd>
+      </div>
+    </dl>
+
+    <h3 style="margin-top: 1rem;">Derived Variances</h3>
+    <dl class="detail-list">
+      <div>
+        <dt>Budget vs Forecast</dt>
+        <dd>
+          {% if profitability.variance_budget_forecast is not None %}
+            {{ project.currency }} {{ profitability.variance_budget_forecast }}
+            {% if profitability.variance_budget_forecast > 0 %}<span class="status status-success" style="color: green;">(Under budget)</span>
+            {% elif profitability.variance_budget_forecast < 0 %}<span class="status status-danger" style="color: red;">(Exceeds budget)</span>
+            {% else %}<span class="status">(On budget)</span>{% endif %}
+          {% else %}
+            <span class="status status-pending">PENDING SOURCE</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Budget vs Actual</dt>
+        <dd>
+          {% if profitability.variance_budget_actual is not None %}
+            {{ project.currency }} {{ profitability.variance_budget_actual }}
+          {% else %}
+            <span class="status status-pending">PENDING SOURCE</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Remaining to Forecast</dt>
+        <dd>
+          {% if profitability.remaining_to_forecast is not None %}
+            {{ project.currency }} {{ profitability.remaining_to_forecast }}
+          {% else %}
+            <span class="status status-pending">PENDING SOURCE</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Current Cost Exposure (Actual + Committed)</dt>
+        <dd>
+          {% if profitability.current_cost_exposure is not None %}
+            {{ project.currency }} {{ profitability.current_cost_exposure }}
+          {% else %}
+            <span class="status status-pending">PENDING SOURCE</span>
+          {% endif %}
+        </dd>
+      </div>
+    </dl>
+  </aside>
+</section>
+
+<!-- Budget Reconciliation Section -->
+{% if profitability.budget.status == 'DIFFERENCE' %}
+<div class="panel" style="border-left: 4px solid #ef4444; background: #fff5f5; margin-bottom: 1rem;">
+  <h3>Budget Discrepancy Warning</h3>
+  <p>Header budget (<strong>{{ project.currency }} {{ profitability.budget.header_total }}</strong>) differs from active budget lines total (<strong>{{ project.currency }} {{ profitability.budget.active_lines_total }}</strong>) by <strong>{{ project.currency }} {{ profitability.budget.difference }}</strong>.</p>
+  <p class="muted">Budget-dependent derived metrics evaluate to PENDING_SOURCE until reconciliation is resolved.</p>
+</div>
+{% endif %}
+
+<!-- Budget Lines Table -->
+<section class="panel table-panel">
+  <div class="panel-heading">
+    <div>
+      <h2>Budget</h2>
+      <p class="muted">Header: {{ project.currency }} {{ profitability.budget.header_total }} · Active lines: {{ project.currency }} {{ profitability.budget.active_lines_total }} ({{ profitability.budget.status }})</p>
+    </div>
+    {% if can_change or project.state == 'ACTIVE' and perms.projects.change_project %}
+      <a class="button" href="{% url 'projects:budget-add' project.pk %}">Add budget line</a>
+    {% endif %}
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Category</th><th>Description</th><th>Cost center</th><th class="number">Amount</th></tr>
+      </thead>
+      <tbody>
+        {% for line in project.budget_lines.all %}
+          <tr>
+            <td>{{ line.get_category_display }}</td>
+            <td>{{ line.description }}</td>
+            <td>{{ line.cost_center|default:"-" }}</td>
+            <td class="number">{{ project.currency }} {{ line.amount }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="4" class="empty">No budget lines.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Forecast Planning Table -->
+<section class="panel table-panel">
+  <div class="panel-heading">
+    <div>
+      <h2>Forecast Planning (Total Expected Cost)</h2>
+      <p class="muted">Management expected total cost: {% if profitability.forecast_cost is not None %}<strong>{{ project.currency }} {{ profitability.forecast_cost }}</strong>{% else %}<span class="status status-pending">PENDING SOURCE</span>{% endif %}</p>
+    </div>
+    {% if can_manage_forecast %}
+      <a class="button button-primary" href="{% url 'projects:forecast-add' project.pk %}">Add forecast line</a>
+    {% endif %}
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Description</th>
+          <th>Cost Center</th>
+          <th class="number">Amount</th>
+          <th>Status</th>
+          {% if can_manage_forecast %}<th>Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for f_line in project.forecast_lines.all %}
+          <tr>
+            <td>{{ f_line.get_category_display }}</td>
+            <td>{{ f_line.description }}</td>
+            <td>{{ f_line.cost_center|default:"-" }}</td>
+            <td class="number">{{ project.currency }} {{ f_line.amount }}</td>
+            <td>{% if f_line.is_active %}<span class="status status-success">Active</span>{% else %}<span class="status status-muted">Inactive</span>{% endif %}</td>
+            {% if can_manage_forecast %}
+              <td>
+                <a class="button button-sm" href="{% url 'projects:forecast-edit' project.pk f_line.pk %}">Edit</a>
+                <a class="button button-sm button-danger" href="{% url 'projects:forecast-remove' project.pk f_line.pk %}">Remove</a>
+              </td>
+            {% endif %}
+          </tr>
+        {% empty %}
+          <tr><td colspan="{% if can_manage_forecast %}6{% else %}5{% endif %}" class="empty">No forecast lines recorded.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Category Breakdown Table -->
+<section class="panel table-panel">
+  <div class="panel-heading">
+    <h2>Category Cost Breakdown</h2>
+    <p class="muted">Authoritative availability across operational and planning sources</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th class="number">Actual Cost</th>
+          <th class="number">Committed Cost</th>
+          <th class="number">Forecast Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for cat_key, actual_item in profitability.actual_categories.items %}
+          <tr>
+            <td><strong>{{ actual_item.category }}</strong></td>
+            <td class="number">
+              {% if actual_item.availability == 'AUTHORITATIVE_AVAILABLE' %}
+                {{ project.currency }} {{ actual_item.amount }}
+              {% else %}
+                <span class="status status-pending">PENDING SOURCE</span>
+              {% endif %}
+            </td>
+            <td class="number">
+              {% with committed_item=profitability.committed_categories|dictsort:"category" %}
+                {# Lookup from committed_categories #}
+              {% endwith %}
+              {% for c_key, c_val in profitability.committed_categories.items %}
+                {% if c_key == cat_key %}
+                  {% if c_val.availability == 'AUTHORITATIVE_AVAILABLE' %}
+                    {{ project.currency }} {{ c_val.amount }}
+                  {% else %}
+                    <span class="status status-pending">PENDING SOURCE</span>
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            </td>
+            <td class="number">
+              {% for f_key, f_val in profitability.forecast_categories.items %}
+                {% if f_key == cat_key %}
+                  {% if f_val.availability == 'AUTHORITATIVE_AVAILABLE' %}
+                    {{ project.currency }} {{ f_val.amount }}
+                  {% else %}
+                    <span class="status status-pending">PENDING SOURCE</span>
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Sales Order Lineage Table -->
+<section class="panel table-panel">
+  <div class="panel-heading">
+    <h2>Sales Order Lineage</h2>
+    {% if can_link %}
+      <a class="button" href="{% url 'projects:sales-order-link' project.pk %}">Link Sales Order</a>
+    {% endif %}
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Sales Order</th><th>Date</th><th>Status</th><th class="number">Total</th></tr>
+      </thead>
+      <tbody>
+        {% for link in project.sales_order_links.all %}
+          <tr>
+            <td>{{ link.sales_order.document_number }}</td>
+            <td>{{ link.sales_order.document_date }}</td>
+            <td><span class="status">{{ link.sales_order.get_state_display }}</span></td>
+            <td class="number">{{ project.currency }} {{ link.sales_order.grand_total }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="4" class="empty">No linked Sales Orders.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Truthful Phase 9A Status & Progress -->
+<section class="panel">
+  <h2>Progress and Domain Handoff (Phase 9A Active)</h2>
+  <p>Sales confirmed: {{ progress.sales_confirmed.count }} · Delivery: {{ progress.delivery.count }} · Invoice source: {{ progress.invoicing_source.count }}</p>
+  <p class="muted">
+    Phase 9A project profitability and forecast planning are operational. Recognized revenue is net of Finance posted reversals. Physical inventory movements are tracked via Warehouse, and subcontract actuals are tracked via Purchasing receipts. Incentives (CPO Fee & Sales Fee) remain deferred to Phase 9B/9C, and formal general ledger reporting is scheduled for Phase 10.
+    {% if demand_candidates %}{{ demand_candidates|length }} active-project demand candidate(s) are exposed for downstream fulfillment.{% endif %}
+  </p>
+</section>
+{% endblock %}

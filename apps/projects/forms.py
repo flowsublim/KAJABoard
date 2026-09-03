@@ -4,7 +4,7 @@ from apps.catalog.selectors import effective_items
 from apps.organizations.selectors import accessible_legal_entities, effective_cost_centers
 from apps.partners.models import PartnerRoleType
 from apps.partners.selectors import effective_business_partners
-from apps.projects.models import Project, ProjectBudgetLine
+from apps.projects.models import Project, ProjectBudgetLine, ProjectForecastLine
 from apps.purchasing.selectors import effective_purchase_categories
 from apps.sales.models import SalesOrderState
 from apps.sales.selectors import sales_orders
@@ -47,6 +47,35 @@ class ProjectBudgetLineForm(forms.ModelForm):
 
     class Meta:
         model = ProjectBudgetLine
+        fields = (
+            "category",
+            "description",
+            "amount",
+            "cost_center",
+            "purchase_category",
+            "item",
+            "notes",
+            "is_active",
+        )
+        widgets = {"notes": forms.Textarea(attrs={"rows": 2})}
+
+    def __init__(self, *args, user, project, **kwargs):
+        super().__init__(*args, **kwargs)
+        entity = project.legal_entity
+        self.fields["cost_center"].queryset = effective_cost_centers(user).filter(
+            legal_entity=entity
+        )
+        self.fields["purchase_category"].queryset = effective_purchase_categories(user).filter(
+            legal_entity=entity
+        )
+        self.fields["item"].queryset = effective_items(user).filter(legal_entity=entity)
+
+
+class ProjectForecastLineForm(forms.ModelForm):
+    reason = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2}))
+
+    class Meta:
+        model = ProjectForecastLine
         fields = (
             "category",
             "description",

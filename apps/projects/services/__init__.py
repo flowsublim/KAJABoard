@@ -1,6 +1,7 @@
 from apps.projects.services.projects import (
     activate_project,
     add_project_budget_line,
+    add_project_forecast_line,
     cancel_project,
     complete_project,
     create_draft_project,
@@ -8,14 +9,17 @@ from apps.projects.services.projects import (
     link_sales_order,
     release_project,
     remove_project_budget_line,
+    remove_project_forecast_line,
     unlink_sales_order,
     update_draft_project,
     update_project_budget_line,
+    update_project_forecast_line,
 )
 
 __all__ = [
     "activate_project",
     "add_project_budget_line",
+    "add_project_forecast_line",
     "cancel_project",
     "complete_project",
     "create_draft_project",
@@ -23,7 +27,9 @@ __all__ = [
     "link_sales_order",
     "release_project",
     "remove_project_budget_line",
+    "remove_project_forecast_line",
     "unlink_sales_order",
     "update_draft_project",
     "update_project_budget_line",
+    "update_project_forecast_line",
 ]

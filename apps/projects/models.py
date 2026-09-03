@@ -190,3 +190,51 @@ class ProjectBudgetLine(UUIDPrimaryKeyModel, TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.project.code} / {self.category}"
+
+
+class ProjectForecastLine(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Explicit Project-owned planning model representing management's expected
+    total cost by category.
+    """
+
+    project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="forecast_lines")
+    category = models.CharField(max_length=32, choices=ProjectBudgetCategory.choices)
+    description = models.CharField(max_length=255)
+    amount = models.DecimalField(max_digits=18, decimal_places=2)
+    cost_center = models.ForeignKey(
+        CostCenter,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="project_forecast_lines",
+    )
+    purchase_category = models.ForeignKey(
+        PurchaseCategory,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="project_forecast_lines",
+    )
+    item = models.ForeignKey(
+        Item,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="project_forecast_lines",
+    )
+    notes = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ("category", "created_at")
+        constraints = [
+            models.CheckConstraint(condition=Q(amount__gte=0), name="project_forecast_line_nonneg"),
+        ]
+        indexes = [
+            models.Index(
+                fields=("project", "category", "is_active"), name="project_forecast_line_idx"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.project.code} / {self.category} / {self.amount}"

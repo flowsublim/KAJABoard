@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block content %}
+<div class="page-header">
+  <div>
+    <p class="eyebrow">{{ project.code }}</p>
+    <h1>Remove forecast line</h1>
+  </div>
+</div>
+<form method="post" class="panel form-panel">
+  {% csrf_token %}
+  <p>Are you sure you want to remove forecast line <strong>{{ line.get_category_display }} — {{ line.description }}</strong> ({{ project.currency }} {{ line.amount }})?</p>
+  {{ form.as_p }}
+  <div class="form-actions">
+    <button class="button button-danger" type="submit">Confirm remove</button>
+    <a class="button" href="{% url 'projects:detail' project.pk %}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

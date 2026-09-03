@@ -9,6 +9,17 @@ urlpatterns = [
     path("<uuid:pk>/", views.project_detail_view, name="detail"),
     path("<uuid:pk>/edit/", views.project_edit, name="edit"),
     path("<uuid:pk>/budget/new/", views.budget_add, name="budget-add"),
+    path("<uuid:pk>/forecast/new/", views.forecast_add, name="forecast-add"),
+    path(
+        "<uuid:pk>/forecast/<uuid:line_pk>/edit/",
+        views.forecast_edit,
+        name="forecast-edit",
+    ),
+    path(
+        "<uuid:pk>/forecast/<uuid:line_pk>/remove/",
+        views.forecast_remove,
+        name="forecast-remove",
+    ),
     path("<uuid:pk>/sales-orders/link/", views.sales_order_link, name="sales-order-link"),
     path("<uuid:pk>/<str:action>/", views.project_transition, name="transition"),
 ]

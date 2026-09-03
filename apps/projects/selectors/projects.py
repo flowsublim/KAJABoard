@@ -9,6 +9,10 @@ from apps.organizations.selectors import accessible_legal_entities
 from apps.partners.models import PartnerRoleType
 from apps.partners.selectors import effective_business_partners
 from apps.projects.models import Project, ProjectState
+from apps.projects.selectors.profitability import (
+    ProjectProfitability,
+    project_profitability,
+)
 from apps.sales.models import (
     SalesDeliveryLine,
     SalesDeliveryState,
@@ -20,19 +24,19 @@ from apps.sales.models import (
 )
 from apps.sales.selectors.deliveries import confirmed_sales_order_lines_with_fulfillment
 
-
-@dataclass(frozen=True)
-class ProjectProfitability:
-    commercial_order_value: Decimal
-    commercial_invoice_source_value: Decimal
-    budget_value: Decimal
-    committed_cost: Decimal | None
-    actual_cost: Decimal | None
-    forecast_cost: Decimal | None
-    projected_profit: Decimal | None
-    projected_margin_percent: Decimal | None
-    data_complete: bool
-    missing_sources: tuple[str, ...]
+__all__ = [
+    "CustomerFinanceExposure",
+    "ProjectDemandCandidate",
+    "ProjectProfitability",
+    "customer_360",
+    "customer_finance_exposure",
+    "project_b2b_demand_candidates",
+    "project_detail",
+    "project_profitability",
+    "project_progress",
+    "projects",
+    "statement_of_account",
+]
 
 
 @dataclass(frozen=True)
@@ -74,46 +78,6 @@ def project_detail(user, *, pk):
             "sales_order_links__sales_order__lines",
         )
         .get(pk=pk)
-    )
-
-
-def project_profitability(project) -> ProjectProfitability:
-    """Commercial/budget view only; unavailable source values are deliberately None."""
-    linked_orders = SalesOrder.objects.filter(
-        project_link__project=project,
-        state__in=(SalesOrderState.CONFIRMED, SalesOrderState.ON_HOLD, SalesOrderState.CLOSED),
-    )
-    commercial_order_value = linked_orders.aggregate(value=Sum("grand_total"))["value"] or Decimal(
-        "0"
-    )
-    commercial_invoice_source_value = SalesInvoiceLine.objects.filter(
-        source_sales_order_line__sales_order__project_link__project=project,
-        sales_invoice__state=SalesInvoiceState.CONFIRMED,
-        sales_invoice__document_kind=SalesInvoiceDocumentKind.INVOICE,
-    ).values("sales_invoice_id").distinct().aggregate(value=Sum("sales_invoice__grand_total"))[
-        "value"
-    ] or Decimal("0")
-    from apps.purchasing.models import PurchaseOrder, PurchaseOrderState
-
-    committed_orders = PurchaseOrder.objects.filter(
-        project=project, state=PurchaseOrderState.CONFIRMED
-    )
-    committed_cost = (
-        committed_orders.aggregate(value=Sum("lines__line_total"))["value"]
-        if committed_orders.exists()
-        else None
-    )
-    return ProjectProfitability(
-        commercial_order_value=commercial_order_value,
-        commercial_invoice_source_value=commercial_invoice_source_value,
-        budget_value=project.budget_total,
-        committed_cost=committed_cost,
-        actual_cost=None,
-        forecast_cost=None,
-        projected_profit=None,
-        projected_margin_percent=None,
-        data_complete=False,
-        missing_sources=("production", "warehouse", "finance", "incentives"),
     )
 
 

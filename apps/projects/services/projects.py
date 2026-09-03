@@ -14,7 +14,13 @@ from apps.core.services.numbering import allocate_document_number
 from apps.core.services.snapshots import changed_field_names, model_snapshot
 from apps.organizations.models import LegalEntity
 from apps.partners.models import BusinessPartner, PartnerRoleType
-from apps.projects.models import Project, ProjectBudgetLine, ProjectSalesOrder, ProjectState
+from apps.projects.models import (
+    Project,
+    ProjectBudgetLine,
+    ProjectForecastLine,
+    ProjectSalesOrder,
+    ProjectState,
+)
 from apps.sales.models import SalesOrder
 
 PROJECT_DOCUMENT_TYPE = "PROJECT"
@@ -431,4 +437,135 @@ def remove_project_budget_line(line, *, actor=None, reason=""):
         actor=actor,
         reason=reason,
         before=project_before,
+    )
+
+
+def _assert_forecast_editable(project: Project):
+    if project.state not in {ProjectState.DRAFT, ProjectState.ACTIVE, ProjectState.ON_HOLD}:
+        raise ValidationError(
+            "Project forecast can be modified only while DRAFT, ACTIVE, or ON_HOLD."
+        )
+
+
+def _validate_forecast_dimensions(
+    project: Project, *, cost_center=None, purchase_category=None, item=None
+):
+    for name, value in (
+        ("cost_center", cost_center),
+        ("purchase_category", purchase_category),
+        ("item", item),
+    ):
+        if value is not None and value.legal_entity_id != project.legal_entity_id:
+            raise ValidationError(
+                {name: f"{name.replace('_', ' ').title()} must match the Project entity."}
+            )
+
+
+@transaction.atomic
+def add_project_forecast_line(project, *, actor=None, reason="", **values) -> ProjectForecastLine:
+    locked = Project.objects.select_for_update().get(pk=project.pk)
+    _assert_forecast_editable(locked)
+    if (
+        locked.state in {ProjectState.ACTIVE, ProjectState.ON_HOLD}
+        and not str(reason or "").strip()
+    ):
+        raise ValidationError(
+            {"reason": "Forecast revision reason is required for an ACTIVE or ON_HOLD Project."}
+        )
+    cost_center = values.get("cost_center")
+    purchase_category = values.get("purchase_category")
+    item = values.get("item")
+    _validate_forecast_dimensions(
+        locked,
+        cost_center=cost_center,
+        purchase_category=purchase_category,
+        item=item,
+    )
+    line = ProjectForecastLine(
+        project=locked,
+        category=values["category"],
+        description=_text(values["description"]),
+        amount=_money(values["amount"]),
+        cost_center=cost_center,
+        purchase_category=purchase_category,
+        item=item,
+        notes=str(values.get("notes", "") or "").strip(),
+        is_active=values.get("is_active", True),
+    )
+    line.full_clean()
+    line.save()
+    _audit(
+        line,
+        action="projects.projectforecastline.created",
+        actor=actor,
+        reason=reason,
+        metadata={"category": line.category, "amount": str(line.amount)},
+    )
+    return line
+
+
+@transaction.atomic
+def update_project_forecast_line(line, *, actor=None, reason="", **values) -> ProjectForecastLine:
+    locked_line = (
+        ProjectForecastLine.objects.select_for_update().select_related("project").get(pk=line.pk)
+    )
+    project = Project.objects.select_for_update().get(pk=locked_line.project_id)
+    _assert_forecast_editable(project)
+    if not str(reason or "").strip():
+        raise ValidationError({"reason": "Forecast revision reason is required."})
+    before = model_snapshot(locked_line)
+    for field in (
+        "category",
+        "description",
+        "amount",
+        "cost_center",
+        "purchase_category",
+        "item",
+        "notes",
+        "is_active",
+    ):
+        if field in values:
+            setattr(locked_line, field, values[field])
+    locked_line.description = _text(locked_line.description)
+    locked_line.amount = _money(locked_line.amount)
+    locked_line.notes = str(locked_line.notes or "").strip()
+    _validate_forecast_dimensions(
+        project,
+        cost_center=locked_line.cost_center,
+        purchase_category=locked_line.purchase_category,
+        item=locked_line.item,
+    )
+    locked_line.full_clean()
+    locked_line.save()
+    _audit(
+        locked_line,
+        action="projects.projectforecastline.updated",
+        actor=actor,
+        reason=reason,
+        before=before,
+    )
+    return locked_line
+
+
+@transaction.atomic
+def remove_project_forecast_line(line, *, actor=None, reason=""):
+    if not str(reason or "").strip():
+        raise ValidationError({"reason": "Forecast revision reason is required."})
+    locked_line = (
+        ProjectForecastLine.objects.select_for_update().select_related("project").get(pk=line.pk)
+    )
+    project = Project.objects.select_for_update().get(pk=locked_line.project_id)
+    _assert_forecast_editable(project)
+    before = model_snapshot(locked_line)
+    line_id = locked_line.pk
+    locked_line.delete()
+    record_audit_event(
+        action="projects.projectforecastline.removed",
+        target_type="projects.projectforecastline",
+        target_id=line_id,
+        actor=actor,
+        source="projects.service",
+        reason=reason,
+        before_state=before,
+        changed_fields=sorted(before),
     )
