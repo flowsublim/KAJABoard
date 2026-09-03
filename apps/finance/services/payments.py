@@ -21,6 +21,7 @@ from apps.finance.models import (
 )
 from apps.finance.services.liquidity import liquidity_mapping_context
 from apps.finance.services.posting import post_journal, reverse_journal
+from apps.finance.services.wage_payables import wage_payable_control_snapshot
 
 
 def _whole_rupiah(value, *, field):
@@ -243,10 +244,19 @@ def post_vendor_payment(
         currency=currency,
     )
     amount = _allocation_total([{"amount": row_amount} for _, row_amount, _ in locked])
-    lines = [
-        {"line_role": "PAYABLE", "dc": "DEBIT", "amount": allocation_amount}
-        for _, allocation_amount, _ in locked
-    ]
+    lines = []
+    for payable, allocation_amount, _ in locked:
+        if hasattr(payable, "wage_accrual"):
+            lines.append(
+                {
+                    "line_role": "WAGE_PAYABLE",
+                    "dc": "DEBIT",
+                    "amount": allocation_amount,
+                    "mapping_snapshot_override": wage_payable_control_snapshot(payable),
+                }
+            )
+        else:
+            lines.append({"line_role": "PAYABLE", "dc": "DEBIT", "amount": allocation_amount})
     lines.append(
         {
             "line_role": "LIQUIDITY",

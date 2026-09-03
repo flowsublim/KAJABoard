@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<div class="page-header"><div><p class="eyebrow">Finance</p><h1>{{ title }}</h1><p>{{ pending_source }}</p></div></div><section class="panel"><dl>{% for key,value in facts.items %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endfor %}</dl></section>{% endblock %}

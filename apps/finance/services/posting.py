@@ -8,8 +8,9 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from apps.finance.models import JournalEntry, JournalLine, JournalState, ReceivableEntry
+from apps.finance.models import COAAccount, JournalEntry, JournalLine, JournalState, ReceivableEntry
 from apps.finance.services.mappings import FinanceMappingError, resolve_account_mapping
+from apps.finance.services.periods import assert_posting_period_open
 
 
 def _amount(value):
@@ -35,6 +36,7 @@ def post_journal(
     description="",
     ar=None,
 ):
+    assert_posting_period_open(legal_entity=legal_entity, accounting_date=accounting_date)
     existing = (
         JournalEntry.objects.select_for_update()
         .filter(legal_entity=legal_entity, source_key=source_key)
@@ -48,22 +50,31 @@ def post_journal(
         dc = line["dc"]
         if dc not in {"DEBIT", "CREDIT"}:
             raise ValidationError("Journal direction must be DEBIT or CREDIT.")
-        try:
-            mapping = resolve_account_mapping(
-                legal_entity=legal_entity,
-                module_code=source_module,
-                event_code=event_code,
-                line_role=line["line_role"],
-                dc=dc,
-                business_date=accounting_date,
-                context=line.get("context", {}),
-            )
-        except FinanceMappingError as exc:
-            raise ValidationError({"mapping": f"BLOCKED_MAPPING: {exc}"}) from exc
-        prepared.append((sequence, line, amount, mapping))
-    debit = sum((amount for _, line, amount, _ in prepared if line["dc"] == "DEBIT"), Decimal("0"))
+        snapshot = line.get("mapping_snapshot_override")
+        if snapshot:
+            account = COAAccount.objects.get(pk=snapshot["account_id"], legal_entity=legal_entity)
+            mapping = None
+            account = account.pk
+        else:
+            try:
+                mapping = resolve_account_mapping(
+                    legal_entity=legal_entity,
+                    module_code=source_module,
+                    event_code=event_code,
+                    line_role=line["line_role"],
+                    dc=dc,
+                    business_date=accounting_date,
+                    context=line.get("context", {}),
+                )
+            except FinanceMappingError as exc:
+                raise ValidationError({"mapping": f"BLOCKED_MAPPING: {exc}"}) from exc
+            account = mapping.account_id
+        prepared.append((sequence, line, amount, mapping, account))
+    debit = sum(
+        (amount for _, line, amount, _, _ in prepared if line["dc"] == "DEBIT"), Decimal("0")
+    )
     credit = sum(
-        (amount for _, line, amount, _ in prepared if line["dc"] == "CREDIT"), Decimal("0")
+        (amount for _, line, amount, _, _ in prepared if line["dc"] == "CREDIT"), Decimal("0")
     )
     if debit != credit:
         raise ValidationError("Journal debit must equal credit.")
@@ -83,20 +94,21 @@ def post_journal(
         posted_at=timezone.now(),
         posted_by=actor,
     )
-    for sequence, line, amount, mapping in prepared:
+    for sequence, line, amount, mapping, account in prepared:
+        snapshot = line.get("mapping_snapshot_override") or {
+            **asdict(mapping),
+            "business_date": mapping.business_date.isoformat(),
+        }
         JournalLine.objects.create(
             journal=entry,
             sequence=sequence,
             line_role=line["line_role"],
-            account_id=mapping.account_id,
-            account_code_snapshot=mapping.account_code,
-            account_name_snapshot=mapping.account_name,
+            account_id=account,
+            account_code_snapshot=snapshot["account_code"],
+            account_name_snapshot=snapshot["account_name"],
             debit=amount if line["dc"] == "DEBIT" else 0,
             credit=amount if line["dc"] == "CREDIT" else 0,
-            mapping_snapshot={
-                **asdict(mapping),
-                "business_date": mapping.business_date.isoformat(),
-            },
+            mapping_snapshot=snapshot,
         )
     if ar:
         ReceivableEntry.objects.create(
@@ -113,10 +125,12 @@ def post_journal(
 
 
 @transaction.atomic
-def reverse_journal(entry, *, actor, source_key):
+def reverse_journal(entry, *, actor, source_key, accounting_date=None):
     entry = JournalEntry.objects.select_for_update().prefetch_related("lines").get(pk=entry.pk)
     if hasattr(entry, "reversal"):
         return entry.reversal
+    accounting_date = accounting_date or timezone.localdate()
+    assert_posting_period_open(legal_entity=entry.legal_entity, accounting_date=accounting_date)
     lines = []
     for line in entry.lines.all():
         lines.append(
@@ -131,7 +145,7 @@ def reverse_journal(entry, *, actor, source_key):
     reversal = JournalEntry.objects.create(
         legal_entity=entry.legal_entity,
         journal_number=f"JRV-{uuid4().hex[:12].upper()}",
-        accounting_date=entry.accounting_date,
+        accounting_date=accounting_date,
         event_code=f"{entry.event_code}_REVERSAL",
         source_module=entry.source_module,
         source_document_type=entry.source_document_type,

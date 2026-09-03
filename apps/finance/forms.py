@@ -1,6 +1,10 @@
 from django import forms
 
 from apps.finance.models import (
+    AccountingPeriod,
+    AssetClass,
+    BankStatement,
+    BankStatementLine,
     COAAccount,
     COAMapping,
     LiquidityAccount,
@@ -158,3 +162,83 @@ class PaymentActionForm(forms.Form):
 
 class PaymentReversalForm(forms.Form):
     confirm = forms.BooleanField(required=True, label="Confirm payment reversal")
+
+
+class AssetClassForm(AuditedFinanceForm):
+    class Meta:
+        model = AssetClass
+        fields = (
+            "legal_entity",
+            "code",
+            "name",
+            "mapping_key",
+            "default_depreciation_method",
+            "default_useful_life_months",
+            "effective_from",
+            "effective_to",
+            "is_active",
+            "notes",
+        )
+        widgets = {
+            "effective_from": forms.DateInput(attrs={"type": "date"}),
+            "effective_to": forms.DateInput(attrs={"type": "date"}),
+        }
+
+
+class AccountingPeriodForm(forms.ModelForm):
+    class Meta:
+        model = AccountingPeriod
+        fields = ("legal_entity", "fiscal_year", "period_number", "start_date", "end_date", "notes")
+        widgets = {
+            "start_date": forms.DateInput(attrs={"type": "date"}),
+            "end_date": forms.DateInput(attrs={"type": "date"}),
+        }
+
+
+class BankStatementForm(forms.ModelForm):
+    class Meta:
+        model = BankStatement
+        fields = (
+            "legal_entity",
+            "liquidity_account",
+            "statement_reference",
+            "start_date",
+            "end_date",
+            "currency",
+            "opening_balance",
+            "closing_balance",
+            "source_reference",
+        )
+        widgets = {
+            "start_date": forms.DateInput(attrs={"type": "date"}),
+            "end_date": forms.DateInput(attrs={"type": "date"}),
+        }
+
+
+class BankStatementLineForm(forms.ModelForm):
+    class Meta:
+        model = BankStatementLine
+        fields = (
+            "source_identity",
+            "transaction_date",
+            "value_date",
+            "external_reference",
+            "description",
+            "direction",
+            "amount",
+            "sequence",
+        )
+        widgets = {
+            "transaction_date": forms.DateInput(attrs={"type": "date"}),
+            "value_date": forms.DateInput(attrs={"type": "date"}),
+        }
+
+
+class BankMatchForm(forms.Form):
+    liquidity_entry = forms.UUIDField()
+    amount = forms.DecimalField(max_digits=20, decimal_places=0, min_value=1)
+    source_key = forms.CharField(max_length=255)
+
+
+class ReasonForm(forms.Form):
+    reason = forms.CharField(max_length=500, widget=forms.Textarea(attrs={"rows": 3}))

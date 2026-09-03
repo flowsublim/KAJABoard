@@ -5,6 +5,9 @@ from apps.finance import views
 app_name = "finance"
 
 urlpatterns = [
+    path("asset-classes/", views.asset_class_list, name="asset-class-list"),
+    path("asset-classes/new/", views.asset_class_form, name="asset-class-create"),
+    path("asset-classes/<uuid:pk>/edit/", views.asset_class_form, name="asset-class-edit"),
     path("liquidity-accounts/", views.liquidity_account_list, name="liquidity-account-list"),
     path(
         "liquidity-accounts/new/", views.liquidity_account_create, name="liquidity-account-create"

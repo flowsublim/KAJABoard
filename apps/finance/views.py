@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -8,16 +9,29 @@ from django.urls import reverse
 from django.utils.dateparse import parse_date
 
 from apps.finance.forms import (
+    AccountingPeriodForm,
+    AssetClassForm,
+    BankMatchForm,
+    BankStatementForm,
+    BankStatementLineForm,
     COAAccountForm,
     COAMappingForm,
     LifecycleReasonForm,
     LiquidityAccountForm,
     PaymentActionForm,
     PaymentReversalForm,
+    ReasonForm,
 )
 from apps.finance.models import (
+    AccountingPeriod,
+    AssetClass,
+    BankReconciliationMatch,
+    BankStatement,
+    BankStatementLine,
     COAAccount,
     COAMapping,
+    DepreciationScheduleEntry,
+    FixedAsset,
     JournalEntry,
     LiquidityAccount,
     LiquidityAccountType,
@@ -25,36 +39,54 @@ from apps.finance.models import (
     MarketplacePayoutPosting,
     MarketplaceSettlementPosting,
     Payment,
+    WagePayableAccrual,
 )
 from apps.finance.selectors import (
+    accounting_periods,
     bank_ledger,
+    bank_match_candidates,
+    bank_statement_reconciliation,
+    bank_statements,
     cash_ledger,
     coa_accounts,
     coa_mappings,
+    fixed_asset_detail,
+    fixed_assets,
     general_ledger,
     marketplace_balance_entries,
     marketplace_payouts,
     marketplace_settlements,
     payables,
     payments,
+    period_control_status,
     receivables,
     reconciliation,
+    wage_payables,
 )
 from apps.finance.services import (
+    add_bank_statement_line,
+    close_accounting_period,
+    create_accounting_period,
+    create_bank_statement,
     create_coa_account,
     create_coa_mapping,
     create_liquidity_account,
     deactivate_coa_account,
     deactivate_coa_mapping,
+    match_bank_statement_line,
     post_customer_receipt,
+    post_depreciation,
     post_marketplace_payout,
     post_marketplace_settlement,
     post_vendor_payment,
     reactivate_coa_account,
     reactivate_coa_mapping,
+    reverse_depreciation,
     reverse_marketplace_payout,
     reverse_marketplace_settlement,
     reverse_payment,
+    reverse_wage_payable,
+    unmatch_bank_statement_line,
     update_coa_account,
     update_coa_mapping,
     update_liquidity_account,
@@ -99,6 +131,387 @@ def _selected_entity(request):
 def _finance_page_context(request):
     entities, selected = _selected_entity(request)
     return {"legal_entities": entities, "selected_entity": selected}
+
+
+@login_required
+def asset_class_list(request):
+    _require(request.user, "view", AssetClass)
+    return render(
+        request,
+        "finance/simple_list.html",
+        {
+            "title": "Asset Classes",
+            "rows": AssetClass.objects.filter(
+                legal_entity__in=accessible_legal_entities(request.user)
+            ),
+            "create_url": "finance:asset-class-create",
+        },
+    )
+
+
+@login_required
+def asset_class_form(request, pk=None):
+    _require(request.user, "change" if pk else "add", AssetClass)
+    instance = get_object_or_404(AssetClass, pk=pk) if pk else None
+    form = AssetClassForm(request.POST or None, instance=instance, user=request.user)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        return redirect("finance:asset-class-list")
+    return render(
+        request,
+        "finance/action_form.html",
+        {"form": form, "title": "Asset Class", "cancel_href": reverse("finance:asset-class-list")},
+    )
+
+
+@login_required
+def fixed_asset_list(request):
+    _require(request.user, "view", FixedAsset)
+    context = _finance_page_context(request)
+    selected = context["selected_entity"]
+    context.update(
+        {
+            "title": "Fixed Assets",
+            "rows": fixed_assets(legal_entity=selected) if selected else FixedAsset.objects.none(),
+            "pending_source": (
+                "PENDING_SOURCE: authoritative acquisition source integration is unavailable."
+            ),
+        }
+    )
+    return render(request, "finance/simple_list.html", context)
+
+
+@login_required
+def depreciation_list(request):
+    _require(request.user, "view", DepreciationScheduleEntry)
+    context = _finance_page_context(request)
+    selected = context["selected_entity"]
+    context.update(
+        {
+            "title": "Depreciation",
+            "rows": DepreciationScheduleEntry.objects.filter(
+                fixed_asset__legal_entity=selected
+            ).select_related("fixed_asset", "journal")
+            if selected
+            else DepreciationScheduleEntry.objects.none(),
+        }
+    )
+    return render(request, "finance/simple_list.html", context)
+
+
+@login_required
+def wage_payable_list(request):
+    _require(request.user, "view", WagePayableAccrual)
+    context = _finance_page_context(request)
+    selected = context["selected_entity"]
+    context.update(
+        {
+            "title": "Wage Payables",
+            "rows": wage_payables(legal_entity=selected)
+            if selected
+            else WagePayableAccrual.objects.none(),
+            "pending_source": (
+                "PENDING_SOURCE: Production lacks authoritative payable-treatment facts."
+            ),
+        }
+    )
+    return render(request, "finance/simple_list.html", context)
+
+
+@login_required
+def accounting_period_list(request):
+    _require(request.user, "view", AccountingPeriod)
+    context = _finance_page_context(request)
+    selected = context["selected_entity"]
+    context.update(
+        {
+            "title": "Accounting Periods",
+            "rows": accounting_periods(legal_entity=selected)
+            if selected
+            else AccountingPeriod.objects.none(),
+            "create_url": "finance_operations:accounting-period-create",
+        }
+    )
+    return render(request, "finance/simple_list.html", context)
+
+
+@login_required
+def accounting_period_create(request):
+    _require_codename(request.user, "manage_accountingperiod")
+    form = AccountingPeriodForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        create_accounting_period(actor=request.user, **form.cleaned_data)
+        return redirect("finance_operations:accounting-period-list")
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": form,
+            "title": "Create Accounting Period",
+            "cancel_href": reverse("finance_operations:accounting-period-list"),
+        },
+    )
+
+
+@login_required
+def bank_reconciliation_list(request):
+    _require(request.user, "view", BankStatement)
+    context = _finance_page_context(request)
+    selected = context["selected_entity"]
+    context.update(
+        {
+            "title": "Bank Reconciliation",
+            "rows": bank_statements(legal_entity=selected)
+            if selected
+            else BankStatement.objects.none(),
+            "create_url": "finance_operations:bank-statement-create",
+        }
+    )
+    return render(request, "finance/simple_list.html", context)
+
+
+@login_required
+def bank_statement_create(request):
+    _require_codename(request.user, "manage_bankstatement")
+    form = BankStatementForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        create_bank_statement(actor=request.user, **form.cleaned_data)
+        return redirect("finance_operations:bank-reconciliation-list")
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": form,
+            "title": "Create Bank Statement",
+            "cancel_href": reverse("finance_operations:bank-reconciliation-list"),
+        },
+    )
+
+
+@login_required
+def fixed_asset_detail_view(request, pk):
+    _require(request.user, "view", FixedAsset)
+    asset = get_object_or_404(
+        FixedAsset, pk=pk, legal_entity__in=accessible_legal_entities(request.user)
+    )
+    return render(
+        request,
+        "finance/detail.html",
+        {
+            "title": asset.asset_number,
+            "facts": fixed_asset_detail(asset),
+            "pending_source": "PENDING_SOURCE: acquisition source is read-only.",
+        },
+    )
+
+
+@login_required
+def depreciation_action(request, pk, action):
+    entry = get_object_or_404(DepreciationScheduleEntry, pk=pk)
+    _require_codename(request.user, "post_journal" if action == "post" else "reverse_journal")
+    if request.method == "POST":
+        try:
+            (post_depreciation if action == "post" else reverse_depreciation)(
+                entry, actor=request.user
+            )
+        except ValidationError as error:
+            messages.error(request, "; ".join(error.messages))
+        else:
+            messages.success(request, "Depreciation action completed.")
+            return redirect("finance_operations:depreciation-list")
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": ReasonForm(),
+            "title": f"{action.title()} depreciation",
+            "cancel_href": reverse("finance_operations:depreciation-list"),
+        },
+    )
+
+
+@login_required
+def depreciation_detail_view(request, pk):
+    _require(request.user, "view", DepreciationScheduleEntry)
+    entry = get_object_or_404(
+        DepreciationScheduleEntry.objects.select_related("fixed_asset__asset_class", "journal"),
+        pk=pk,
+    )
+    reversal = (
+        entry.journal.reversal if entry.journal_id and hasattr(entry.journal, "reversal") else None
+    )
+    return render(
+        request,
+        "finance/depreciation_detail.html",
+        {"entry": entry, "reversal": reversal},
+    )
+
+
+@login_required
+def wage_payable_detail_view(request, pk):
+    _require(request.user, "view", WagePayableAccrual)
+    accrual = get_object_or_404(
+        WagePayableAccrual.objects.select_related("payable_entry", "journal"), pk=pk
+    )
+    return render(
+        request,
+        "finance/detail.html",
+        {
+            "title": "Wage Payable",
+            "facts": {
+                "accrual": accrual,
+                "payable": accrual.payable_entry,
+                "payments": accrual.payable_entry.payment_allocations.all(),
+            },
+        },
+    )
+
+
+@login_required
+def wage_payable_reverse(request, pk):
+    _require_codename(request.user, "reverse_wagepayable")
+    accrual = get_object_or_404(WagePayableAccrual, pk=pk)
+    form = ReasonForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            reverse_wage_payable(accrual, actor=request.user)
+        except ValidationError as error:
+            _add_service_errors(form, error)
+        else:
+            messages.success(request, "Wage payable reversed.")
+            return redirect("finance_operations:wage-payable-detail", pk=pk)
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": form,
+            "title": "Reverse Wage Payable",
+            "cancel_href": reverse("finance_operations:wage-payable-detail", args=[pk]),
+        },
+    )
+
+
+@login_required
+def accounting_period_close(request, pk):
+    _require_codename(request.user, "close_accountingperiod")
+    period = get_object_or_404(AccountingPeriod, pk=pk)
+    form = ReasonForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        close_accounting_period(period, actor=request.user, reason=form.cleaned_data["reason"])
+        messages.success(request, "Accounting period closed.")
+        return redirect("finance_operations:accounting-period-list")
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": form,
+            "title": "Close Accounting Period",
+            "cancel_href": reverse("finance_operations:accounting-period-list"),
+        },
+    )
+
+
+@login_required
+def accounting_period_detail_view(request, pk):
+    _require(request.user, "view", AccountingPeriod)
+    period = get_object_or_404(AccountingPeriod, pk=pk)
+    return render(
+        request,
+        "finance/accounting_period_detail.html",
+        {
+            "period": period,
+            "control": period_control_status(
+                legal_entity=period.legal_entity, accounting_date=period.start_date
+            ),
+        },
+    )
+
+
+@login_required
+def bank_statement_detail(request, pk):
+    _require(request.user, "view", BankStatement)
+    statement = get_object_or_404(
+        BankStatement.objects.prefetch_related("lines__matches__liquidity_entry"), pk=pk
+    )
+    return render(
+        request,
+        "finance/bank_statement_detail.html",
+        {"statement": statement, "result": bank_statement_reconciliation(statement=statement)},
+    )
+
+
+@login_required
+def bank_statement_line_add(request, pk):
+    _require_codename(request.user, "manage_bankstatement")
+    statement = get_object_or_404(BankStatement, pk=pk)
+    form = BankStatementLineForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        add_bank_statement_line(statement=statement, **form.cleaned_data)
+        return redirect("finance_operations:bank-statement-detail", pk=pk)
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": form,
+            "title": "Add Statement Line",
+            "cancel_href": reverse("finance_operations:bank-statement-detail", args=[pk]),
+        },
+    )
+
+
+@login_required
+def bank_match(request, pk):
+    _require_codename(request.user, "match_bankstatement")
+    line = get_object_or_404(BankStatementLine, pk=pk)
+    form = BankMatchForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        entry = get_object_or_404(
+            bank_match_candidates(statement_line=line), pk=form.cleaned_data["liquidity_entry"]
+        )
+        match_bank_statement_line(
+            statement_line=line,
+            liquidity_entry=entry,
+            amount=form.cleaned_data["amount"],
+            source_key=form.cleaned_data["source_key"],
+            actor=request.user,
+        )
+        return redirect("finance_operations:bank-statement-detail", pk=line.statement_id)
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": form,
+            "title": "Match Statement Line",
+            "candidates": bank_match_candidates(statement_line=line),
+            "cancel_href": reverse(
+                "finance_operations:bank-statement-detail", args=[line.statement_id]
+            ),
+        },
+    )
+
+
+@login_required
+def bank_unmatch(request, pk):
+    _require_codename(request.user, "match_bankstatement")
+    match = get_object_or_404(BankReconciliationMatch, pk=pk)
+    form = ReasonForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        unmatch_bank_statement_line(match, actor=request.user, reason=form.cleaned_data["reason"])
+        return redirect(
+            "finance_operations:bank-statement-detail", pk=match.bank_statement_line.statement_id
+        )
+    return render(
+        request,
+        "finance/action_form.html",
+        {
+            "form": form,
+            "title": "Unmatch",
+            "cancel_href": reverse(
+                "finance_operations:bank-statement-detail",
+                args=[match.bank_statement_line.statement_id],
+            ),
+        },
+    )
 
 
 @login_required
