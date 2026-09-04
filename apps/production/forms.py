@@ -59,7 +59,38 @@ class ConfirmationForm(forms.Form):
 class ProductionWarehouseHandoverForm(_EntryForm):
     class Meta(_EntryForm.Meta):
         model = ProductionWarehouseHandover
-        fields = ("legal_entity", "work_order", "handover_date", "notes")
+        fields = ("legal_entity", "work_order", "handover_date", "cpo_beneficiary", "notes")
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, user=user, **kwargs)
+        self.fields["cpo_beneficiary"].required = False
+        self.fields["cpo_beneficiary"].label = "CPO Beneficiary / SPV"
+        self.fields[
+            "cpo_beneficiary"
+        ].help_text = (
+            "Beneficiary for CPO Finished Goods Fee after Warehouse accepts posted finished goods."
+        )
+        from apps.accounts.models import Employee
+
+        qs = Employee.objects.filter(is_active=True)
+        if self.instance and self.instance.pk and self.instance.legal_entity_id:
+            qs = qs.filter(legal_entity_id=self.instance.legal_entity_id)
+        self.fields["cpo_beneficiary"].queryset = qs
+
+        if self.instance and self.instance.pk:
+            from apps.incentives.models import IncentiveAccrual, IncentiveType
+            from apps.warehouse.models import WarehouseReceiptLine
+
+            rcp_line_ids = WarehouseReceiptLine.objects.filter(
+                receipt__handover=self.instance
+            ).values_list("id", flat=True)
+            has_accrual = IncentiveAccrual.objects.filter(
+                incentive_type=IncentiveType.CPO_FEE,
+                source_type="WAREHOUSE_RECEIPT_LINE",
+                source_line_id__in=[str(lid) for lid in rcp_line_ids],
+            ).exists()
+            if has_accrual:
+                self.fields["cpo_beneficiary"].disabled = True
 
 
 class ProductionWarehouseHandoverLineForm(forms.ModelForm):

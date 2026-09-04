@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
@@ -223,6 +224,53 @@ class ProductionWarehouseHandover(UUIDPrimaryKeyModel, TimeStampedModel):
         related_name="ready_production_handovers",
     )
     ready_at = models.DateTimeField(null=True, blank=True)
+    cpo_beneficiary = models.ForeignKey(
+        "accounts.Employee",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="cpo_production_handovers",
+        help_text=(
+            "Explicit beneficiary/SPV for CPO Finished Goods Fee associated "
+            "with this Production → Warehouse handover."
+        ),
+    )
+
+    def clean(self):
+        errors = {}
+        if self.cpo_beneficiary_id:
+            if self.cpo_beneficiary.legal_entity_id != self.legal_entity_id:
+                errors["cpo_beneficiary"] = "Beneficiary must belong to the same legal entity."
+            elif not self.cpo_beneficiary.is_active:
+                errors["cpo_beneficiary"] = "Beneficiary employee must be active."
+        if self.pk:
+            orig = (
+                ProductionWarehouseHandover.objects.filter(pk=self.pk)
+                .values("cpo_beneficiary_id")
+                .first()
+            )
+            if orig and orig["cpo_beneficiary_id"] != self.cpo_beneficiary_id:
+                from apps.incentives.models import IncentiveAccrual, IncentiveType
+                from apps.warehouse.models import WarehouseReceiptLine
+
+                line_ids = [
+                    str(x)
+                    for x in WarehouseReceiptLine.objects.filter(
+                        receipt__handover_id=self.pk
+                    ).values_list("id", flat=True)
+                ]
+                has_cpo = IncentiveAccrual.objects.filter(
+                    incentive_type=IncentiveType.CPO_FEE,
+                    source_module="warehouse",
+                    source_type="WAREHOUSE_RECEIPT_LINE",
+                    source_line_id__in=line_ids,
+                ).exists()
+                if has_cpo:
+                    errors["cpo_beneficiary"] = (
+                        "Cannot change CPO beneficiary after CPO fee accruals have been created."
+                    )
+        if errors:
+            raise ValidationError(errors)
 
     class Meta:
         indexes = [

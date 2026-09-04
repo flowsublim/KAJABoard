@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <p class="eyebrow"><a href="{% url 'incentives:rule-list' %}">← Incentive Rules</a></p>
+    <h1>{{ title }}</h1>
+    <p class="muted">Konfigurasi aturan tarif, item scope, dan masa berlaku insentif.</p>
+  </div>
+</div>
+
+<div class="panel" style="max-width: 720px;">
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}
+      <div class="alert alert-danger" style="margin-bottom: 1rem; color: red; background: #fff5f5; padding: 0.75rem; border-radius: 4px;">
+        {{ form.non_field_errors }}
+      </div>
+    {% endif %}
+
+    {{ form.as_p }}
+
+    <div class="page-actions" style="margin-top: 1.5rem;">
+      <button class="button button-primary" type="submit">Simpan Aturan</button>
+      <a class="button button-secondary" href="{% url 'incentives:rule-list' %}">Batal</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

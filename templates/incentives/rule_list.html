@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Incentive Rules · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <p class="eyebrow">Incentives &amp; Komisi</p>
+    <h1>Incentive Rules</h1>
+    <p class="muted">Konfigurasi aturan insentif operasional dan komisi per entitas bisnis.</p>
+  </div>
+  {% if can_add %}
+  <div class="page-actions">
+    <a class="button button-primary" href="{% url 'incentives:rule-create' %}">+ Tambah Aturan</a>
+  </div>
+  {% endif %}
+</div>
+
+<form method="get" class="filterbar">
+  <input type="text" name="q" value="{{ q }}" placeholder="Cari kode atau nama aturan..." style="min-width: 220px;" />
+  <select name="incentive_type">
+    <option value="">Semua Jenis Insentif</option>
+    {% for type_val, type_label in incentive_types %}
+      <option value="{{ type_val }}" {% if selected_type == type_val %}selected{% endif %}>{{ type_label }}</option>
+    {% endfor %}
+  </select>
+  <select name="item_id">
+    <option value="">Semua Item / Global</option>
+    {% for item in items %}
+      <option value="{{ item.pk }}" {% if selected_item_id == item.pk|stringformat:"s" %}selected{% endif %}>{{ item.code }} - {{ item.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="is_active">
+    <option value="">Semua Status</option>
+    <option value="1" {% if is_active_param == '1' %}selected{% endif %}>Aktif</option>
+    <option value="0" {% if is_active_param == '0' %}selected{% endif %}>Non-aktif</option>
+  </select>
+  <button class="button" type="submit">Filter</button>
+  {% if q or selected_type or selected_item_id or is_active_param %}
+    <a class="button button-secondary" href="{% url 'incentives:rule-list' %}">Reset</a>
+  {% endif %}
+</form>
+
+<section class="panel table-panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Kode &amp; Nama</th>
+          <th>Entitas</th>
+          <th>Jenis</th>
+          <th>Trigger</th>
+          <th>Metode Perhitungan</th>
+          <th>Item Scope</th>
+          <th class="number">Tarif</th>
+          <th>Masa Berlaku</th>
+          <th>Status</th>
+          {% if can_change %}<th>Aksi</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in annotated_rules %}
+          <tr>
+            <td>
+              <strong>{{ item.rule.code }}</strong><br />
+              <small class="muted">{{ item.rule.name }}</small>
+            </td>
+            <td>{{ item.rule.legal_entity.code }}</td>
+            <td><span class="status">{{ item.rule.get_incentive_type_display }}</span></td>
+            <td><small>{{ item.rule.get_trigger_type_display }}</small></td>
+            <td>
+              <strong>{{ item.rule.get_calculation_method_display }}</strong><br />
+              {% if item.is_executable %}
+                <span class="status status-success" style="font-size:0.75em; color:green;">EXECUTABLE</span>
+              {% else %}
+                <span class="status status-warning" style="font-size:0.75em; color:#b45309; background:#fef3c7;">NOT YET EXECUTABLE</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if item.rule.item %}
+                {{ item.rule.item.code }} - {{ item.rule.item.name }}
+              {% else %}
+                <em class="muted">Global (Semua Item)</em>
+              {% endif %}
+            </td>
+            <td class="number">
+              <strong>{{ item.rule.currency }} {{ item.rule.rate_value|floatformat:0 }}</strong>
+            </td>
+            <td>
+              {{ item.rule.effective_from }}
+              {% if item.rule.effective_to %}
+                s/d {{ item.rule.effective_to }}
+              {% else %}
+                <span class="muted">s/d seterusnya</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if item.rule.is_active %}
+                <span class="status status-success" style="color:green;">Aktif</span>
+              {% else %}
+                <span class="status status-muted">Non-aktif</span>
+              {% endif %}
+            </td>
+            {% if can_change %}
+              <td>
+                <a class="button button-sm" href="{% url 'incentives:rule-edit' item.rule.pk %}">Edit</a>
+              </td>
+            {% endif %}
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="{% if can_change %}10{% else %}9{% endif %}" class="empty">
+              Belum ada aturan insentif yang sesuai filter.
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

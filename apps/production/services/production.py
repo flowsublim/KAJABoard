@@ -1046,16 +1046,35 @@ def reverse_reject_line(line, *, reason, actor=None, idempotency_key):
     return reversal
 
 
+_UNSET = object()
+
+
 @transaction.atomic
-def create_handover_draft(*, legal_entity, work_order, handover_date, notes="", actor=None):
+def create_handover_draft(
+    *,
+    legal_entity,
+    work_order,
+    handover_date,
+    notes="",
+    cpo_beneficiary=None,
+    actor=None,
+):
     entity = legal_entity.__class__.objects.select_for_update().get(pk=legal_entity.pk)
     order = WorkOrder.objects.select_for_update().get(pk=work_order.pk)
     _eligible_work_order(order, entity)
+    if cpo_beneficiary is not None:
+        if cpo_beneficiary.legal_entity_id != entity.pk:
+            raise ValidationError(
+                {"cpo_beneficiary": "Beneficiary must belong to the same legal entity."}
+            )
+        if not cpo_beneficiary.is_active:
+            raise ValidationError({"cpo_beneficiary": "Beneficiary employee must be active."})
     handover = ProductionWarehouseHandover.objects.create(
         legal_entity=entity,
         work_order=order,
         handover_date=handover_date,
         notes=str(notes or "").strip(),
+        cpo_beneficiary=cpo_beneficiary,
         created_by=actor,
     )
     _audit(handover, "production.handover_draft.created", actor)
@@ -1063,20 +1082,62 @@ def create_handover_draft(*, legal_entity, work_order, handover_date, notes="", 
 
 
 @transaction.atomic
-def update_handover_draft(handover, *, actor=None, handover_date=None, notes=None):
+def update_handover_draft(
+    handover,
+    *,
+    actor=None,
+    handover_date=None,
+    notes=None,
+    cpo_beneficiary=_UNSET,
+):
     handover = (
         ProductionWarehouseHandover.objects.select_for_update()
-        .select_related("work_order", "legal_entity")
+        .select_related("work_order", "legal_entity", "cpo_beneficiary")
         .get(pk=handover.pk)
     )
     if handover.state != ProductionHandoverState.DRAFT:
         raise ValidationError("Only DRAFT handovers can be edited.")
     _eligible_work_order(handover.work_order, handover.legal_entity)
-    before = {"handover_date": handover.handover_date.isoformat(), "notes": handover.notes}
+    before = {
+        "handover_date": handover.handover_date.isoformat(),
+        "notes": handover.notes,
+        "cpo_beneficiary": str(handover.cpo_beneficiary_id or ""),
+    }
     if handover_date is not None:
         handover.handover_date = handover_date
     if notes is not None:
         handover.notes = str(notes).strip()
+    if cpo_beneficiary is not _UNSET:
+        if cpo_beneficiary != handover.cpo_beneficiary:
+            from apps.incentives.models import IncentiveAccrual, IncentiveType
+            from apps.warehouse.models import WarehouseReceiptLine
+
+            line_ids = [
+                str(x)
+                for x in WarehouseReceiptLine.objects.filter(
+                    receipt__handover_id=handover.pk
+                ).values_list("id", flat=True)
+            ]
+            has_cpo = IncentiveAccrual.objects.filter(
+                incentive_type=IncentiveType.CPO_FEE,
+                source_module="warehouse",
+                source_type="WAREHOUSE_RECEIPT_LINE",
+                source_line_id__in=line_ids,
+            ).exists()
+            if has_cpo:
+                raise ValidationError(
+                    "Cannot change CPO beneficiary after CPO fee accruals have been created."
+                )
+            if cpo_beneficiary is not None:
+                if cpo_beneficiary.legal_entity_id != handover.legal_entity_id:
+                    raise ValidationError(
+                        {"cpo_beneficiary": "Beneficiary must belong to the same legal entity."}
+                    )
+                if not cpo_beneficiary.is_active:
+                    raise ValidationError(
+                        {"cpo_beneficiary": "Beneficiary employee must be active."}
+                    )
+            handover.cpo_beneficiary = cpo_beneficiary
     handover.full_clean()
     handover.save()
     _audit(
@@ -1084,7 +1145,11 @@ def update_handover_draft(handover, *, actor=None, handover_date=None, notes=Non
         "production.handover_draft.updated",
         actor,
         before=before,
-        after={"handover_date": handover.handover_date.isoformat(), "notes": handover.notes},
+        after={
+            "handover_date": handover.handover_date.isoformat(),
+            "notes": handover.notes,
+            "cpo_beneficiary": str(handover.cpo_beneficiary_id or ""),
+        },
     )
     return handover
 

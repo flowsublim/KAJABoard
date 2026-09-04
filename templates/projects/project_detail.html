@@ -273,12 +273,30 @@
       <tbody>
         {% for cat_key, actual_item in profitability.actual_categories.items %}
           <tr>
-            <td><strong>{{ actual_item.category }}</strong></td>
+            <td>
+              <strong>{{ actual_item.category }}</strong>
+              {% if cat_key == 'CPO_FEE' or actual_item.category == 'CPO fee' or actual_item.category == 'CPO_FEE' %}
+                <span class="muted" style="font-size: 0.85em; display: block;">
+                  {{ actual_item.record_count }} line(s)
+                  {% if actual_item.availability == 'AUTHORITATIVE_AVAILABLE' %}
+                    · Coverage: Complete
+                  {% else %}
+                    · Coverage: Incomplete
+                  {% endif %}
+                  {% if perms.incentives.view_incentiveaccrual %}
+                    · <a href="{% url 'incentives:cpo-dashboard' %}?project_id={{ project.pk }}">View CPO Dashboard</a>
+                  {% endif %}
+                </span>
+              {% elif cat_key == 'SALES_FEE' or actual_item.category == 'Sales fee' or actual_item.category == 'SALES_FEE' %}
+                <span class="muted" style="font-size: 0.85em; display: block;">Deferred to Phase 9C</span>
+              {% endif %}
+            </td>
             <td class="number">
               {% if actual_item.availability == 'AUTHORITATIVE_AVAILABLE' %}
                 {{ project.currency }} {{ actual_item.amount }}
               {% else %}
                 <span class="status status-pending">PENDING SOURCE</span>
+                {% if actual_item.reason %}<span class="muted" style="display:block; font-size:0.8em;">{{ actual_item.reason }}</span>{% endif %}
               {% endif %}
             </td>
             <td class="number">

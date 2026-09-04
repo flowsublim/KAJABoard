@@ -465,19 +465,100 @@ def project_profitability(project: Project) -> ProjectProfitability:
             reason="POSTED_PRODUCTION_DIRECT_EXTRA_COSTS",
         )
 
+    # Source 5: Incentives CPO Finished Goods Fee (CPO_FEE)
+    # Authoritative source: immutable IncentiveAccrual where incentive_type == CPO_FEE
+    # Strictly explicit project lineage (no inference). Excludes reversed accruals.
+    from apps.incentives.models import IncentiveAccrual, IncentiveAccrualState, IncentiveType
+    from apps.incentives.selectors.cpo import get_cpo_candidate_for_receipt_line
+    from apps.warehouse.models import WarehouseReceiptLine
+
+    posted_cpo_lines = list(
+        WarehouseReceiptLine.objects.filter(
+            receipt__work_order__project=project,
+            receipt__source_module="production",
+            receipt__source_type="PRODUCTION_HANDOVER",
+            receipt__state=WarehouseDocumentState.POSTED,
+            accepted_quantity__gt=Decimal("0"),
+        ).select_related(
+            "receipt",
+            "receipt__handover",
+            "receipt__handover__cpo_beneficiary",
+            "receipt__work_order",
+            "output",
+            "item",
+            "item__uom",
+        )
+    )
+
+    has_incomplete_cpo = False
+    if posted_cpo_lines:
+        for r_line in posted_cpo_lines:
+            cand = get_cpo_candidate_for_receipt_line(r_line)
+            if not cand.existing_accrual:
+                has_incomplete_cpo = True
+                break
+
+    cpo_accruals = IncentiveAccrual.objects.filter(
+        project=project,
+        incentive_type=IncentiveType.CPO_FEE,
+    )
+
+    if has_incomplete_cpo:
+        actual_categories[ProjectBudgetCategory.CPO_FEE] = CostCategoryItem(
+            category=ProjectBudgetCategory.CPO_FEE,
+            amount=None,
+            availability=PENDING_SOURCE,
+            domain="incentives",
+            record_count=len(posted_cpo_lines),
+            reason="INCOMPLETE_CPO_ACCRUAL_COVERAGE",
+        )
+    elif cpo_accruals.exists():
+        active_cpo_accruals = cpo_accruals.exclude(state=IncentiveAccrualState.REVERSED)
+        cpo_total = active_cpo_accruals.aggregate(v=Sum("amount"))["v"] or Decimal("0")
+        actual_categories[ProjectBudgetCategory.CPO_FEE] = CostCategoryItem(
+            category=ProjectBudgetCategory.CPO_FEE,
+            amount=cpo_total,
+            availability=AUTHORITATIVE_AVAILABLE,
+            domain="incentives",
+            record_count=active_cpo_accruals.count(),
+            reason=(
+                "POSTED_CPO_INCENTIVE_ACCRUALS"
+                if active_cpo_accruals.exists()
+                else "CPO_INCENTIVE_ACCRUALS_REVERSED"
+            ),
+        )
+
     # Aggregate Actual Cost
     authoritative_actual_cats = [
         cat for cat in actual_categories.values() if cat.availability == AUTHORITATIVE_AVAILABLE
     ]
-    if consumption_has_unvalued:
+    if consumption_has_unvalued or has_incomplete_cpo:
         actual_cost = None
+        reason = (
+            "INCOMPLETE_CPO_ACCRUAL_COVERAGE"
+            if has_incomplete_cpo and not consumption_has_unvalued
+            else "UNVALUED_INTERNAL_CONSUMPTION_LINES"
+        )
+        domain = (
+            "incentives" if has_incomplete_cpo and not consumption_has_unvalued else "warehouse"
+        )
+        record_count = (
+            len(posted_cpo_lines)
+            if has_incomplete_cpo and not consumption_has_unvalued
+            else consumption_line_count
+        )
+        source_model = (
+            "WarehouseReceiptLine"
+            if has_incomplete_cpo and not consumption_has_unvalued
+            else "InternalConsumptionLine"
+        )
         actual_cost_metric = MetricComponent(
             amount=None,
             availability=PENDING_SOURCE,
-            domain="warehouse",
-            record_count=consumption_line_count,
-            source_model="InternalConsumptionLine",
-            reason="UNVALUED_INTERNAL_CONSUMPTION_LINES",
+            domain=domain,
+            record_count=record_count,
+            source_model=source_model,
+            reason=reason,
         )
     elif authoritative_actual_cats:
         actual_cost = sum(

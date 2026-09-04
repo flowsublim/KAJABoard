@@ -10,6 +10,10 @@ from .fixed_assets import (
     fixed_asset_reconciliation,
     fixed_assets,
 )
+from .incentive_payables import (
+    IncentivePayableReconciliationItem,
+    get_incentive_payable_status,
+)
 from .ledger import general_ledger, payables, receivables, reconciliation
 from .liquidity import bank_ledger, cash_ledger, liquidity_balance, payments
 from .mappings import coa_mappings
@@ -55,4 +59,6 @@ __all__ = [
     "wage_payables",
     "wage_payable_detail",
     "wage_payable_reconciliation",
+    "get_incentive_payable_status",
+    "IncentivePayableReconciliationItem",
 ]

@@ -324,6 +324,77 @@ class WagePayableAccrual(UUIDPrimaryKeyModel, TimeStampedModel):
         ]
 
 
+class IncentivePostingState(models.TextChoices):
+    POSTED = "POSTED", "Posted"
+    REVERSED = "REVERSED", "Reversed"
+
+
+class IncentivePayablePosting(UUIDPrimaryKeyModel, TimeStampedModel):
+    """Finance-owned accounting posting for an approved IncentiveAccrual."""
+
+    legal_entity = models.ForeignKey(LegalEntity, on_delete=models.PROTECT)
+    incentive_accrual = models.OneToOneField(
+        "incentives.IncentiveAccrual",
+        on_delete=models.PROTECT,
+        related_name="finance_posting",
+    )
+    incentive_type_snapshot = models.CharField(max_length=40)
+    source_key = models.CharField(max_length=255)
+    accounting_date = models.DateField()
+    amount = models.DecimalField(max_digits=20, decimal_places=0)
+    currency = models.CharField(max_length=12, default="IDR")
+
+    # Beneficiary snapshots
+    beneficiary_type = models.CharField(max_length=40, blank=True)
+    beneficiary_id = models.CharField(max_length=64, blank=True)
+    beneficiary_code_snapshot = models.CharField(max_length=64, blank=True)
+    beneficiary_name_snapshot = models.CharField(max_length=255, blank=True)
+
+    # Lineage snapshot
+    source_reference = models.CharField(max_length=255, blank=True)
+    project_reference = models.CharField(max_length=64, blank=True)
+
+    journal = models.OneToOneField(
+        JournalEntry, on_delete=models.PROTECT, related_name="incentive_posting"
+    )
+    payable_entry = models.OneToOneField(
+        PayableEntry, on_delete=models.PROTECT, related_name="incentive_posting"
+    )
+    state = models.CharField(
+        max_length=12,
+        choices=IncentivePostingState.choices,
+        default=IncentivePostingState.POSTED,
+    )
+    reversal_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reversal"
+    )
+    posted_by = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.PROTECT)
+    posted_at = models.DateTimeField()
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("legal_entity", "source_key"),
+                name="finance_incentive_posting_source_uq",
+            ),
+            models.CheckConstraint(
+                condition=Q(amount__gt=0),
+                name="finance_incentive_posting_amount_positive",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("legal_entity", "accounting_date"),
+                name="finance_inc_post_date_idx",
+            ),
+            models.Index(
+                fields=("incentive_type_snapshot", "state"),
+                name="finance_inc_post_type_st_idx",
+            ),
+        ]
+
+
 class AccountingPeriodState(models.TextChoices):
     OPEN = "OPEN", "Open"
     CLOSED = "CLOSED", "Closed"

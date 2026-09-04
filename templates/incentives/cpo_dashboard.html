@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% block title %}CPO Finished Goods Fees · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <p class="eyebrow">Incentives &amp; Komisi</p>
+    <h1>CPO Finished Goods Fees</h1>
+    <p class="muted">Rekonsiliasi operasional &amp; keuangan insentif setor gudang barang jadi.</p>
+  </div>
+</div>
+
+<!-- Summary Metrics Panel -->
+<section class="panel" style="margin-bottom: 1.5rem;">
+  <h2>Ringkasan Operasional &amp; Keuangan CPO</h2>
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-top: 1rem;">
+    <div style="padding: 0.75rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Total Line Terima</span>
+      <strong style="font-size: 1.3em;">{{ summary.total_posted_lines }}</strong>
+    </div>
+    <div style="padding: 0.75rem; background: #fefce8; border: 1px solid #fef08a; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Pending Rule</span>
+      <strong style="font-size: 1.3em; color: #a16207;">{{ summary.pending_rule }}</strong>
+    </div>
+    <div style="padding: 0.75rem; background: #fefce8; border: 1px solid #fef08a; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Pending Beneficiary</span>
+      <strong style="font-size: 1.3em; color: #a16207;">{{ summary.pending_beneficiary }}</strong>
+    </div>
+    <div style="padding: 0.75rem; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Ready to Accrue</span>
+      <strong style="font-size: 1.3em; color: #1d4ed8;">{{ summary.ready }}</strong>
+    </div>
+    <div style="padding: 0.75rem; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Accrued</span>
+      <strong style="font-size: 1.3em; color: #15803d;">{{ summary.accrued }}</strong>
+    </div>
+    <div style="padding: 0.75rem; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Approved (Not Posted)</span>
+      <strong style="font-size: 1.3em; color: #15803d;">{{ summary.approved_not_posted }}</strong>
+    </div>
+    <div style="padding: 0.75rem; background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Payable Open</span>
+      <strong style="font-size: 1.3em; color: #7e22ce;">{{ summary.payable_open }}</strong>
+    </div>
+    <div style="padding: 0.75rem; background: #fdf4ff; border: 1px solid #f5d0fe; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Partially Paid</span>
+      <strong style="font-size: 1.3em; color: #a21caf;">{{ summary.partially_paid }}</strong>
+    </div>
+    <div style="padding: 0.75rem; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Fully Paid</span>
+      <strong style="font-size: 1.3em; color: #047857;">{{ summary.paid }}</strong>
+    </div>
+    {% if summary.source_reversed_finance_pending > 0 %}
+    <div style="padding: 0.75rem; background: #fff1f2; border: 1px solid #fecdd3; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Reversal Pending</span>
+      <strong style="font-size: 1.3em; color: #be123c;">{{ summary.source_reversed_finance_pending }}</strong>
+    </div>
+    {% endif %}
+    <div style="padding: 0.75rem; background: #f1f5f9; border: 2px solid #cbd5e1; border-radius: 4px; grid-column: span 2;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Total Akrual Tercatat (Recorded Business Accruals)</span>
+      <strong style="font-size: 1.3em; color: #0f172a;">IDR {{ summary.authoritative_total_amount|floatformat:0 }}</strong>
+      <small class="muted" style="display: block; font-size: 0.75em; margin-top: 0.25rem;">(Termasuk ACCRUED, APPROVED, PAYABLE, PAID; Tidak termasuk REVERSED)</small>
+      {% if project_coverage_incomplete %}
+        <span style="display: block; color: #b91c1c; font-size: 0.8em; font-weight: bold; margin-top: 0.25rem;">
+          Perhatian: Biaya CPO Lengkap Proyek masih PENDING_SOURCE (cakupan belum lengkap).
+        </span>
+      {% endif %}
+    </div>
+    <div style="padding: 0.75rem; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px;">
+      <span class="muted" style="font-size: 0.8em; display: block;">Total Siap / Terposting Finance</span>
+      <strong style="font-size: 1.3em; color: #0369a1;">IDR {{ summary.approved_total_amount|floatformat:0 }}</strong>
+      <small class="muted" style="display: block; font-size: 0.75em; margin-top: 0.25rem;">(APPROVED, PAYABLE, PAID)</small>
+    </div>
+  </div>
+  {% if project_coverage_incomplete and selected_project %}
+    <div class="alert alert-warning" style="background: #fffbeb; border: 1px solid #fde68a; color: #92400e; padding: 0.75rem 1rem; border-radius: 4px; margin-top: 1rem;">
+      <strong>Perhatian Cakupan Biaya CPO Belum Lengkap (INCOMPLETE_CPO_ACCRUAL_COVERAGE) untuk {{ selected_project.code }}:</strong>
+      Terdapat baris penerimaan barang jadi yang belum memiliki akrual CPO Fee. Nilai di atas adalah <em>jumlah akrual yang tercatat (recorded/accrued amount)</em> dan <strong>bukan biaya lengkap proyek (complete CPO cost)</strong>. Status biaya CPO pada Profitabilitas Proyek tetap <strong>PENDING_SOURCE</strong>.
+    </div>
+  {% endif %}
+</section>
+
+<!-- Filterbar -->
+<form method="get" class="filterbar">
+  <input type="date" name="date_from" value="{{ selected_date_from }}" title="Tanggal Penerimaan Dari" />
+  <input type="date" name="date_to" value="{{ selected_date_to }}" title="Tanggal Penerimaan Sampai" />
+  <select name="project_id">
+    <option value="">Semua Project</option>
+    {% for p in projects %}
+      <option value="{{ p.pk }}" {% if selected_project_id == p.pk|stringformat:"s" %}selected{% endif %}>{{ p.code }} - {{ p.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="employee_id">
+    <option value="">Semua Penerima / SPV</option>
+    {% for emp in beneficiaries %}
+      <option value="{{ emp.pk }}" {% if selected_employee_id == emp.pk|stringformat:"s" %}selected{% endif %}>{{ emp.employee_code }} - {{ emp.display_name }}</option>
+    {% endfor %}
+  </select>
+  <select name="item_id">
+    <option value="">Semua Item</option>
+    {% for it in items %}
+      <option value="{{ it.pk }}" {% if selected_item_id == it.pk|stringformat:"s" %}selected{% endif %}>{{ it.code }} - {{ it.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="status">
+    <option value="">Semua Status Operasional</option>
+    <option value="READY" {% if selected_status == 'READY' %}selected{% endif %}>READY (Siap Diakru)</option>
+    <option value="PENDING_RULE" {% if selected_status == 'PENDING_RULE' %}selected{% endif %}>PENDING_RULE (Belum Ada Tarif)</option>
+    <option value="PENDING_BENEFICIARY" {% if selected_status == 'PENDING_BENEFICIARY' %}selected{% endif %}>PENDING_BENEFICIARY (Belum Ada SPV)</option>
+    <option value="ACCRUED" {% if selected_status == 'ACCRUED' %}selected{% endif %}>ACCRUED (Menunggu Approval)</option>
+    <option value="APPROVED" {% if selected_status == 'APPROVED' %}selected{% endif %}>APPROVED</option>
+    <option value="APPROVED_NOT_POSTED" {% if selected_status == 'APPROVED_NOT_POSTED' %}selected{% endif %}>APPROVED (Belum Finance Posting)</option>
+    <option value="PAYABLE_OPEN" {% if selected_status == 'PAYABLE_OPEN' %}selected{% endif %}>PAYABLE_OPEN (Hutang Aktif)</option>
+    <option value="PARTIALLY_PAID" {% if selected_status == 'PARTIALLY_PAID' %}selected{% endif %}>PARTIALLY_PAID (Dibayar Sebagian)</option>
+    <option value="PAID" {% if selected_status == 'PAID' %}selected{% endif %}>PAID (Lunas)</option>
+    <option value="SOURCE_REVERSED_FINANCE_REVERSAL_PENDING" {% if selected_status == 'SOURCE_REVERSED_FINANCE_REVERSAL_PENDING' %}selected{% endif %}>SOURCE_REVERSED (Perlu Koreksi Finance)</option>
+    <option value="REVERSED" {% if selected_status == 'REVERSED' %}selected{% endif %}>REVERSED (Dibatalkan)</option>
+  </select>
+  <button class="button" type="submit">Filter</button>
+  {% if selected_date_from or selected_date_to or selected_project_id or selected_employee_id or selected_item_id or selected_status %}
+    <a class="button button-secondary" href="{% url 'incentives:cpo-dashboard' %}">Reset</a>
+  {% endif %}
+</form>
+
+<!-- Operational Table -->
+<section class="panel table-panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Penerimaan Gudang</th>
+          <th>Item &amp; Qty Diterima</th>
+          <th>SPK / Project</th>
+          <th>Penerima (SPV)</th>
+          <th>Aturan / Tarif</th>
+          <th class="number">Akrual CPO</th>
+          <th>Lineage Finance</th>
+          <th>Status Operasional</th>
+          <th>Aksi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <!-- Penerimaan Gudang -->
+            <td>
+              <strong>Terima Gudang</strong><br />
+              <small class="muted">{{ row.line.receipt.receipt_date }}</small><br />
+              <small class="muted">Line #{{ row.line.sequence }}</small>
+            </td>
+
+            <!-- Item & Qty Diterima -->
+            <td>
+              <strong>{{ row.line.item.code }}</strong> - {{ row.line.item.name }}<br />
+              <small class="muted">Qty: {{ row.line.accepted_quantity }} {{ row.line.uom_code_snapshot }}</small>
+            </td>
+
+            <!-- SPK / Project -->
+            <td>
+              {% if row.line.receipt.work_order %}
+                <span>SPK: {{ row.line.receipt.work_order.document_number }}</span><br />
+                {% if row.line.receipt.work_order.project %}
+                  <small class="muted">Proj: {{ row.line.receipt.work_order.project.code }}</small>
+                {% else %}
+                  <small class="muted">Non-Project</small>
+                {% endif %}
+              {% else %}
+                <span class="muted">-</span>
+              {% endif %}
+            </td>
+
+            <!-- Penerima (SPV) -->
+            <td>
+              {% if row.accrual %}
+                <strong>{{ row.accrual.beneficiary_employee_code_snapshot }}</strong><br />
+                <small class="muted">{{ row.accrual.beneficiary_name_snapshot }}</small>
+              {% elif row.candidate.beneficiary %}
+                <strong>{{ row.candidate.beneficiary.employee_code }}</strong><br />
+                <small class="muted">{{ row.candidate.beneficiary.display_name }}</small>
+              {% else %}
+                <span class="status status-warning" style="color: #b45309; background: #fef3c7;">PENDING_BENEFICIARY</span>
+              {% endif %}
+            </td>
+
+            <!-- Aturan / Tarif -->
+            <td>
+              {% if row.accrual %}
+                <strong>{{ row.accrual.rule_code_snapshot }}</strong><br />
+                <small class="muted">{{ row.accrual.currency }} {{ row.accrual.rate_snapshot|floatformat:0 }} / {{ row.accrual.get_calculation_method_snapshot_display }}</small>
+              {% elif row.candidate.rule %}
+                <strong>{{ row.candidate.rule.code }}</strong><br />
+                <small class="muted">{{ row.candidate.rule.currency }} {{ row.candidate.rule.rate_value|floatformat:0 }} / {{ row.candidate.rule.get_calculation_method_display }}</small>
+              {% else %}
+                <span class="status status-warning" style="color: #b45309; background: #fef3c7;">PENDING_RULE</span>
+              {% endif %}
+            </td>
+
+            <!-- Akrual CPO -->
+            <td class="number">
+              {% if row.accrual %}
+                <strong>{{ row.accrual.currency }} {{ row.accrual.amount|floatformat:0 }}</strong><br />
+                <small><span class="status">{{ row.accrual.get_state_display }}</span></small>
+              {% elif row.candidate.status == 'READY' %}
+                <span class="muted">Est. IDR {{ row.candidate.estimated_amount|floatformat:0 }}</span>
+              {% else %}
+                <span class="muted">-</span>
+              {% endif %}
+            </td>
+
+            <!-- Lineage Finance -->
+            <td>
+              {% if row.posting %}
+                <a href="{% url 'finance_operations:journal-detail' row.posting.journal_id %}">
+                  {{ row.posting.journal.journal_number }}
+                </a><br />
+                <small class="muted">
+                  Open: {{ row.posting.payable_entry.currency }} {{ row.posting.payable_entry.open_amount|floatformat:0 }}
+                  ({{ row.reconciliation.payment_status }})
+                </small>
+              {% elif row.accrual and row.accrual.state == 'APPROVED' %}
+                <span class="status status-warning" style="font-size:0.8em; color:#a16207; background:#fefce8;">UNPOSTED</span>
+              {% else %}
+                <span class="muted">-</span>
+              {% endif %}
+            </td>
+
+            <!-- Status Operasional -->
+            <td>
+              {% if row.operational_status == 'READY' %}
+                <span class="status status-info" style="color: #1d4ed8; background: #eff6ff;">READY</span>
+              {% elif row.operational_status == 'ACCRUED' %}
+                <span class="status status-warning" style="color: #b45309; background: #fef3c7;">ACCRUED</span>
+              {% elif row.operational_status == 'APPROVED' or row.operational_status == 'APPROVED_NOT_POSTED' %}
+                <span class="status status-success" style="color: green; background: #f0fdf4;">APPROVED</span>
+              {% elif row.operational_status == 'PAYABLE_OPEN' %}
+                <span class="status" style="color: #7e22ce; background: #faf5ff;">PAYABLE OPEN</span>
+              {% elif row.operational_status == 'PARTIALLY_PAID' %}
+                <span class="status" style="color: #a21caf; background: #fdf4ff;">PARTIAL PAID</span>
+              {% elif row.operational_status == 'PAID' %}
+                <span class="status status-success" style="color: #047857; background: #ecfdf5;">PAID</span>
+              {% elif row.operational_status == 'SOURCE_REVERSED_FINANCE_REVERSAL_PENDING' %}
+                <span class="status status-danger" style="color: red; background: #fff5f5; font-weight: bold;">SOURCE REVERSED</span>
+              {% elif row.operational_status == 'REVERSED' %}
+                <span class="status status-muted">REVERSED</span>
+              {% else %}
+                <span class="status status-warning" style="color: #b45309; background: #fef3c7;">{{ row.operational_status }}</span>
+              {% endif %}
+            </td>
+
+            <!-- Aksi Operasional -->
+            <td>
+              <div style="display: flex; flex-direction: column; gap: 4px;">
+                {% if row.operational_status == 'READY' and can_accrue %}
+                  <form method="post" action="{% url 'incentives:cpo-accrue' row.line.pk %}">
+                    {% csrf_token %}
+                    <button class="button button-sm button-primary" type="submit">Akru CPO</button>
+                  </form>
+                {% elif row.operational_status == 'ACCRUED' and can_approve %}
+                  <form method="post" action="{% url 'incentives:cpo-approve' row.accrual.pk %}">
+                    {% csrf_token %}
+                    <button class="button button-sm button-primary" type="submit">Approve</button>
+                  </form>
+                {% elif row.operational_status == 'APPROVED_NOT_POSTED' and can_post_payable %}
+                  <form method="post" action="{% url 'incentives:cpo-post-payable' row.accrual.pk %}">
+                    {% csrf_token %}
+                    <button class="button button-sm" type="submit">Post Hutang</button>
+                  </form>
+                {% elif row.operational_status == 'SOURCE_REVERSED_FINANCE_REVERSAL_PENDING' %}
+                  {% if row.posting and row.posting.payable_entry.open_amount == row.posting.payable_entry.original_amount and can_reverse_finance %}
+                    <form method="post" action="{% url 'incentives:cpo-reverse-finance' row.posting.pk %}">
+                      {% csrf_token %}
+                      <button class="button button-sm button-danger" type="submit">Koreksi Finance</button>
+                    </form>
+                  {% else %}
+                    <span class="status status-danger" style="font-size: 0.75em; color: red;">FINANCE CORRECTION REQUIRED</span>
+                  {% endif %}
+                {% endif %}
+
+                {% if row.accrual %}
+                  <a class="button button-sm button-secondary" href="{% url 'incentives:cpo-detail' row.accrual.pk %}">Detail</a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="9" class="empty">
+              Tidak ada penerimaan barang jadi yang sesuai filter.
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

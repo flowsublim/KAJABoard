@@ -223,6 +223,7 @@ def post_vendor_payment(
     source_document_id="",
     source_reference=None,
     partner=None,
+    description=None,
 ):
     existing = (
         Payment.objects.select_for_update()
@@ -255,6 +256,19 @@ def post_vendor_payment(
                     "mapping_snapshot_override": wage_payable_control_snapshot(payable),
                 }
             )
+        elif hasattr(payable, "incentive_posting"):
+            from apps.finance.services.incentive_payables import (
+                incentive_payable_control_snapshot,
+            )
+
+            lines.append(
+                {
+                    "line_role": "INCENTIVE_PAYABLE",
+                    "dc": "DEBIT",
+                    "amount": allocation_amount,
+                    "mapping_snapshot_override": incentive_payable_control_snapshot(payable),
+                }
+            )
         else:
             lines.append({"line_role": "PAYABLE", "dc": "DEBIT", "amount": allocation_amount})
     lines.append(
@@ -276,7 +290,7 @@ def post_vendor_payment(
         lines=lines,
         actor=actor,
         source_reference=source_reference or {},
-        description="Vendor payment",
+        description=description or "Vendor payment",
     )
     entry = LiquidityEntry.objects.create(
         legal_entity=legal_entity,
@@ -322,6 +336,12 @@ def post_vendor_payment(
         )
         payable.open_amount -= allocation_amount
         payable.save(update_fields=("open_amount", "updated_at"))
+        if hasattr(payable, "incentive_posting"):
+            from apps.finance.services.incentive_payables import (
+                sync_incentive_accrual_payment_state,
+            )
+
+            sync_incentive_accrual_payment_state(payable.incentive_posting, actor=actor)
     return payment
 
 
@@ -405,6 +425,12 @@ def reverse_payment(payment, *, actor):
         )
         target.open_amount += allocation.amount
         target.save(update_fields=("open_amount", "updated_at"))
+        if allocation.payable_id and hasattr(target, "incentive_posting"):
+            from apps.finance.services.incentive_payables import (
+                sync_incentive_accrual_payment_state,
+            )
+
+            sync_incentive_accrual_payment_state(target.incentive_posting, actor=actor)
     payment.state = PaymentState.REVERSED
     payment.save(update_fields=("state", "updated_at"))
     return reversal

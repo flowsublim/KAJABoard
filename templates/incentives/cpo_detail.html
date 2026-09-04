@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block title %}Detail Akrual CPO: {{ accrual.source_key }} · KAJABoard{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <p class="eyebrow"><a href="{% url 'incentives:cpo-dashboard' %}">← Dashboard CPO Fees</a></p>
+    <h1>Akrual CPO: {{ accrual.currency }} {{ accrual.amount|floatformat:0 }}</h1>
+    <p class="muted">
+      Status: <span class="status">{{ accrual.get_state_display }}</span> ·
+      Source Key: <code>{{ accrual.source_key }}</code>
+    </p>
+  </div>
+  <div class="page-actions">
+    {% if can_approve %}
+      <form method="post" action="{% url 'incentives:cpo-approve' accrual.pk %}" style="display:inline;">
+        {% csrf_token %}
+        <button class="button button-primary" type="submit">Approve Akrual</button>
+      </form>
+    {% endif %}
+    {% if can_post_payable %}
+      <form method="post" action="{% url 'incentives:cpo-post-payable' accrual.pk %}" style="display:inline;">
+        {% csrf_token %}
+        <button class="button button-primary" type="submit">Post ke Finance</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<section class="detail-grid">
+  <!-- Operational Source Traceability -->
+  <div class="panel">
+    <h2>Sumber Operasional (Immutable Snapshots)</h2>
+    <dl class="detail-list">
+      <div>
+        <dt>Modul &amp; Tipe Dokumen</dt>
+        <dd>{{ accrual.source_module }} · {{ accrual.source_document_type }}</dd>
+      </div>
+      <div>
+        <dt>Penerimaan Gudang</dt>
+        <dd>
+          {% if accrual.source_reference.receipt_number %}
+            <strong>{{ accrual.source_reference.receipt_number }}</strong>
+          {% else %}
+            <code>{{ accrual.source_document_id }}</code>
+          {% endif %}
+          {% if accrual.source_reference.receipt_date %}
+            <span class="muted">({{ accrual.source_reference.receipt_date }})</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Line Sequence &amp; Barang Jadi</dt>
+        <dd>Line #{{ accrual.source_line_id }} · {{ accrual.basis_quantity }} {{ accrual.source_reference.uom_code|default:"PCS" }}</dd>
+      </div>
+      <div>
+        <dt>SPK Produksi</dt>
+        <dd>{{ accrual.source_reference.work_order_number|default:"-" }}</dd>
+      </div>
+      <div>
+        <dt>Project / Kontrak</dt>
+        <dd>
+          {% if accrual.project %}
+            <a href="{% url 'projects:detail' accrual.project.pk %}">{{ accrual.project.code }} — {{ accrual.project.name }}</a>
+          {% else %}
+            <span class="muted">Non-Project</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Setor Gudang (Handover)</dt>
+        <dd>ID: <code>{{ accrual.source_reference.handover_id|default:"-" }}</code></dd>
+      </div>
+      <div>
+        <dt>Entitas Bisnis</dt>
+        <dd>{{ accrual.legal_entity.code }} — {{ accrual.legal_entity.name }}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <!-- Beneficiary & Rule Snapshot -->
+  <div class="panel">
+    <h2>Penerima &amp; Aturan (Historical Snapshots)</h2>
+    <dl class="detail-list">
+      <div>
+        <dt>Penerima Hak (SPV)</dt>
+        <dd>
+          <strong>{{ accrual.beneficiary_employee_code_snapshot }}</strong><br />
+          <span>{{ accrual.beneficiary_name_snapshot }}</span>
+          <span class="muted" style="display:block; font-size:0.8em;">ID Karyawan: <code>{{ accrual.beneficiary_id }}</code></span>
+        </dd>
+      </div>
+      <div>
+        <dt>Aturan Insentif</dt>
+        <dd>
+          <strong>{{ accrual.rule_code_snapshot }}</strong>
+          {% if accrual.rule %}
+            <span class="muted">(<a href="{% url 'incentives:rule-edit' accrual.rule.pk %}">buka master</a>)</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Metode Perhitungan Snapshot</dt>
+        <dd>{{ accrual.get_calculation_method_snapshot_display }}</dd>
+      </div>
+      <div>
+        <dt>Trigger Snapshot</dt>
+        <dd>{{ accrual.get_trigger_snapshot_display }}</dd>
+      </div>
+      <div>
+        <dt>Tarif Snapshot</dt>
+        <dd>{{ accrual.currency_snapshot }} {{ accrual.rate_snapshot|floatformat:0 }}</dd>
+      </div>
+      <div>
+        <dt>Basis Kuantitas</dt>
+        <dd>{{ accrual.basis_quantity }} unit</dd>
+      </div>
+      <div>
+        <dt>Total Nilai Akrual</dt>
+        <dd><strong>{{ accrual.currency_snapshot }} {{ accrual.amount|floatformat:0 }}</strong></dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<!-- Finance & Payment Lineage -->
+<section class="panel" style="margin-top: 1.5rem;">
+  <h2>Lineage Keuangan (Finance &amp; Payable Subledger)</h2>
+  {% if posting %}
+    <dl class="detail-list">
+      <div>
+        <dt>Status Finance Posting</dt>
+        <dd><span class="status">{{ posting.get_state_display }}</span></dd>
+      </div>
+      <div>
+        <dt>Jurnal Akuntansi</dt>
+        <dd>
+          <a href="{% url 'finance_operations:journal-detail' posting.journal.pk %}">
+            <strong>{{ posting.journal.journal_number }}</strong>
+          </a>
+          <span class="muted">({{ posting.journal.accounting_date }})</span>
+        </dd>
+      </div>
+      <div>
+        <dt>Akun Pengendali (Control Account)</dt>
+        <dd>
+          <code>{{ posting.control_account_snapshot.code }}</code> — {{ posting.control_account_snapshot.name }}
+          <span class="muted">(Role: {{ posting.control_account_snapshot.line_role }})</span>
+        </dd>
+      </div>
+      <div>
+        <dt>Buku Pembantu Hutang (PayableEntry)</dt>
+        <dd>
+          Nilai Pokok: <strong>{{ posting.payable_entry.currency }} {{ posting.payable_entry.original_amount|floatformat:0 }}</strong> ·
+          Sisa Hutang: <strong>{{ posting.payable_entry.currency }} {{ posting.payable_entry.open_amount|floatformat:0 }}</strong>
+        </dd>
+      </div>
+      <div>
+        <dt>Status Pembayaran</dt>
+        <dd>
+          {% if recon_item.payment_state == 'FULLY_PAID' %}
+            <span class="status status-success" style="color:green;">LUNAS (PAID)</span>
+          {% elif recon_item.payment_state == 'PARTIALLY_PAID' %}
+            <span class="status" style="color:#a21caf;">SEBAGIAN (PARTIAL)</span>
+          {% else %}
+            <span class="status" style="color:#7e22ce;">BELUM DIBAYAR (OPEN)</span>
+          {% endif %}
+          {% if recon_item.paid_amount > 0 %}
+            <span class="muted">(Terbayar: {{ posting.payable_entry.currency }} {{ recon_item.paid_amount|floatformat:0 }})</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Status Rekonsiliasi</dt>
+        <dd><code>{{ recon_item.reconciliation_status }}</code></dd>
+      </div>
+    </dl>
+  {% else %}
+    <p class="muted">
+      Belum diposting ke Finance. Akrual berstatus <strong>{{ accrual.get_state_display }}</strong>.
+      Posting Finance dapat dilakukan setelah akrual berstatus <strong>APPROVED</strong>.
+    </p>
+  {% endif %}
+
+  {% if accrual.reversal %}
+    <div class="alert alert-danger" style="margin-top: 1rem; color: red; background: #fff5f5; padding: 0.75rem; border-radius: 4px;">
+      <strong>Akrual Dibatalkan (REVERSED)</strong><br />
+      Alasan: {{ accrual.reversal.reason }}<br />
+      Dibatalkan pada: {{ accrual.reversal.reversed_at }}
+    </div>
+  {% endif %}
+</section>
+{% endblock %}
