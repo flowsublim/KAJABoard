@@ -1157,24 +1157,9 @@ def test_28_phase_9a_profitability_categories_remain_pending_source(incentive_da
 # 29. legacy/smb_gas remains untouched
 # =========================================================================
 def test_29_legacy_smb_gas_remains_untouched():
-    import hashlib
-    import pathlib
+    from apps.incentives.tests.legacy_helpers import verify_legacy_smb_gas_integrity
 
-    root = pathlib.Path("legacy/smb_gas")
-    files = sorted([f for f in root.rglob("*") if f.is_file()])
-    assert len(files) == 50
-
-    lines = []
-    for f in files:
-        rel_path = f.relative_to(root).as_posix()
-        content = f.read_bytes()
-        file_bytes = len(content)
-        file_sha256 = hashlib.sha256(content).hexdigest().upper()
-        lines.append(f"{rel_path}|{file_bytes}|{file_sha256}")
-
-    aggregate_input = "\n".join(lines).encode("utf-8")
-    aggregate_hash = hashlib.sha256(aggregate_input).hexdigest().upper()
-    assert aggregate_hash == "66F614E4A728F3A7EB8811A39C58EB6F88B16BB4C554DFF96114C569FB6031C2"
+    verify_legacy_smb_gas_integrity()
 
 
 # =========================================================================

@@ -16,8 +16,6 @@ Tests verify:
 """
 
 import datetime
-import hashlib
-import pathlib
 import uuid
 from decimal import Decimal
 
@@ -1504,18 +1502,18 @@ class TestPhase9B3RQuantityFidelityAndLifecycle:
 class TestSMBGASIntegrity:
     def test_legacy_smb_gas_hash_and_file_count_preserved(self):
         """Verifies legacy/smb_gas remains exactly 50 files with aggregate SHA-256."""
-        root = pathlib.Path("legacy/smb_gas")
-        files = sorted([f for f in root.rglob("*") if f.is_file()])
-        assert len(files) == 50
+        from apps.incentives.tests.legacy_helpers import verify_legacy_smb_gas_integrity
 
-        lines = []
-        for f in files:
-            rel_path = f.relative_to(root).as_posix()
-            content = f.read_bytes()
-            file_bytes = len(content)
-            file_sha256 = hashlib.sha256(content).hexdigest().upper()
-            lines.append(f"{rel_path}|{file_bytes}|{file_sha256}")
+        verify_legacy_smb_gas_integrity()
 
-        aggregate_input = "\n".join(lines).encode("utf-8")
-        aggregate_hash = hashlib.sha256(aggregate_input).hexdigest().upper()
-        assert aggregate_hash == "66F614E4A728F3A7EB8811A39C58EB6F88B16BB4C554DFF96114C569FB6031C2"
+    def test_legacy_smb_gas_hash_cross_platform_lf_simulation(self):
+        """Verifies integrity check computes identical aggregate hash under simulated LF."""
+        from apps.incentives.tests.legacy_helpers import (
+            OFFICIAL_LEGACY_SMB_GAS_FILE_COUNT,
+            OFFICIAL_LEGACY_SMB_GAS_SHA256,
+            compute_legacy_smb_gas_aggregate_hash,
+        )
+
+        file_count, aggregate_hash = compute_legacy_smb_gas_aggregate_hash(_force_lf=True)
+        assert file_count == OFFICIAL_LEGACY_SMB_GAS_FILE_COUNT
+        assert aggregate_hash == OFFICIAL_LEGACY_SMB_GAS_SHA256
